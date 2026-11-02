@@ -142,6 +142,16 @@ def share_of_original(original: str, translated: str) -> float:
     return sum(w in source for w in words) / len(words)
 
 
+CYRILLIC_RE = re.compile(r"[\u0400-\u04ff]")
+
+
+def lost_text(original: dict, translated: dict) -> bool:
+    """Модель выкинула почти весь текст: «Almost Vida Petrović Škero» вместо перевода длинного заголовка
+    или пустая подводка там, где в оригинале она была."""
+    return ((len(WORDS_RE.findall(original["title"])) >= 4 and not CYRILLIC_RE.search(translated["title"]))
+            or (bool(original.get("summary", "").strip()) and not translated["summary"].strip()))
+
+
 def looks_translated(original: dict, translated: dict) -> bool:
     """Отсеивает «переводы», которые на деле остались сербским текстом, — например, сербский,
     переписанный кириллицей: «о притисцима на Нову и Радар» вместо «о давлении на Nova и Radar».
@@ -150,6 +160,8 @@ def looks_translated(original: dict, translated: dict) -> bool:
     title, summary = translated["title"].strip(), translated["summary"]
     # без букв переводить нечего: запрос Google Trends «2026» так и остаётся «2026»
     if not title or (title == original["title"].strip() and WORDS_RE.search(title)):
+        return False
+    if lost_text(original, translated):
         return False
     text = URL_RE.sub(" ", title + " " + summary)
     # сербские буквы в именах поправит russify, а в обычных словах («још», «уређивачку») — это непереведённый текст
@@ -287,6 +299,9 @@ def attach_translations(sources: list[dict]) -> None:
                 copies.setdefault(key, []).append(item)
 
     cache = load_cache()
+    # такие сбои уже могли попасть в кэш до появления проверки — переводим их заново
+    for key in [k for k in todo if k in cache and lost_text(todo[k], cache[k])]:
+        del cache[key]
     missing = [(key, item) for key, item in todo.items() if key not in cache]
 
     if missing:

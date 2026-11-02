@@ -78,6 +78,7 @@ header {
 .topline { max-width: 1300px; margin: 0 auto; padding: 8px 20px 0; color: var(--muted); font-size: 13px; text-align: right; }
 .topline:empty { display: none; }
 #info > span { white-space: nowrap; }
+#lang .short { display: none; }
 #info .dot { width: 7px; height: 7px; margin-left: 5px; vertical-align: 1px; }
 .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .controls-row { display: contents; }
@@ -192,39 +193,53 @@ footer p { margin: 0 0 10px; }
 }
 @media (max-width: 640px) {
   header { position: static; }  /* на телефоне шапка с кнопками заняла бы четверть экрана */
-  /* шапка в три строки: название, алфавит и язык, вид и поиск — чтобы новости начинались на первом экране */
-  .bar { padding: 8px 16px 10px; gap: 8px; }
-  .brand { flex-wrap: wrap; column-gap: 10px; row-gap: 0; }
+  /* шапка сеткой: название и язык в первой строке (язык не прыгает, когда алфавит прячется),
+     вид на всю ширину, ниже поиск и алфавит. Кнопки высотой ~40px — под палец */
+  .bar { position: relative; display: grid; grid-template-columns: 1fr auto; gap: 10px 8px; padding: 8px 16px 12px; }
+  .controls, .controls-row { display: contents; }
+  .brand { grid-row: 1; grid-column: 1 / -1; flex-wrap: wrap; column-gap: 10px; row-gap: 0; margin: 0; min-width: 0; padding-right: 110px; }
   .brand h1 { font-size: 21px; }
   .brand .flag { width: 20px; height: 14px; margin-right: 8px; }
   .updated { font-size: 12px; }
-  .controls { width: 100%; gap: 8px; }
-  .controls-row { display: flex; gap: 8px; width: 100%; }
-  .seg button, #view button { width: auto; padding: 4px 10px; font-size: 13px; }
-  .search-box { flex: 1; min-width: 0; }
+  /* вне сетки: ширина кнопок алфавита под ним не должна его раздувать */
+  #lang { position: absolute; top: 8px; right: 16px; }
+  #lang .full { display: none; }
+  #lang .short { display: inline; }
+  #view { grid-row: 2; grid-column: 1 / -1; }
+  #view button { flex: 1; }
+  .search-box { grid-row: 3; grid-column: 1; min-width: 0; }
+  #script { grid-row: 3; grid-column: 2; }
+  #script[hidden] ~ .controls-row .search-box { grid-column: 1 / -1; }
+  .seg button, #view button { width: auto; padding: 8px 14px; font-size: 15px; }
   /* 16px — меньше iPhone приближает страницу при нажатии на поле */
-  .search { width: 100%; padding-top: 3px; padding-bottom: 3px; font-size: 16px; }
-  .notice { margin-top: 4px; padding: 10px 14px; font-size: 13px; }
+  .search { width: 100%; height: 100%; font-size: 16px; }
+  .search-clear { width: 26px; height: 26px; line-height: 26px; font-size: 18px; }
+  /* разделы целиком, в несколько строк; не липнут — иначе заняли бы полэкрана */
+  .chips { position: static; padding: 0 16px 12px; gap: 8px; }
+  .chip { padding: 7px 14px 7px 11px; font-size: 15px; }
+  .notice { margin-top: 4px; padding: 10px 14px; font-size: 13px; width: calc(100% - 32px); }
   .section { margin-top: 28px; }
-  .section-head { padding-bottom: 8px; }
+  .section-head { margin: 0 16px; padding-bottom: 8px; }
   .section-head h2 { font-size: 20px; }
   .section-head .dot { width: 8px; height: 8px; margin-right: 8px; }
   .section-head p { font-size: 13px; }
+  .card { padding: 22px 16px 0; }
   .card-head { margin-bottom: 10px; }
   .card-head a { font-size: 18px; }
-  .feed .day { font-size: 18px; margin: 28px 0 14px; padding-bottom: 8px; }
-  /* на узком экране разделы в одну строку с прокруткой вбок */
-  .chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 0 16px 10px; }
-  .chips::-webkit-scrollbar { display: none; }
-  .chip { flex: none; }
-  .card { padding: 22px 16px 0; }
-  .section-head { margin: 0 16px; }
   .feed { padding: 0 16px; }
-  .notice { width: calc(100% - 32px); }
+  .feed .day { font-size: 18px; margin: 28px 0 14px; padding-bottom: 8px; }
   .topline { padding: 8px 16px 0; text-align: left; font-size: 12px; }
+  #info .unit { display: none; }  /* без «дин» строка влезает в одну, и шапка под ней не прыгает при смене языка */
+  .row { margin-bottom: 12px; }
   .time { width: 40px; font-size: 11px; }
   .details { margin-left: 0; }
-  .more { padding-left: 0; }
+  .more { padding: 6px 0; }
+  .to-top {
+    position: fixed; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 6;
+    width: 44px; height: 44px; border: 0; border-radius: 50%; cursor: pointer;
+    background: var(--tip-bg); color: var(--tip-text); font-size: 20px; font-weight: 700;
+    box-shadow: 0 4px 16px rgb(0 0 0 / .25);
+  }
 }
 </style>
 </head>
@@ -246,8 +261,8 @@ footer p { margin: 0 0 10px; }
         <button data-v="cyr">Ћир</button>
       </div>
       <div class="seg" id="lang">
-        <button data-v="sr">Srpski</button>
-        <button data-v="ru">Русский</button>
+        <button data-v="sr"><span class="full">Srpski</span><span class="short">SR</span></button>
+        <button data-v="ru"><span class="full">Русский</span><span class="short">RU</span></button>
       </div>
       <!-- на компьютере обёртки как будто нет; на телефоне это отдельная строка: вид слева, поиск на остаток ширины -->
       <div class="controls-row">
@@ -266,6 +281,8 @@ footer p { margin: 0 0 10px; }
 <nav class="chips" id="chips"></nav>
 <div class="notice" id="notice" hidden></div>
 <main id="main"></main>
+<!-- на телефоне разделы не липнут к верху: кнопка возвращает к ним из глубины страницы -->
+<button class="to-top" id="to-top" type="button" hidden>↑</button>
 <footer>
   <p><span data-t="footer"></span> <code>sources.json</code>.</p>
   <p class="credits">
@@ -316,6 +333,7 @@ const UI = {
   scriptHint: "Srpski tekst: kao u originalu, latinicom ili ćirilicom",
   search: "Pretraga",
   clear: "Obriši pretragu",
+  toTop: "Na vrh",
   footer: "Zadržite miš na naslovu da vidite kratak opis, a klik otvara članak (na telefonu: prvi dodir prikazuje opis, drugi otvara članak). Podebljane su vesti iz poslednja tri sata, a sive su one koje ste već pročitali. Podela medija po taborima je okvirna – spisak i kategorije se podešavaju u fajlu",
   credits1: "Napravljeno po uzoru na",
   credits2: "– projekat zajednice",
@@ -354,6 +372,7 @@ const UI_RU = {
   feed: "Общая лента",
   search: "Поиск",
   clear: "Очистить поиск",
+  toTop: "Наверх",
   footer: "Наведите мышь на заголовок, чтобы увидеть подводку, а клик открывает статью (на телефоне: первое касание показывает подводку, второе открывает статью). Жирным отмечены новости за последние три часа, серым — уже прочитанные. Деление изданий по лагерям условное — список и категории задаются в файле",
   credits1: "Сделано по мотивам",
   credits2: "— проекта сообщества",
@@ -675,12 +694,22 @@ function spy() {
 function measureSticky() {
   const header = document.querySelector("header"), chips = document.getElementById("chips");
   const headerH = getComputedStyle(header).position === "sticky" ? header.offsetHeight : 0;
-  stickyHeight = headerH + (chips.hidden ? 0 : chips.offsetHeight);
+  // на телефоне ряд разделов не липнет — тогда и отступ под него не нужен
+  const chipsH = chips.hidden || getComputedStyle(chips).position !== "sticky" ? 0 : chips.offsetHeight;
+  stickyHeight = headerH + chipsH;
   document.documentElement.style.setProperty("--header-h", headerH + "px");
   document.documentElement.style.setProperty("--sticky-h", stickyHeight + "px");
 }
 let spyFrame;
-addEventListener("scroll", () => { cancelAnimationFrame(spyFrame); spyFrame = requestAnimationFrame(spy); }, { passive: true });
+const toTop = document.getElementById("to-top");
+toTop.addEventListener("click", () => scrollTo({ top: 0, behavior: "smooth" }));
+function onScroll() {
+  spy();
+  // кнопка нужна, только когда ряд разделов уехал вверх и не липнет (на компьютере он всегда на экране)
+  const chips = document.getElementById("chips");
+  toTop.hidden = getComputedStyle(chips).position === "sticky" || chips.getBoundingClientRect().bottom > 0;
+}
+addEventListener("scroll", () => { cancelAnimationFrame(spyFrame); spyFrame = requestAnimationFrame(onScroll); }, { passive: true });
 addEventListener("resize", () => { measureSticky(); spy(); });
 
 // фильтр общей ленты: «Все» или выбранные разделы. Первый клик по разделу оставляет только его,
@@ -727,8 +756,8 @@ function renderInfo() {
   const parts = [];
   if (info.rates) {
     const hint = `${t("rateHint")} ${dayFmt.format(new Date(info.rates.date))}`;
-    parts.push(h("span", { title: hint }, `€ ${num(info.rates.EUR)} ${t("din")}`));
-    parts.push(h("span", { title: hint }, `₽ ${num(info.rates.RUB)} ${t("din")}`));
+    parts.push(h("span", { title: hint }, `€ ${num(info.rates.EUR)}`, h("span", { class: "unit" }, ` ${t("din")}`)));
+    parts.push(h("span", { title: hint }, `₽ ${num(info.rates.RUB)}`, h("span", { class: "unit" }, ` ${t("din")}`)));
   }
   if (info.weather) {
     const temp = Math.round(info.weather.temp);
@@ -759,6 +788,7 @@ function render() {
   document.getElementById("script").title = t("scriptHint");
   document.getElementById("q").placeholder = t("search");
   document.getElementById("q-clear").title = document.getElementById("q-clear").ariaLabel = t("clear");
+  document.getElementById("to-top").title = document.getElementById("to-top").ariaLabel = t("toTop");
   document.getElementById("updated").textContent =
     `${t("updated")} ${timeFmt.format(new Date(DATA.generated))} · ${DATA.sources.length} ${t("outlets")}`;
   renderInfo();
