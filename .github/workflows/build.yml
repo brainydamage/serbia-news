@@ -2,7 +2,8 @@ name: build
 
 on:
   schedule:
-    - cron: "*/20 * * * *"   # каждые 20 минут
+    # каждые 20 минут, но не ровно в :00/:20/:40 — на эти минуты у GitHub пик, запуски откладываются и теряются
+    - cron: "7,27,47 * * * *"
   workflow_dispatch:
   push:
     branches: [main]
