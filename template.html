@@ -80,6 +80,7 @@ header {
 #info > span { white-space: nowrap; }
 #info .dot { width: 7px; height: 7px; margin-left: 5px; vertical-align: 1px; }
 .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.controls-row { display: contents; }
 .seg { display: inline-flex; background: var(--soft); border-radius: 20px; padding: 3px; }
 .seg button {
   border: 0; background: none; padding: 5px 12px; border-radius: 20px; cursor: pointer;
@@ -191,19 +192,36 @@ footer p { margin: 0 0 10px; }
 }
 @media (max-width: 640px) {
   header { position: static; }  /* на телефоне шапка с кнопками заняла бы четверть экрана */
-  .bar { padding-left: 16px; padding-right: 16px; }
-  .brand { flex-wrap: wrap; column-gap: 12px; row-gap: 0; }
+  /* шапка в три строки: название, алфавит и язык, вид и поиск — чтобы новости начинались на первом экране */
+  .bar { padding: 8px 16px 10px; gap: 8px; }
+  .brand { flex-wrap: wrap; column-gap: 10px; row-gap: 0; }
+  .brand h1 { font-size: 21px; }
+  .brand .flag { width: 20px; height: 14px; margin-right: 8px; }
+  .updated { font-size: 12px; }
+  .controls { width: 100%; gap: 8px; }
+  .controls-row { display: flex; gap: 8px; width: 100%; }
+  .seg button, #view button { width: auto; padding: 4px 10px; font-size: 13px; }
+  .search-box { flex: 1; min-width: 0; }
+  /* 16px — меньше iPhone приближает страницу при нажатии на поле */
+  .search { width: 100%; padding-top: 3px; padding-bottom: 3px; font-size: 16px; }
+  .notice { margin-top: 4px; padding: 10px 14px; font-size: 13px; }
+  .section { margin-top: 28px; }
+  .section-head { padding-bottom: 8px; }
+  .section-head h2 { font-size: 20px; }
+  .section-head .dot { width: 8px; height: 8px; margin-right: 8px; }
+  .section-head p { font-size: 13px; }
+  .card-head { margin-bottom: 10px; }
+  .card-head a { font-size: 18px; }
+  .feed .day { font-size: 18px; margin: 28px 0 14px; padding-bottom: 8px; }
   /* на узком экране разделы в одну строку с прокруткой вбок */
-  .chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 10px 16px; }
+  .chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 0 16px 10px; }
   .chips::-webkit-scrollbar { display: none; }
   .chip { flex: none; }
-  .card { padding: 30px 16px 0; }
+  .card { padding: 22px 16px 0; }
   .section-head { margin: 0 16px; }
   .feed { padding: 0 16px; }
   .notice { width: calc(100% - 32px); }
-  .topline { padding: 8px 16px 0; text-align: left; }
-  .search, .search-box { width: 100%; }
-  .controls { width: 100%; }
+  .topline { padding: 8px 16px 0; text-align: left; font-size: 12px; }
   .time { width: 40px; font-size: 11px; }
   .details { margin-left: 0; }
   .more { padding-left: 0; }
@@ -231,14 +249,17 @@ footer p { margin: 0 0 10px; }
         <button data-v="sr">Srpski</button>
         <button data-v="ru">Русский</button>
       </div>
-      <div class="seg" id="view">
-        <button data-v="sources" data-t="bySource"></button>
-        <button data-v="feed" data-t="feed"></button>
+      <!-- на компьютере обёртки как будто нет; на телефоне это отдельная строка: вид слева, поиск на остаток ширины -->
+      <div class="controls-row">
+        <div class="seg" id="view">
+          <button data-v="sources" data-t="bySource"></button>
+          <button data-v="feed" data-t="feed"></button>
+        </div>
+        <span class="search-box">
+          <input class="search" id="q" type="search">
+          <button class="search-clear" id="q-clear" type="button" hidden>×</button>
+        </span>
       </div>
-      <span class="search-box">
-        <input class="search" id="q" type="search">
-        <button class="search-clear" id="q-clear" type="button" hidden>×</button>
-      </span>
     </div>
   </div>
 </header>
@@ -293,7 +314,7 @@ const UI = {
   feed: "Sve vesti",
   orig: "Original",
   scriptHint: "Srpski tekst: kao u originalu, latinicom ili ćirilicom",
-  search: "Pretraga naslova",
+  search: "Pretraga",
   clear: "Obriši pretragu",
   footer: "Zadržite miš na naslovu da vidite kratak opis, a klik otvara članak (na telefonu: prvi dodir prikazuje opis, drugi otvara članak). Podebljane su vesti iz poslednja tri sata, a sive su one koje ste već pročitali. Podela medija po taborima je okvirna – spisak i kategorije se podešavaju u fajlu",
   credits1: "Napravljeno po uzoru na",
@@ -331,7 +352,7 @@ const UI_RU = {
   bySource: "По изданиям",
   all: "Все",
   feed: "Общая лента",
-  search: "Поиск по заголовкам",
+  search: "Поиск",
   clear: "Очистить поиск",
   footer: "Наведите мышь на заголовок, чтобы увидеть подводку, а клик открывает статью (на телефоне: первое касание показывает подводку, второе открывает статью). Жирным отмечены новости за последние три часа, серым — уже прочитанные. Деление изданий по лагерям условное — список и категории задаются в файле",
   credits1: "Сделано по мотивам",
