@@ -27,7 +27,7 @@
   Чтобы выкинуть лишние разделы издания, добавьте `"exclude"` — список кусков адреса, например
   `"exclude": ["/showbiz/", "/zadruga/"]`. Так сейчас убраны шоу-бизнес, реалити и анонсы телеэфиров,
   а у N1 ещё и английская версия сайта.
-  Если у сайта нет RSS (021.rs, RTV, Subotica.com, Kolubarske, KoSSev, Kosovo Online), лентой служит поиск
+  Если у сайта нет RSS (021.rs, RTV, Subotica.com, Kolubarske, Kruševac Grad, KoSSev, Kosovo Online), лентой служит поиск
   Google News по сайту: `https://news.google.com/rss/search?hl=sr&gl=RS&ceid=RS:sr&q=site:021.rs+when:2d`.
   Для таких лент сборка выкидывает страницы рубрик и не пишет издание после каждого заголовка.
   `"ranked": true` — не пересортировывать ленту по дате (у топа Reddit порядок — по популярности).
