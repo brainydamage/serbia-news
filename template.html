@@ -181,9 +181,11 @@ main { max-width: 1300px; margin: 0 auto; padding: 0 0 40px; }
 .feed .more { margin-top: 12px; }
 
 .empty { color: var(--muted); text-align: center; padding: 60px 0; }
-footer { color: var(--muted); font-size: 14px; max-width: 800px; margin: 0 auto; padding: 100px 20px 50px; line-height: 1.6; text-align: center; }
-footer p { margin: 0 0 10px; }
-.credits a { color: var(--text); }
+/* подвал по левому краю контента, как разделы и колонки, — короткая справка под тонкой линией */
+footer { color: var(--muted); font-size: 13px; line-height: 1.5; max-width: 1260px; width: calc(100% - 40px); margin: 60px auto 0; padding: 16px 0 40px; border-top: 1.5px solid var(--soft); }
+footer.narrow { max-width: 780px; }  /* в общей ленте — по ширине ленты */
+footer p { margin: 0 0 6px; }
+footer a { color: var(--text); }
 
 @media (max-width: 800px) {
   body { font-size: 15px; }
@@ -219,6 +221,7 @@ footer p { margin: 0 0 10px; }
   .chips { position: static; padding: 0 16px 12px; gap: 8px; }
   .chip { padding: 7px 14px 7px 11px; font-size: 15px; }
   .notice { margin-top: 4px; padding: 10px 14px; font-size: 13px; width: calc(100% - 32px); }
+  footer { width: calc(100% - 32px); margin-top: 40px; padding-bottom: 80px; }  /* снизу место под кнопку ↑ */
   .section { margin-top: 28px; }
   .section-head { margin: 0 16px; padding-bottom: 8px; }
   .section-head h2 { font-size: 20px; }
@@ -285,14 +288,9 @@ footer p { margin: 0 0 10px; }
 <!-- на телефоне разделы не липнут к верху: кнопка возвращает к ним из глубины страницы -->
 <button class="to-top" id="to-top" type="button" hidden>↑</button>
 <footer>
-  <p><span data-t="footer"></span> <code>sources.json</code>.</p>
-  <p class="credits">
-    <span data-t="credits1"></span> <a href="https://infomate.club" target="_blank" rel="noopener">infomate.club</a>
-    <span data-t="credits2"></span> <a href="https://vas3k.club" target="_blank" rel="noopener">Vas3k.Club</a>.
-    <span data-t="credits3"></span> <a href="https://github.com/vas3k/infomate.club" target="_blank" rel="noopener">github.com/vas3k/infomate.club</a>
-    (Apache 2.0). <span data-t="credits4"></span>
-  </p>
-  <p><span data-t="stats"></span> <a href="https://www.goatcounter.com" target="_blank" rel="noopener">GoatCounter</a>.</p>
+  <p><span data-t="credits1"></span> <a href="https://infomate.club" target="_blank" rel="noopener">infomate.club</a>
+    <span data-t="credits2"></span> <a href="https://vas3k.club" target="_blank" rel="noopener">Vas3k.Club</a><span data-t="credits3"></span></p>
+  <p><span data-t="footer"></span> <span data-t="stats"></span> <a href="https://www.goatcounter.com" target="_blank" rel="noopener">GoatCounter</a>.</p>
 </footer>
 
 <script>
@@ -336,12 +334,11 @@ const UI = {
   search: "Pretraga",
   clear: "Obriši pretragu",
   toTop: "Na vrh",
-  footer: "Zadržite miš na naslovu da vidite kratak opis, a klik otvara članak (na telefonu: prvi dodir prikazuje opis, drugi otvara članak). Podebljane su vesti iz poslednja tri sata, a sive su one koje ste već pročitali. Podela medija po taborima je okvirna – spisak i kategorije se podešavaju u fajlu",
-  credits1: "Napravljeno po uzoru na",
-  credits2: "– projekat zajednice",
-  credits3: "Izvorni kod originala je otvoren:",
-  credits4: "Ideja i koncept su njihovi – hvala autorima!",
-  stats: "Anonimna statistika poseta, bez kolačića i ličnih podataka:",
+  footer: "Podela medija po taborima je okvirna.",
+  credits1: "Po uzoru na",
+  credits2: "zajednice",
+  credits3: " — hvala autorima na ideji!",
+  stats: "Anonimna statistika bez kolačića:",
   updated: "ažurirano",
   din: "din",
   city: "Beograd",
@@ -376,12 +373,11 @@ const UI_RU = {
   search: "Поиск",
   clear: "Очистить поиск",
   toTop: "Наверх",
-  footer: "Наведите мышь на заголовок, чтобы увидеть подводку, а клик открывает статью (на телефоне: первое касание показывает подводку, второе открывает статью). Жирным отмечены новости за последние три часа, серым — уже прочитанные. Деление изданий по лагерям условное — список и категории задаются в файле",
-  credits1: "Сделано по мотивам",
-  credits2: "— проекта сообщества",
-  credits3: "Исходный код оригинала открыт:",
-  credits4: "Идея и концепция — их, спасибо авторам!",
-  stats: "Анонимная статистика посещений, без cookies и личных данных:",
+  footer: "Деление изданий по лагерям условное.",
+  credits1: "По мотивам",
+  credits2: "сообщества",
+  credits3: " — спасибо авторам за идею!",
+  stats: "Анонимная статистика без cookies:",
   updated: "обновлено",
   din: "дин",
   city: "Белград",
@@ -797,6 +793,7 @@ function render() {
   document.getElementById("updated").textContent =
     `${t("updated")} ${timeFmt.format(new Date(DATA.generated))} · ${DATA.sources.length} ${t("outlets")}`;
   renderInfo();
+  document.querySelector("footer").classList.toggle("narrow", state.view === "feed");
   document.getElementById("main").replaceChildren(...(state.view === "feed" ? renderFeed() : renderSources()));
   renderChips();
 }
