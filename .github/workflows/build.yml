@@ -1,0 +1,62 @@
+name: build
+
+on:
+  schedule:
+    - cron: "*/20 * * * *"   # каждые 20 минут
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      # прошлые данные нужны, чтобы при сбое ленты показать её последние новости,
+      # а кэш переводов — чтобы не платить за перевод одних и тех же новостей
+      - name: Restore previous data
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            site/data.json
+            cache/translations.json
+          key: data-${{ github.run_id }}
+          restore-keys: data-
+
+      - run: python build.py
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Save data
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            site/data.json
+            cache/translations.json
+          key: data-${{ github.run_id }}
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4

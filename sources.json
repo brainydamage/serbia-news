@@ -1,0 +1,145 @@
+{
+  "sections": [
+    {
+      "id": "independent",
+      "title": "Nezavisni",
+      "title_ru": "Независимые",
+      "note": "Kritični prema Vučiću i SNS-u", "note_ru": "Критичны к Вучичу и SNS",
+      "sources": [
+        {"name": "N1", "site": "https://n1info.rs", "feed": "https://n1info.rs/feed/", "exclude": ["/english/", "/najave-emisija/"]},
+        {"name": "Nova", "site": "https://nova.rs", "feed": "https://nova.rs/feed/", "exclude": ["/emisije/", "/zabava/"]},
+        {"name": "Danas", "site": "https://www.danas.rs", "feed": "https://www.danas.rs/feed/"},
+        {"name": "Radar", "site": "https://radar.nova.rs", "feed": "https://radar.nova.rs/feed/"},
+        {"name": "Vreme", "site": "https://www.vreme.com", "feed": "https://www.vreme.com/feed/"},
+        {"name": "Insajder", "site": "https://insajder.net", "feed": "https://insajder.net/feed", "exclude": ["/tv-najava/"]},
+        {"name": "Beta", "site": "https://beta.rs", "feed": "https://beta.rs/rss", "note": "nezavisna agencija", "note_ru": "независимое агентство"}
+      ]
+    },
+    {
+      "id": "investigations",
+      "title": "Istraživanja i provera činjenica",
+      "title_ru": "Расследования и фактчекинг",
+      "note": "Objavljuju ređe, ali vredi pratiti", "note_ru": "Выходят реже, но читать стоит",
+      "sources": [
+        {"name": "KRIK", "site": "https://www.krik.rs", "feed": "https://www.krik.rs/feed/"},
+        {"name": "CINS", "site": "https://www.cins.rs", "feed": "https://www.cins.rs/feed/"},
+        {"name": "Raskrikavanje", "site": "https://raskrikavanje.rs", "feed": "https://raskrikavanje.rs/feed/"},
+        {"name": "Istinomer", "site": "https://www.istinomer.rs", "feed": "https://www.istinomer.rs/feed/"},
+        {"name": "Cenzolovka", "site": "https://www.cenzolovka.rs", "feed": "https://www.cenzolovka.rs/feed/", "note": "o slobodi medija", "note_ru": "о свободе СМИ"},
+        {"name": "Peščanik", "site": "https://pescanik.net", "feed": "https://pescanik.net/feed/", "note": "kolumne i eseji", "note_ru": "колонки и эссе"}
+      ]
+    },
+    {
+      "id": "progov",
+      "title": "Pro-SNS",
+      "title_ru": "Pro-SNS",
+      "note": "Tabloidi i mediji bliski SNS-u", "note_ru": "Таблоиды и издания, близкие к SNS",
+      "sources": [
+        {"name": "Informer", "site": "https://www.informer.rs", "feed": "https://www.informer.rs/rss/drustvo/srbija"},
+        {"name": "Novosti", "site": "https://www.novosti.rs", "feed": "https://www.novosti.rs/rss/vesti"},
+        {"name": "Alo", "site": "https://www.alo.rs", "feed": "https://www.alo.rs/rss.html", "exclude": ["/vip/", "/razonoda/"]},
+        {"name": "Kurir", "site": "https://www.kurir.rs", "feed": "https://www.kurir.rs/rss/vesti/politika", "note": "rubrika „Politika“", "note_ru": "раздел «Политика»"},
+        {"name": "Pink", "site": "https://pink.rs", "feed": "https://pink.rs/rss-feed", "exclude": ["/zadruga/", "/showbiz/", "/pop-kultura/"]},
+        {"name": "B92", "site": "https://www.b92.net", "feed": "https://www.b92.net/info/rss/vesti.xml"},
+        {"name": "Espreso", "site": "https://www.espreso.co.rs", "feed": "https://www.espreso.co.rs/rss", "exclude": ["/showbiz/", "/lifestyle/"]}
+      ]
+    },
+    {
+      "id": "state",
+      "title": "Državni",
+      "title_ru": "Государственные",
+      "note": "Javni servis, državna agencija i mediji u državnom vlasništvu", "note_ru": "Общественный вещатель, госагентство и СМИ в госсобственности",
+      "sources": [
+        {"name": "RTS", "site": "https://www.rts.rs", "feed": "https://www.rts.rs/page/stories/sr/rss.html", "note": "javni servis", "note_ru": "общественный вещатель"},
+        {"name": "Tanjug", "site": "https://www.tanjug.rs", "feed": "https://www.tanjug.rs/rss/srbija", "note": "državna agencija", "note_ru": "госагентство"},
+        {"name": "Euronews Srbija", "site": "https://www.euronews.rs", "feed": "https://www.euronews.rs/rss/srbija", "note": "vlasnik Telekom Srbija", "note_ru": "владелец — Telekom Srbija"}
+      ]
+    },
+    {
+      "id": "mainstream",
+      "title": "Veliki portali",
+      "title_ru": "Крупные порталы",
+      "note": "Uglavnom naklonjeni SNS-u, ali umereniji od tabloida", "note_ru": "В основном на стороне SNS, но умереннее таблоидов",
+      "sources": [
+        {"name": "Blic", "site": "https://www.blic.rs", "feed": "https://www.blic.rs/rss/Vesti/Politika", "note": "rubrika „Politika“", "note_ru": "раздел «Политика»"},
+        {"name": "Politika", "site": "https://www.politika.rs", "feed": "https://www.politika.rs/rss"},
+        {"name": "Telegraf", "site": "https://www.telegraf.rs", "feed": "https://www.telegraf.rs/rss", "exclude": ["/jetset/", "/dom-i-dekor/"]},
+        {"name": "Dnevnik", "site": "https://www.dnevnik.rs", "feed": "https://www.dnevnik.rs/rss.xml", "note": "Novi Sad", "note_ru": "Нови-Сад"}
+      ]
+    },
+    {
+      "id": "regional",
+      "title": "Regionalni",
+      "title_ru": "Региональные",
+      "note": "Lokalni mediji iz cele Srbije", "note_ru": "Местные СМИ со всей Сербии",
+      "sources": [
+        {"name": "021.rs", "site": "https://www.021.rs", "feed": "https://news.google.com/rss/search?hl=sr&gl=RS&ceid=RS:sr&q=site:021.rs+when:2d", "note": "Novi Sad", "note_ru": "Нови-Сад"},
+        {"name": "RTV", "site": "https://www.rtv.rs/sr_lat", "feed": "https://news.google.com/rss/search?hl=sr&gl=RS&ceid=RS:sr&q=site:rtv.rs+-site:media.rtv.rs+when:2d", "note": "javni servis Vojvodine", "note_ru": "общественный вещатель Воеводины"},
+        {"name": "Autonomija", "site": "https://www.autonomija.info", "feed": "https://www.autonomija.info/feed", "note": "Vojvodina", "note_ru": "Воеводина"},
+        {"name": "Subotica.com", "site": "https://www.subotica.com", "feed": "https://news.google.com/rss/search?hl=sr&gl=RS&ceid=RS:sr&q=site:subotica.com/vesti+when:3d", "note": "Subotica", "note_ru": "Суботица"},
+        {"name": "Zrenjaninski", "site": "https://zrenjaninski.com", "feed": "https://zrenjaninski.com/feed/", "note": "Zrenjanin", "note_ru": "Зренянин"},
+        {"name": "Pančevac", "site": "https://pancevac-online.rs", "feed": "https://pancevac-online.rs/feed/", "note": "Pančevo", "note_ru": "Панчево"},
+        {"name": "Somborske novine", "site": "https://somborskenovine.rs", "feed": "https://somborskenovine.rs/feed/", "note": "Sombor", "note_ru": "Сомбор"},
+        {"name": "Kragujevačke", "site": "https://www.kragujevacke.rs", "feed": "https://www.kragujevacke.rs/feed", "note": "Kragujevac", "note_ru": "Крагуевац"},
+        {"name": "InfoKG", "site": "https://www.infokg.rs", "feed": "https://www.infokg.rs/rss/", "note": "Kragujevac", "note_ru": "Крагуевац"},
+        {"name": "Ozon press", "site": "https://www.ozonpress.net", "feed": "https://www.ozonpress.net/feed", "note": "Čačak i zapadna Srbija", "note_ru": "Чачак и запад Сербии"},
+        {"name": "Podrinske", "site": "https://podrinske.com", "feed": "https://podrinske.com/feed", "note": "Šabac", "note_ru": "Шабац"},
+        {"name": "Kolubarske", "site": "https://www.kolubarske.rs", "feed": "https://news.google.com/rss/search?hl=sr&gl=RS&ceid=RS:sr&q=site:kolubarske.rs+when:3d", "note": "Valjevo", "note_ru": "Валево"},
+        {"name": "Kruševac Grad", "site": "https://www.krusevacgrad.rs", "feed": "https://www.krusevacgrad.rs/feed", "note": "Kruševac", "note_ru": "Крушевац"},
+        {"name": "Južne vesti", "site": "https://www.juznevesti.com", "feed": "https://www.juznevesti.com/rss", "note": "Niš", "note_ru": "Ниш"},
+        {"name": "Niške vesti", "site": "https://niskevesti.rs", "feed": "https://niskevesti.rs/rss.xml", "note": "Niš", "note_ru": "Ниш"},
+        {"name": "JUGpress", "site": "https://jugpress.com", "feed": "https://jugpress.com/feed", "note": "Leskovac", "note_ru": "Лесковац"},
+        {"name": "Pirotske vesti", "site": "https://www.pirotskevesti.rs", "feed": "https://www.pirotskevesti.rs/feed", "note": "Pirot", "note_ru": "Пирот"},
+        {"name": "RTV Bor", "site": "https://rtvbor.rs", "feed": "https://rtvbor.rs/feed/", "note": "Bor", "note_ru": "Бор"},
+        {"name": "Sandžak press", "site": "https://sandzakpress.net", "feed": "https://sandzakpress.net/feed", "note": "Novi Pazar", "note_ru": "Нови-Пазар"},
+        {"name": "KoSSev", "site": "https://kossev.info", "feed": "https://news.google.com/rss/search?hl=sr&gl=RS&ceid=RS:sr&q=site:kossev.info+when:2d", "note": "sever Kosova, nezavisni", "note_ru": "север Косова, независимый"},
+        {"name": "Kosovo Online", "site": "https://www.kosovo-online.com", "feed": "https://news.google.com/rss/search?hl=sr&gl=RS&ceid=RS:sr&q=site:kosovo-online.com+when:2d", "note": "bliski zvaničnom Beogradu", "note_ru": "близок к официальному Белграду"}
+      ]
+    },
+    {
+      "id": "foreign-sr",
+      "title": "Strani mediji na srpskom",
+      "title_ru": "Иностранные на сербском",
+      "note": "Srpske redakcije stranih medija", "note_ru": "Сербские редакции зарубежных СМИ",
+      "sources": [
+        {"name": "Slobodna Evropa", "site": "https://www.slobodnaevropa.org", "feed": "https://www.slobodnaevropa.org/api/", "note": "RFE/RL, SAD", "note_ru": "RFE/RL, США"},
+        {"name": "BBC na srpskom", "site": "https://www.bbc.com/serbian/lat", "feed": "https://feeds.bbci.co.uk/serbian/lat/rss.xml", "note": "Velika Britanija", "note_ru": "Великобритания"},
+        {"name": "DW na srpskom", "site": "https://www.dw.com/sr", "feed": "https://rss.dw.com/rdf/rss-ser-all", "note": "Nemačka", "note_ru": "Германия"},
+        {"name": "Sputnik Srbija", "site": "https://sputnikportal.rs", "feed": "https://sputnikportal.rs/export/rss2/archive/index.xml", "note": "Rusija, državni medij", "note_ru": "Россия, госСМИ"}
+      ]
+    },
+    {
+      "id": "foreign",
+      "title": "Svet o Srbiji",
+      "title_ru": "Мир о Сербии",
+      "note": "Tekstovi na engleskom i ruskom", "note_ru": "Публикации на английском и русском",
+      "sources": [
+        {"name": "Balkan Insight", "site": "https://balkaninsight.com", "feed": "https://balkaninsight.com/feed/", "lang": "en", "note": "BIRN, ceo region", "note_ru": "BIRN, весь регион"},
+        {"name": "Google News (EN)", "site": "https://news.google.com", "feed": "https://news.google.com/rss/search?q=Serbia+when:3d&hl=en-US&gl=US&ceid=US:en", "lang": "en", "note": "mediji na engleskom", "note_ru": "англоязычные СМИ"},
+        {"name": "Google News (RU)", "site": "https://news.google.com", "feed": "https://news.google.com/rss/search?q=%D0%A1%D0%B5%D1%80%D0%B1%D0%B8%D1%8F+when:3d&hl=ru&gl=RU&ceid=RU:ru", "lang": "ru", "note": "mediji na ruskom", "note_ru": "русскоязычные СМИ"}
+      ]
+    },
+    {
+      "id": "trends",
+      "title": "Šta se traži",
+      "title_ru": "Что ищут",
+      "note": "Najčešći upiti na Google-u u Srbiji i vesti zbog kojih se traže", "note_ru": "Самые частые запросы в Google из Сербии и новости, из-за которых их ищут",
+      "sources": [
+        {"name": "Google Trends", "site": "https://trends.google.com/trending?geo=RS", "feed": "https://trends.google.com/trending/rss?geo=RS", "ranked": true, "note": "upit i vest uz njega", "note_ru": "запрос и новость к нему"}
+      ]
+    },
+    {
+      "id": "reddit",
+      "title": "Reddit",
+      "title_ru": "Reddit",
+      "note": "Najpopularnije teme na srpskim sabredditima", "note_ru": "Самое обсуждаемое в сербских сабреддитах",
+      "sources": [
+        {"name": "r/serbia", "site": "https://www.reddit.com/r/serbia/", "feed": "https://www.reddit.com/r/serbia/top/.rss?t=day", "ranked": true, "note": "najpopularnije za dan", "note_ru": "лучшее за сутки"},
+        {"name": "r/beograd", "site": "https://www.reddit.com/r/beograd/", "feed": "https://www.reddit.com/r/beograd/top/.rss?t=week", "ranked": true, "note": "najpopularnije za nedelju", "note_ru": "лучшее за неделю"},
+        {"name": "r/Belgrade", "site": "https://www.reddit.com/r/Belgrade/", "feed": "https://www.reddit.com/r/Belgrade/top/.rss?t=week", "ranked": true, "note": "Beograd na engleskom, za nedelju", "note_ru": "Белград по-английски, лучшее за неделю"},
+        {"name": "r/AskSerbia", "site": "https://www.reddit.com/r/AskSerbia/", "feed": "https://www.reddit.com/r/AskSerbia/top/.rss?t=week", "ranked": true, "note": "pitanja o Srbiji, za nedelju", "note_ru": "вопросы о Сербии, лучшее за неделю"},
+        {"name": "r/srpska", "site": "https://www.reddit.com/r/srpska/", "feed": "https://www.reddit.com/r/srpska/top/.rss?t=week", "ranked": true, "note": "Republika Srpska, za nedelju", "note_ru": "Республика Сербская, лучшее за неделю"}
+      ]
+    }
+  ]
+}

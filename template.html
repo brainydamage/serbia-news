@@ -1,0 +1,756 @@
+<!doctype html>
+<html lang="sr-Latn">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Srbija: vesti</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='11' fill='%23c6363c'/><rect y='11' width='32' height='10' fill='%230c4076'/><rect y='21' width='32' height='11' fill='%23eee'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;900&display=swap">
+<style>
+/* оформление по мотивам infomate.club/news: шрифт Nunito, белый фон, колонки без карточек */
+:root {
+  --bg: #ffffff;
+  --text: #333333;
+  --strong: #000000;
+  --muted: #8a8a8a;
+  --faint: #a8a8a8;
+  --line: #333333;
+  --soft: #ececec;
+  --read: #afafaf;
+  --hover: #9b9b9b;
+  --tip-bg: #282c35;
+  --tip-text: #dddddd;
+  --c-independent: #2563eb;
+  --c-investigations: #0d9488;
+  --c-progov: #dc2626;
+  --c-state: #db2777;
+  --c-mainstream: #6b7280;
+  --c-foreign-sr: #7c3aed;
+  --c-foreign: #d97706;
+  --c-reddit: #ff4500;
+  --c-trends: #1a73e8;
+  --c-regional: #65a30d;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #282c35;
+    --text: #dddddd;
+    --strong: #ffffff;
+    --muted: #9a9ca3;
+    --faint: #7c7f87;
+    --line: #dddddd;
+    --soft: #383d49;
+    --read: #737373;
+    --hover: #9b9b9b;
+    --tip-bg: #3a404d;
+    --tip-text: #eeeeee;
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.3 "Nunito", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+a { color: inherit; }
+button, input { font: inherit; color: inherit; }
+
+/* ---------- header ---------- */
+header {
+  position: sticky; top: 0; z-index: 5;
+  background: color-mix(in srgb, var(--bg) 94%, transparent);
+  backdrop-filter: blur(10px);
+}
+.bar {
+  max-width: 1300px; margin: 0 auto; padding: 14px 20px;
+  display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center;
+}
+.brand { display: flex; align-items: baseline; gap: 12px; margin-right: auto; }
+.brand h1 { margin: 0; font-size: 29px; font-weight: 700; line-height: 1.4; white-space: nowrap; }
+.brand .flag { display: inline-block; width: 22px; height: 15px; border-radius: 3px; vertical-align: 1px;
+  background: linear-gradient(#c6363c 0 34%, #0c4076 34% 66%, #eee 66%); margin-right: 10px; }
+.updated { color: var(--muted); font-size: 13px; }
+.topline { max-width: 1300px; margin: 0 auto; padding: 8px 20px 0; color: var(--muted); font-size: 13px; text-align: right; }
+.topline:empty { display: none; }
+#info > span { white-space: nowrap; }
+#info .dot { width: 7px; height: 7px; margin-left: 5px; vertical-align: 1px; }
+.controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.seg { display: inline-flex; background: var(--soft); border-radius: 20px; padding: 3px; }
+.seg button {
+  border: 0; background: none; padding: 5px 12px; border-radius: 20px; cursor: pointer;
+  font-size: 14px; font-weight: 700; color: var(--muted);
+}
+.seg button:hover { color: var(--text); }
+#view button { width: 104px; padding-left: 4px; padding-right: 4px; }
+.seg button[aria-pressed="true"] { background: var(--tip-bg); color: var(--tip-text); }
+.search {
+  border: 1.5px solid var(--soft); background: var(--bg); color: var(--text);
+  border-radius: 20px; padding: 6px 14px; font-size: 14px; width: 200px;
+}
+.search:focus { outline: none; border-color: var(--text); }
+
+/* ряд разделов под шапкой: в «По медиям» — оглавление, в «Все вести» — фильтр. Свой sticky, чтобы на телефоне
+   оставался на экране, даже когда шапка с кнопками уезжает вверх */
+.chips {
+  position: sticky; top: var(--header-h, 0px); z-index: 4;
+  background: color-mix(in srgb, var(--bg) 94%, transparent);
+  backdrop-filter: blur(10px);
+  padding: 0 max(20px, calc((100% - 1260px) / 2)) 12px;
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.chip {
+  border: 1.5px solid var(--soft); background: var(--bg); border-radius: 20px;
+  padding: 3px 12px 3px 9px; font-size: 14px; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+}
+.chip:hover { border-color: var(--muted); }
+.chip[aria-pressed="true"], .chip.jump[aria-current="true"] { background: var(--tip-bg); color: var(--tip-text); border-color: var(--tip-bg); }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block; }
+
+main { max-width: 1300px; margin: 0 auto; padding: 0 0 40px; }
+
+/* ---------- sources view ---------- */
+.section { margin-top: 50px; scroll-margin-top: calc(var(--sticky-h, 0px) + 10px); }
+.section-head { text-align: center; margin: 0 20px; padding-bottom: 12px; border-bottom: 1.5px solid var(--line); }
+.section-head h2 { margin: 0; font-size: 28.8px; font-weight: 700; }
+.section-head .dot { width: 10px; height: 10px; vertical-align: middle; margin: -4px 12px 0 0; }
+.section-head p { margin: 4px 0 0; color: var(--muted); font-size: 15px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); }
+
+.card { padding: 35px 20px 0; min-width: 0; }
+.card-head { display: flex; gap: 12px; align-items: center; margin-bottom: 15px; }
+.avatar {
+  position: relative; width: 32px; height: 32px; border-radius: 6px; flex: none; overflow: hidden;
+  display: grid; place-items: center; color: #fff; font-weight: 900; font-size: 16px;
+}
+.avatar img { position: absolute; inset: 0; width: 100%; height: 100%; background: var(--bg); }
+.card-head a { text-decoration: none; font-weight: 700; font-size: 20.8px; line-height: 1.2; }
+.card-head a:hover { color: var(--hover); }
+.card-meta { color: var(--muted); font-size: 11.2px; margin-top: 2px; }
+.card-meta .warn { color: #d97706; }
+
+.items { list-style: none; margin: 0; padding: 0; }
+.row { display: flex; gap: 10px; margin-bottom: 8px; }
+.time { flex: none; width: 42px; white-space: nowrap; color: var(--faint); font-size: 12px; padding-top: 2px; font-variant-numeric: tabular-nums; }
+.head {
+  flex: 1; min-width: 0; text-decoration: none; cursor: pointer; font-size: 16px; line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.head:hover { color: var(--hover); }
+.head.fresh { font-weight: 700; color: var(--strong); }
+.item.read .head { color: var(--read); font-weight: 400; }
+.via { color: var(--muted); font-size: 13px; margin-left: 4px; }
+.traffic { color: var(--faint); font-size: 13px; margin-left: 4px; white-space: nowrap; }
+.card .items { margin-bottom: 8px; }
+
+/* подводка — тёмная подсказка при наведении, как на infomate; на телефоне — такой же блок под заголовком */
+.tip, .details { border-radius: 20px; background: var(--tip-bg); color: var(--tip-text); font-size: 15px; line-height: 1.45; }
+.tip {
+  position: fixed; z-index: 20; max-width: 420px; padding: 16px 20px;
+  pointer-events: none; box-shadow: 0 8px 28px rgb(0 0 0 / .2);
+}
+.details { margin: 0 0 14px 52px; padding: 14px 18px; }
+.tip p, .details p { margin: 0; }
+.tip p + p, .details p + p { margin-top: 10px; }
+.tip .orig, .details .orig { font-size: 13px; opacity: .65; }
+.notice { max-width: 1260px; width: calc(100% - 40px); margin: 16px auto 0; padding: 12px 18px; border-radius: 20px; background: var(--soft); color: var(--muted); font-size: 14px; }
+.more { border: 0; background: none; color: var(--muted); font-weight: 700; cursor: pointer; font-size: 14px; padding: 0 0 0 52px; }
+.more:hover { color: var(--text); }
+
+/* ---------- feed view ---------- */
+.feed { max-width: 820px; margin: 0 auto; padding: 0 20px; }
+.feed .day { text-align: center; font-size: 20.8px; font-weight: 700; margin: 50px 0 20px; padding-bottom: 10px; border-bottom: 1.5px solid var(--line); }
+.feed .day::first-letter { text-transform: uppercase; }
+.src { font-size: 13px; font-weight: 700; color: var(--muted); display: inline-flex; align-items: center; gap: 5px; margin-right: 6px; white-space: nowrap; }
+.feed .more { margin-top: 12px; }
+
+.empty { color: var(--muted); text-align: center; padding: 60px 0; }
+footer { color: var(--muted); font-size: 14px; max-width: 800px; margin: 0 auto; padding: 100px 20px 50px; line-height: 1.6; text-align: center; }
+footer p { margin: 0 0 10px; }
+.credits a { color: var(--text); }
+
+@media (max-width: 800px) {
+  body { font-size: 15px; }
+  .head { font-size: 15px; }
+  .brand h1 { font-size: 24px; }
+  .section-head h2 { font-size: 24px; }
+}
+@media (max-width: 640px) {
+  header { position: static; }  /* на телефоне шапка с кнопками заняла бы четверть экрана */
+  .bar { padding-left: 16px; padding-right: 16px; }
+  .brand { flex-wrap: wrap; column-gap: 12px; row-gap: 0; }
+  /* на узком экране разделы в одну строку с прокруткой вбок */
+  .chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 10px 16px; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chip { flex: none; }
+  .card { padding: 30px 16px 0; }
+  .section-head { margin: 0 16px; }
+  .feed { padding: 0 16px; }
+  .notice { width: calc(100% - 32px); }
+  .topline { padding: 8px 16px 0; text-align: left; }
+  .search { width: 100%; }
+  .controls { width: 100%; }
+  .time { width: 40px; font-size: 11px; }
+  .details { margin-left: 0; }
+  .more { padding-left: 0; }
+}
+</style>
+</head>
+<body>
+<!-- курс, погода, воздух — тонкой полоской над шапкой: уезжает при прокрутке и не теснит кнопки -->
+<div class="topline" id="info"></div>
+<header>
+  <div class="bar">
+    <div class="brand">
+      <h1><span class="flag"></span><span data-t="title"></span></h1>
+      <span class="updated" id="updated"></span>
+    </div>
+    <div class="controls">
+      <!-- группа прижата вправо: алфавит слева исчезает в русском режиме, ничего не сдвигая;
+           кнопки вида фиксированной ширины, поэтому язык не прыгает при смене языка -->
+      <div class="seg" id="script">
+        <button data-v="orig" data-t="orig"></button>
+        <button data-v="lat">Lat</button>
+        <button data-v="cyr">Ћир</button>
+      </div>
+      <div class="seg" id="lang">
+        <button data-v="sr">Srpski</button>
+        <button data-v="ru">Русский</button>
+      </div>
+      <div class="seg" id="view">
+        <button data-v="sources" data-t="bySource"></button>
+        <button data-v="feed" data-t="feed"></button>
+      </div>
+      <input class="search" id="q" type="search">
+    </div>
+  </div>
+</header>
+<nav class="chips" id="chips"></nav>
+<div class="notice" id="notice" hidden></div>
+<main id="main"></main>
+<footer>
+  <p><span data-t="footer"></span> <code>sources.json</code>.</p>
+  <p class="credits">
+    <span data-t="credits1"></span> <a href="https://infomate.club" target="_blank" rel="noopener">infomate.club</a>
+    <span data-t="credits2"></span> <a href="https://vas3k.club" target="_blank" rel="noopener">Vas3k.Club</a>.
+    <span data-t="credits3"></span> <a href="https://github.com/vas3k/infomate.club" target="_blank" rel="noopener">github.com/vas3k/infomate.club</a>
+    (Apache 2.0). <span data-t="credits4"></span>
+  </p>
+</footer>
+
+<script>
+const DATA = /*__DATA__*/null;
+
+const FRESH_MS = 3 * 3600e3;
+const CARD_LIMIT = 8;
+const FEED_PAGE = 120;
+const HOVER = matchMedia("(hover: hover)").matches;
+
+// ---------- state ----------
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+};
+const state = {
+  lang: store.get("lang", "sr"),
+  view: store.get("view", "sources"),
+  script: store.get("script", "orig"),
+  // храним скрытые разделы, а не видимые: новые разделы из sources.json сразу показываются
+  sections: new Set(DATA.sections.map(s => s.id).filter(id => !store.get("hiddenSections", []).includes(id))),
+  q: "",
+  read: new Set(store.get("read", [])),
+  open: new Set(),
+  expandedCards: new Set(),
+  feedLimit: FEED_PAGE,
+};
+function markRead(url) {
+  state.read.add(url);
+  store.set("read", [...state.read].slice(-3000));
+}
+
+// ---------- interface text (latinica; ćirilica se dobija transliteracijom) ----------
+const UI = {
+  title: "Srbija: vesti",
+  bySource: "Po medijima",
+  all: "Sve",
+  feed: "Sve vesti",
+  orig: "Original",
+  scriptHint: "Srpski tekst: kao u originalu, latinicom ili ćirilicom",
+  search: "Pretraga naslova",
+  footer: "Zadržite miš na naslovu da vidite kratak opis, a klik otvara članak (na telefonu: prvi dodir prikazuje opis, drugi otvara članak). Podebljane su vesti iz poslednja tri sata, a sive su one koje ste već pročitali. Podela medija po taborima je okvirna – spisak i kategorije se podešavaju u fajlu",
+  credits1: "Napravljeno po uzoru na",
+  credits2: "– projekat zajednice",
+  credits3: "Izvorni kod originala je otvoren:",
+  credits4: "Ideja i koncept su njihovi – hvala autorima!",
+  updated: "ažurirano",
+  din: "din",
+  city: "Beograd",
+  air: "vazduh",
+  rateHint: "Srednji kurs NBS za",
+  airHint: "Evropski indeks kvaliteta vazduha",
+  aqi0: "dobar",
+  aqi1: "prihvatljiv",
+  aqi2: "umeren",
+  aqi3: "loš",
+  aqi4: "veoma loš",
+  aqi5: "izuzetno loš",
+  searches: "pretraga",
+  outlets: "medija",
+  lastPost: "poslednja vest",
+  noDate: "bez datuma",
+  ago: "pre",
+  min: "min",
+  today: "Danas",
+  yesterday: "Juče",
+  nothing: "Ništa nije pronađeno",
+  more: "Još",
+  showMore: "Prikaži još",
+  stale: "feed nije osvežen",
+  down: "feed nije dostupan",
+};
+const UI_RU = {
+  title: "Сербия: новости",
+  bySource: "По изданиям",
+  all: "Все",
+  feed: "Общая лента",
+  search: "Поиск по заголовкам",
+  footer: "Наведите мышь на заголовок, чтобы увидеть подводку, а клик открывает статью (на телефоне: первое касание показывает подводку, второе открывает статью). Жирным отмечены новости за последние три часа, серым — уже прочитанные. Деление изданий по лагерям условное — список и категории задаются в файле",
+  credits1: "Сделано по мотивам",
+  credits2: "— проекта сообщества",
+  credits3: "Исходный код оригинала открыт:",
+  credits4: "Идея и концепция — их, спасибо авторам!",
+  updated: "обновлено",
+  din: "дин",
+  city: "Белград",
+  air: "воздух",
+  rateHint: "Средний курс Народного банка Сербии на",
+  airHint: "Европейский индекс качества воздуха",
+  aqi0: "хороший",
+  aqi1: "приемлемый",
+  aqi2: "умеренный",
+  aqi3: "плохой",
+  aqi4: "очень плохой",
+  aqi5: "крайне плохой",
+  searches: "запросов",
+  outlets: "изданий",
+  lastPost: "последний пост",
+  noDate: "нет даты",
+  min: "мин",
+  today: "Сегодня",
+  yesterday: "Вчера",
+  original: "Оригинал:",
+  nothing: "Ничего не нашлось",
+  more: "Ещё",
+  showMore: "Показать ещё",
+  stale: "лента не обновилась",
+  down: "лента недоступна",
+  aiNote: "Переведены только заголовки и подводки — сами статьи откроются в оригинале. Перевод делает ИИ (Claude), так что возможны ошибки и неточности.",
+  noTranslations: "Перевода пока нет — заголовки показаны в оригинале.",
+  partial: "Часть свежих новостей ещё не переведена и показана в оригинале.",
+};
+const ru = () => state.lang === "ru";
+const t = key => ru() ? (UI_RU[key] ?? UI[key] ?? key)
+  : state.script === "cyr" ? toCyrillic(UI[key] ?? key) : (UI[key] ?? key);
+const tx = text => state.script === "cyr" ? toCyrillic(text) : text;
+// подписи из sources.json: в русском режиме берём поле *_ru, если оно есть
+const label = (obj, field) => ru() && obj[field + "_ru"] ? obj[field + "_ru"] : tx(obj[field] || "");
+const locale = () => ru() ? "ru" : state.script === "cyr" ? "sr-Cyrl-RS" : "sr-Latn-RS";
+function plural(n, one, few, many) {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+  return many;
+}
+
+// ---------- transliteration ----------
+const C2L = { А:"A",Б:"B",В:"V",Г:"G",Д:"D",Ђ:"Đ",Е:"E",Ж:"Ž",З:"Z",И:"I",Ј:"J",К:"K",Л:"L",Љ:"Lj",М:"M",Н:"N",Њ:"Nj",О:"O",П:"P",Р:"R",С:"S",Т:"T",Ћ:"Ć",У:"U",Ф:"F",Х:"H",Ц:"C",Ч:"Č",Џ:"Dž",Ш:"Š" };
+for (const [c, l] of Object.entries(C2L)) C2L[c.toLowerCase()] = l.toLowerCase();
+const L2C = {};
+for (const [c, l] of Object.entries(C2L)) L2C[l] = c;
+Object.assign(L2C, { LJ: "Љ", NJ: "Њ", DŽ: "Џ", Q: "Ку", W: "В", X: "Кс", Y: "И", q: "ку", w: "в", x: "кс", y: "и" });
+
+function toLatin(s) {
+  return s.replace(/[Ѐ-ӿ]/g, (ch, i) => {
+    const l = C2L[ch];
+    if (!l) return ch;
+    // «ЉУБАВ» → «LJUBAV», а не «LjUBAV»
+    if (l.length === 2 && ch === ch.toUpperCase()) {
+      const next = s[i + 1] || "";
+      if (next && next === next.toUpperCase() && next !== next.toLowerCase()) return l.toUpperCase();
+    }
+    return l;
+  });
+}
+// слова, которые в сербской кириллице пишутся латиницей (бренды, клавиши, имя файла)
+const KEEP_LATIN = new Set(["Ctrl", "sources", "json", "Google", "News", "RSS", "EN", "RU", "BIRN", "RFE", "RL", "Lat"]);
+function toCyrillic(s) {
+  return s.replace(/[A-Za-zČĆŽŠĐčćžšđ]+/g, w => {
+    if (KEEP_LATIN.has(w)) return w;
+    return w.replace(/Lj|LJ|lj|Nj|NJ|nj|Dž|DŽ|dž|[A-Za-zČĆŽŠĐčćžšđ]/g, ch => L2C[ch] ?? ch);
+  });
+}
+function script(text, lang) {
+  // в русском режиме переключатель алфавита скрыт, непереведённое показываем как в оригинале
+  if (lang !== "sr" || state.script === "orig" || ru()) return text;
+  if (state.script === "lat") return toLatin(text);
+  // текст уже в кириллице: латинские вставки (названия, цитаты) оставляем как в оригинале
+  const cyr = (text.match(/[\u0400-\u04FF]/g) || []).length;
+  return cyr > text.length / 3 ? text : toCyrillic(text);
+}
+function norm(s) {
+  return toLatin(s).toLowerCase().replace(/đ/g, "dj").normalize("NFD").replace(/[̀-ͯ]/g, "");
+}
+
+// ---------- helpers ----------
+function h(tag, attrs = {}, ...children) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (k === "class") el.className = v;
+    else el.setAttribute(k, v);
+  }
+  for (const c of children.flat()) if (c !== null && c !== undefined && c !== false) el.append(c);
+  return el;
+}
+const now = Date.now();
+const fmt = opts => new Intl.DateTimeFormat(locale(), { timeZone: "Europe/Belgrade", ...opts });
+const timeFmt = { format: d => fmt({ hour: "2-digit", minute: "2-digit" }).format(d) };
+const dayFmt = { format: d => fmt({ day: "numeric", month: "short" }).format(d).replace(/\.$/, "") };
+const longDayFmt = { format: d => fmt({ weekday: "long", day: "numeric", month: "long" }).format(d) };
+function dayKey(d) { return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Belgrade" }).format(d); }
+
+function shortTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso), diff = now - d;
+  if (diff < 60 * 60e3) return Math.max(1, Math.round(diff / 60e3)) + " " + t("min");
+  if (dayKey(d) === dayKey(new Date(now))) return timeFmt.format(d);
+  return dayFmt.format(d);
+}
+function ago(iso) {
+  if (!iso) return t("noDate");
+  const m = Math.round((now - new Date(iso)) / 60e3);
+  const hrs = Math.round(m / 60);
+  if (ru()) {
+    if (m < 60) return `${Math.max(m, 1)} мин назад`;
+    if (hrs < 24) return `${hrs} ${plural(hrs, "час", "часа", "часов")} назад`;
+    const d = Math.round(hrs / 24);
+    return `${d} ${plural(d, "день", "дня", "дней")} назад`;
+  }
+  if (m < 60) return tx(`pre ${Math.max(m, 1)} min`);
+  if (hrs < 24) return tx(`pre ${hrs} ${plural(hrs, "sat", "sata", "sati")}`);
+  const d = Math.round(hrs / 24);
+  return tx(`pre ${d} ${plural(d, "dan", "dana", "dana")}`);
+}
+const favicon = site => `https://www.google.com/s2/favicons?sz=64&domain=${new URL(site).hostname}`;
+// у топа Reddit первая запись — самая популярная, а не самая свежая
+const latest = src => src.items.reduce((max, i) => i.date && i.date > (max || "") ? i.date : max, null);
+const sectionById = Object.fromEntries(DATA.sections.map(s => [s.id, s]));
+
+// ---------- item ----------
+// что показывать: перевод (если включён русский и он есть) или оригинал
+function textOf(item, src) {
+  if (ru() && item.ru) return { title: item.ru.title, summary: item.ru.summary, lang: "ru", translated: true };
+  return { title: item.title, summary: item.summary, lang: item.lang || src.lang, translated: false };
+}
+
+// подводка: в подсказке при наведении, а на телефоне — под заголовком после первого касания
+function summaryOf(item, src) {
+  const v = textOf(item, src);
+  return [
+    v.summary ? h("p", {}, script(v.summary, v.lang)) : null,
+    v.translated ? h("p", { class: "orig", lang: item.lang || src.lang }, t("original") + " " + item.title) : null,
+  ].filter(Boolean);
+}
+
+const tipEl = h("div", { class: "tip", hidden: true });
+document.body.append(tipEl);
+let tipTimer;
+function showTip(anchor, nodes) {
+  clearTimeout(tipTimer);
+  // небольшая задержка, чтобы подсказки не мелькали, пока мышь едет через список
+  tipTimer = setTimeout(() => {
+    tipEl.replaceChildren(...nodes);
+    tipEl.hidden = false;
+    const r = anchor.getBoundingClientRect();
+    const left = Math.max(8, Math.min(r.left, innerWidth - tipEl.offsetWidth - 8));
+    let top = r.bottom + 8;
+    if (top + tipEl.offsetHeight > innerHeight - 8) top = Math.max(8, r.top - tipEl.offsetHeight - 8);
+    tipEl.style.left = left + "px";
+    tipEl.style.top = top + "px";
+  }, 150);
+}
+function hideTip() { clearTimeout(tipTimer); tipEl.hidden = true; }
+addEventListener("scroll", hideTip, { passive: true });
+
+function renderItem(item, src, { showSource = false } = {}) {
+  const fresh = item.date && now - new Date(item.date) < FRESH_MS;
+  const v = textOf(item, src);
+  const summary = summaryOf(item, src);
+  const li = h("li", { class: "item" + (state.read.has(item.url) ? " read" : ""), lang: v.lang });
+
+  const opened = () => { markRead(item.url); li.classList.add("read"); hideTip(); };
+  const onclick = e => {
+    // без мыши наводить нечем: первое касание показывает подводку, второе открывает статью
+    if (!HOVER && summary.length && !state.open.has(item.url)) {
+      e.preventDefault();
+      state.open.add(item.url);
+      markRead(item.url);
+      li.replaceWith(renderItem(item, src, { showSource }));
+      return;
+    }
+    opened();
+  };
+
+  const head = h("a", { class: "head" + (fresh ? " fresh" : ""), href: item.url, target: "_blank", rel: "noopener", onclick, onauxclick: opened },
+    showSource ? h("span", { class: "src" }, h("span", { class: "dot", style: `background:var(--c-${src.section})` }), src.name) : null,
+    script(v.title, v.lang),
+    item.via ? h("span", { class: "via" }, "— " + item.via) : null,
+    item.traffic ? h("span", { class: "traffic" }, `· ${item.traffic} ${t("searches")}`) : null,
+  );
+  if (HOVER && summary.length) {
+    head.addEventListener("mouseenter", () => showTip(head, summary));
+    head.addEventListener("mouseleave", hideTip);
+  }
+
+  li.append(h("div", { class: "row" },
+    h("span", { class: "time", title: item.date ? new Date(item.date).toLocaleString(locale()) : "" }, shortTime(item.date)),
+    head,
+  ));
+  if (!HOVER && state.open.has(item.url) && summary.length) li.append(h("div", { class: "details" }, summary));
+  return li;
+}
+
+function matches(item) {
+  if (!state.q) return true;
+  const text = [item.title, item.summary, item.ru?.title, item.ru?.summary].filter(Boolean).join(" ");
+  return norm(text).includes(state.q);
+}
+
+// ---------- views ----------
+function renderSources() {
+  const out = [];
+  for (const sec of DATA.sections) {
+    const cards = [];
+    for (const src of DATA.sources.filter(s => s.section === sec.id)) {
+      const items = src.items.filter(matches);
+      if ((state.q || !src.error) && !items.length) continue;  // пустая лента без ошибки — Reddit ещё ждёт очереди
+      const expanded = state.expandedCards.has(src.feed) || state.q;
+      const shown = expanded ? items : items.slice(0, CARD_LIMIT);
+      const card = h("article", { class: "card" },
+        h("div", { class: "card-head" },
+          h("span", { class: "avatar", style: `background:var(--c-${src.section})` }, src.name[0],
+            h("img", { src: favicon(src.site), alt: "", loading: "lazy", onerror: e => e.target.remove() })),
+          h("div", {},
+            h("a", { href: src.site, target: "_blank", rel: "noopener" }, src.name),
+            h("div", { class: "card-meta" },
+              [label(src, "note"), t("lastPost") + " " + ago(latest(src))].filter(Boolean).join(" · "),
+              src.error ? h("span", { class: "warn", title: src.error }, " · " + t(src.stale ? "stale" : "down")) : null,
+            ),
+          ),
+        ),
+        h("ul", { class: "items" }, shown.map(i => renderItem(i, src))),
+        items.length > shown.length
+          ? h("button", { class: "more", onclick: () => { state.expandedCards.add(src.feed); render(); } }, `${t("more")} ${items.length - shown.length}`)
+          : null,
+      );
+      cards.push(card);
+    }
+    if (!cards.length) continue;
+    out.push(h("section", { class: "section", "data-id": sec.id },
+      h("div", { class: "section-head" },
+        h("h2", {}, h("span", { class: "dot", style: `background:var(--c-${sec.id})` }), label(sec, "title")),
+        h("p", {}, label(sec, "note")),
+      ),
+      h("div", { class: "grid" }, cards),
+    ));
+  }
+  return out.length ? out : [h("p", { class: "empty" }, t("nothing"))];
+}
+
+function renderFeed() {
+  const all = [];
+  for (const src of DATA.sources) {
+    if (!state.sections.has(src.section)) continue;
+    for (const item of src.items) if (item.date && matches(item)) all.push([item, src]);
+  }
+  all.sort((a, b) => b[0].date.localeCompare(a[0].date));
+  if (!all.length) return [h("p", { class: "empty" }, t("nothing"))];
+
+  const wrap = h("div", { class: "feed" });
+  let day = null, list = null;
+  for (const [item, src] of all.slice(0, state.feedLimit)) {
+    const d = new Date(item.date), key = dayKey(d);
+    if (key !== day) {
+      day = key;
+      const label = key === dayKey(new Date(now)) ? t("today") : key === dayKey(new Date(now - 864e5)) ? t("yesterday") : longDayFmt.format(d);
+      list = h("ul", { class: "items" });
+      wrap.append(h("div", { class: "day" }, label), list);
+    }
+    list.append(renderItem(item, src, { showSource: true }));
+  }
+  if (all.length > state.feedLimit) {
+    wrap.append(h("button", { class: "more", onclick: () => { state.feedLimit += FEED_PAGE; render(); } },
+      `${t("showMore")} (${all.length - state.feedLimit})`));
+  }
+  return [wrap];
+}
+
+function renderChips() {
+  const chips = document.getElementById("chips");
+  chips.replaceChildren();
+  if (state.view === "feed") renderFilterChips(chips);
+  else renderContents(chips);
+  chips.hidden = !chips.children.length;
+  measureSticky();
+  spy();
+}
+
+// оглавление: только разделы, которые сейчас на странице (поиск мог часть скрыть)
+function renderContents(chips) {
+  for (const el of document.querySelectorAll("#main .section")) {
+    const sec = sectionById[el.dataset.id];
+    chips.append(h("button", { class: "chip jump", "data-id": sec.id, title: label(sec, "note"), onclick: () => el.scrollIntoView({ behavior: "smooth" }) },
+      h("span", { class: "dot", style: `background:var(--c-${sec.id})` }), label(sec, "title")));
+  }
+}
+
+// подсвечиваем в оглавлении раздел, который сейчас читают
+let stickyHeight = 0;
+function spy() {
+  const sections = [...document.querySelectorAll("#main .section")];
+  if (state.view === "feed" || !sections.length) return;
+  const atBottom = innerHeight + scrollY >= document.documentElement.scrollHeight - 2;
+  let current = atBottom ? sections.at(-1) : sections[0];
+  if (!atBottom) for (const el of sections) if (el.getBoundingClientRect().top <= stickyHeight + 40) current = el;
+  const chips = document.getElementById("chips");
+  for (const b of chips.querySelectorAll(".jump")) {
+    const on = b.dataset.id === current?.dataset.id;
+    if (on === (b.getAttribute("aria-current") === "true")) continue;
+    b.setAttribute("aria-current", String(on));
+    if (on) chips.scrollTo({ left: b.offsetLeft - 16, behavior: "smooth" });  // на телефоне ряд прокручивается вбок
+  }
+}
+
+function measureSticky() {
+  const header = document.querySelector("header"), chips = document.getElementById("chips");
+  const headerH = getComputedStyle(header).position === "sticky" ? header.offsetHeight : 0;
+  stickyHeight = headerH + (chips.hidden ? 0 : chips.offsetHeight);
+  document.documentElement.style.setProperty("--header-h", headerH + "px");
+  document.documentElement.style.setProperty("--sticky-h", stickyHeight + "px");
+}
+let spyFrame;
+addEventListener("scroll", () => { cancelAnimationFrame(spyFrame); spyFrame = requestAnimationFrame(spy); }, { passive: true });
+addEventListener("resize", () => { measureSticky(); spy(); });
+
+// фильтр общей ленты: «Все» или выбранные разделы. Первый клик по разделу оставляет только его,
+// следующие добавляют или убирают разделы — не надо выключать лишнее по одному
+function renderFilterChips(chips) {
+  const ids = DATA.sections.map(s => s.id);
+  const all = ids.every(id => state.sections.has(id));
+  const apply = sections => {
+    state.sections = sections.size ? sections : new Set(ids);
+    store.set("hiddenSections", ids.filter(id => !state.sections.has(id)));
+    state.feedLimit = FEED_PAGE;
+    render();
+  };
+  chips.append(h("button", { class: "chip", "aria-pressed": String(all), onclick: () => apply(new Set(ids)) }, t("all")));
+  for (const sec of DATA.sections) {
+    const on = !all && state.sections.has(sec.id);
+    chips.append(h("button", {
+      class: "chip", "aria-pressed": String(on), title: label(sec, "note"),
+      onclick: () => {
+        if (all) return apply(new Set([sec.id]));
+        const next = new Set(state.sections);
+        on ? next.delete(sec.id) : next.add(sec.id);
+        apply(next);
+      },
+    }, h("span", { class: "dot", style: `background:var(--c-${sec.id})` }), label(sec, "title")));
+  }
+}
+
+// ---------- шапка: курс, погода, воздух (собираются при сборке, см. header_info в build.py) ----------
+// европейский индекс качества воздуха: границы классов и цвета Европейского агентства по окружающей среде
+const AQI_LEVELS = [[20, "#50f0e6"], [40, "#50ccaa"], [60, "#f0e641"], [80, "#ff5050"], [100, "#960032"], [Infinity, "#7d2181"]];
+function weatherIcon(code, day) {
+  if (code <= 1) return day ? "☀️" : "🌙";
+  if (code === 2) return day ? "⛅" : "☁️";
+  if (code === 3) return "☁️";
+  if (code === 45 || code === 48) return "🌫️";
+  if ((code >= 71 && code <= 77) || code === 85 || code === 86) return "🌨️";
+  if (code >= 95) return "⛈️";
+  return "🌧️";
+}
+function renderInfo() {
+  const info = DATA.info || {};
+  const num = v => new Intl.NumberFormat(locale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
+  const parts = [];
+  if (info.rates) {
+    const hint = `${t("rateHint")} ${dayFmt.format(new Date(info.rates.date))}`;
+    parts.push(h("span", { title: hint }, `€ ${num(info.rates.EUR)} ${t("din")}`));
+    parts.push(h("span", { title: hint }, `₽ ${num(info.rates.RUB)} ${t("din")}`));
+  }
+  if (info.weather) {
+    const temp = Math.round(info.weather.temp);
+    parts.push(h("span", {}, `${t("city")} ${temp > 0 ? "+" : ""}${temp}° ${weatherIcon(info.weather.code, info.weather.day)}`));
+  }
+  if (info.air) {
+    const level = AQI_LEVELS.findIndex(([max]) => info.air.aqi < max);
+    parts.push(h("span", { title: `${t("airHint")}: ${Math.round(info.air.aqi)}, PM2.5 ${Math.round(info.air.pm25)} µg/m³` },
+      `${t("air")}: ${t("aqi" + level)}`, h("span", { class: "dot", style: `background:${AQI_LEVELS[level][1]}` })));
+  }
+  document.getElementById("info").replaceChildren(...parts.flatMap((p, i) => i ? [" · ", p] : [p]));
+}
+
+function render() {
+  hideTip();
+  for (const [id, key] of [["lang", "lang"], ["view", "view"], ["script", "script"]]) {
+    for (const b of document.querySelectorAll(`#${id} button`)) b.setAttribute("aria-pressed", String(b.dataset.v === state[key]));
+  }
+  for (const el of document.querySelectorAll("[data-t]")) el.textContent = t(el.dataset.t);
+  document.documentElement.lang = ru() ? "ru" : state.script === "cyr" ? "sr-Cyrl" : "sr-Latn";
+  document.getElementById("script").hidden = ru();
+  const notice = document.getElementById("notice");
+  // в русском режиме всегда объясняем, что переведено и кем; если перевода не хватает — говорим и об этом
+  notice.hidden = !ru();
+  notice.textContent = TRANSLATION_GAP === "none" ? t("noTranslations")
+    : TRANSLATION_GAP ? `${t("aiNote")} ${t("partial")}` : t("aiNote");
+  document.title = t("title");
+  document.getElementById("script").title = t("scriptHint");
+  document.getElementById("q").placeholder = t("search");
+  document.getElementById("updated").textContent =
+    `${t("updated")} ${timeFmt.format(new Date(DATA.generated))} · ${DATA.sources.length} ${t("outlets")}`;
+  renderInfo();
+  document.getElementById("main").replaceChildren(...(state.view === "feed" ? renderFeed() : renderSources()));
+  renderChips();
+}
+
+// ---------- wiring ----------
+for (const [id, key] of [["lang", "lang"], ["view", "view"], ["script", "script"]]) {
+  document.getElementById(id).addEventListener("click", e => {
+    const v = e.target.closest("button")?.dataset.v;
+    if (!v) return;
+    state[key] = v; store.set(key, v); render();
+  });
+}
+let qTimer;
+document.getElementById("q").addEventListener("input", e => {
+  clearTimeout(qTimer);
+  qTimer = setTimeout(() => { state.q = norm(e.target.value.trim()); state.feedLimit = FEED_PAGE; render(); }, 150);
+});
+
+// сколько новостей осталось без перевода (например, сборка шла без ключа)
+const TRANSLATION_GAP = (() => {
+  const items = DATA.sources.flatMap(s => s.items.filter(i => (i.lang || s.lang) !== "ru"));
+  const done = items.filter(i => i.ru).length;
+  return done === 0 ? "none" : done < items.length * 0.9 ? "partial" : null;
+})();
+
+render();
+</script>
+</body>
+</html>
