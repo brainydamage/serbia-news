@@ -103,6 +103,21 @@ python3 -m http.server 8765 -d site
 
 GitHub отключает расписание в репозиториях без коммитов дольше 60 дней — тогда достаточно нажать «Enable workflow» во вкладке Actions.
 
+## Статистика
+
+Счётчик [GoatCounter](https://www.goatcounter.com) без cookies, статистика — на https://vestomat.goatcounter.com.
+Скрипт `count.v5.js` подключён с хешем `integrity`: при переходе на новую версию хеш берётся
+со страницы https://www.goatcounter.com/help/countjs-versions. Просмотры GoatCounter считает сам, события шлёт `track()`
+в `template.html`:
+
+- `click/<раздел>/<издание>` — открыли новость (на телефоне — вторым касанием, первое раскрывает подводку);
+- `visit/ru|orig|lat|cyr` — на каком языке и алфавите открыли сайт, раз за визит;
+- `lang/…`, `script/…`, `view/…` — переключили язык, алфавит, вид;
+- `search` — начали искать (сам запрос не отправляется).
+
+С localhost GoatCounter ничего не отправляет. Свои визиты можно не считать: открыть
+`https://vestomat.rs/#toggle-goatcounter` в каждом своём браузере.
+
 ## Не вошло
 
 У Srpski telegraf и RT Balkan не нашлось рабочих RSS-лент.

@@ -292,6 +292,7 @@ footer p { margin: 0 0 10px; }
     <span data-t="credits3"></span> <a href="https://github.com/vas3k/infomate.club" target="_blank" rel="noopener">github.com/vas3k/infomate.club</a>
     (Apache 2.0). <span data-t="credits4"></span>
   </p>
+  <p><span data-t="stats"></span> <a href="https://www.goatcounter.com" target="_blank" rel="noopener">GoatCounter</a>.</p>
 </footer>
 
 <script>
@@ -340,6 +341,7 @@ const UI = {
   credits2: "– projekat zajednice",
   credits3: "Izvorni kod originala je otvoren:",
   credits4: "Ideja i koncept su njihovi – hvala autorima!",
+  stats: "Anonimna statistika poseta, bez kolačića i ličnih podataka:",
   updated: "ažurirano",
   din: "din",
   city: "Beograd",
@@ -379,6 +381,7 @@ const UI_RU = {
   credits2: "— проекта сообщества",
   credits3: "Исходный код оригинала открыт:",
   credits4: "Идея и концепция — их, спасибо авторам!",
+  stats: "Анонимная статистика посещений, без cookies и личных данных:",
   updated: "обновлено",
   din: "дин",
   city: "Белград",
@@ -549,7 +552,7 @@ function renderItem(item, src, { showSource = false } = {}) {
   const summary = summaryOf(item, src);
   const li = h("li", { class: "item" + (state.read.has(item.url) ? " read" : ""), lang: v.lang });
 
-  const opened = () => { markRead(item.url); li.classList.add("read"); hideTip(); };
+  const opened = () => { markRead(item.url); li.classList.add("read"); hideTip(); track(`click/${src.section}/${src.name}`); };
   const onclick = e => {
     // без мыши наводить нечем: первое касание показывает подводку, второе открывает статью
     if (!HOVER && summary.length && !state.open.has(item.url)) {
@@ -562,7 +565,8 @@ function renderItem(item, src, { showSource = false } = {}) {
     opened();
   };
 
-  const head = h("a", { class: "head" + (fresh ? " fresh" : ""), href: item.url, target: "_blank", rel: "noopener", onclick, onauxclick: opened },
+  const head = h("a", { class: "head" + (fresh ? " fresh" : ""), href: item.url, target: "_blank", rel: "noopener", onclick,
+    onauxclick: e => { if (e.button === 1) opened(); } },  // только колёсико: правая кнопка — это меню, а не открытие
     showSource ? h("span", { class: "src" }, h("span", { class: "dot", style: `background:var(--c-${src.section})` }), src.name) : null,
     script(v.title, v.lang),
     item.via ? h("span", { class: "via" }, "— " + item.via) : null,
@@ -797,11 +801,21 @@ function render() {
   renderChips();
 }
 
+// ---------- статистика ----------
+// GoatCounter: без cookies, считает просмотры страницы сам. Здесь — события: что кликают и как читают.
+// Скрипт грузится асинхронно и может быть заблокирован — тогда события просто теряются
+function track(path) {
+  window.goatcounter?.count?.({ path, event: true });
+}
+// на каком языке и алфавите открывают сайт (с учётом сохранённого выбора) — один раз за визит
+addEventListener("load", () => track(`visit/${ru() ? "ru" : state.script}`));
+
 // ---------- wiring ----------
 for (const [id, key] of [["lang", "lang"], ["view", "view"], ["script", "script"]]) {
   document.getElementById(id).addEventListener("click", e => {
     const v = e.target.closest("button")?.dataset.v;
     if (!v) return;
+    if (v !== state[key]) track(`${key}/${v}`);
     state[key] = v; store.set(key, v); render();
   });
 }
@@ -813,6 +827,7 @@ function search(delay) {
   qTimer = setTimeout(() => { state.q = norm(qInput.value.trim()); state.feedLimit = FEED_PAGE; render(); }, delay);
 }
 qInput.addEventListener("input", () => search(150));
+qInput.addEventListener("input", () => track("search"), { once: true });  // сам запрос не отправляем
 qClear.addEventListener("click", () => { qInput.value = ""; search(0); qInput.focus(); });
 // Esc тоже очищает поиск
 qInput.addEventListener("keydown", e => { if (e.key === "Escape" && qInput.value) { qInput.value = ""; search(0); } });
@@ -826,5 +841,7 @@ const TRANSLATION_GAP = (() => {
 
 render();
 </script>
+<script data-goatcounter="https://vestomat.goatcounter.com/count" async src="https://gc.zgo.at/count.v5.js"
+        integrity="sha384-atnOLvQb9t+jTSipvd75X2yginT4PjVbqDdlJAmxMm+wYElFmeR6EmLP5bYeoRVQ" crossorigin="anonymous"></script>
 </body>
 </html>
