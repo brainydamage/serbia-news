@@ -193,23 +193,24 @@ footer p { margin: 0 0 10px; }
 }
 @media (max-width: 640px) {
   header { position: static; }  /* на телефоне шапка с кнопками заняла бы четверть экрана */
-  /* шапка сеткой: название и язык в первой строке (язык не прыгает, когда алфавит прячется),
-     вид на всю ширину, ниже поиск и алфавит. Кнопки высотой ~40px — под палец */
-  .bar { position: relative; display: grid; grid-template-columns: 1fr auto; gap: 10px 8px; padding: 8px 16px 12px; }
+  /* шапка сеткой: название; язык и алфавит одной строкой (язык слева, поэтому не прыгает, когда алфавит
+     прячется в русском режиме); вид и поиск — каждый на всю ширину. Кнопки высотой ~40px — под палец */
+  .bar { display: grid; grid-template-columns: auto 1fr; gap: 10px 8px; padding: 8px 16px 12px; }
   .controls, .controls-row { display: contents; }
-  .brand { grid-row: 1; grid-column: 1 / -1; flex-wrap: wrap; column-gap: 10px; row-gap: 0; margin: 0; min-width: 0; padding-right: 110px; }
+  /* «обновлено…» всегда второй строкой: по-русски оно не влезает рядом с названием, по-сербски влезает —
+     без этого шапка меняла высоту, и кнопки под ней прыгали при смене языка */
+  .brand { grid-row: 1; grid-column: 1 / -1; flex-direction: column; align-items: flex-start; gap: 0; margin: 0; min-width: 0; }
   .brand h1 { font-size: 21px; }
   .brand .flag { width: 20px; height: 14px; margin-right: 8px; }
   .updated { font-size: 12px; }
-  /* вне сетки: ширина кнопок алфавита под ним не должна его раздувать */
-  #lang { position: absolute; top: 8px; right: 16px; }
+  #lang { grid-row: 2; grid-column: 1; }
   #lang .full { display: none; }
   #lang .short { display: inline; }
-  #view { grid-row: 2; grid-column: 1 / -1; }
+  #script { grid-row: 2; grid-column: 2; }
+  #script button { flex: 1; }
+  #view { grid-row: 3; grid-column: 1 / -1; }
   #view button { flex: 1; }
-  .search-box { grid-row: 3; grid-column: 1; min-width: 0; }
-  #script { grid-row: 3; grid-column: 2; }
-  #script[hidden] ~ .controls-row .search-box { grid-column: 1 / -1; }
+  .search-box { grid-row: 4; grid-column: 1 / -1; min-width: 0; }
   .seg button, #view button { width: auto; padding: 8px 14px; font-size: 15px; }
   /* 16px — меньше iPhone приближает страницу при нажатии на поле */
   .search { width: 100%; height: 100%; font-size: 16px; }
