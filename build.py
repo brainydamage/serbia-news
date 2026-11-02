@@ -300,6 +300,8 @@ def collect(source: dict, section: dict, previous: dict, skip: set[str]) -> dict
         # «exclude» в sources.json — куски адресов разделов, которые не нужны: шоу-бизнес, реалити, анонсы эфиров
         exclude = source.get("exclude", [])
         items = [i for i in items if not any(part in i["url"] for part in exclude)]
+        # ссылка из чужой ленты попадает в href: «javascript:…» выполнился бы на нашей странице по клику
+        items = [i for i in items if i["url"].startswith(("https://", "http://"))]
         if "news.google.com" in source["feed"]:
             items = tidy_google_news(items)
             if "site:" in source["feed"]:
