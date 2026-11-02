@@ -95,6 +95,12 @@ python3 -m http.server 8765 -d site
    имя `ANTHROPIC_API_KEY`, значение — ваш ключ.
 3. Actions → build → Run workflow (или просто пуш в `main`).
 
+Сайт живёт на https://vestomat.rs. Домен куплен у Loopia (DNS-пакет LoopiaDNS), в DNS-редакторе Loopia:
+для `@` — четыре записи A `185.199.108–111.153` и четыре AAAA `2606:50c0:8000–8003::153`,
+для `www` — CNAME `brainydamage.github.io.`, плюс TXT `_github-pages-challenge-brainydamage` для подтверждения
+домена в GitHub (Settings → Pages аккаунта). В настройках Pages репозитория указан домен `vestomat.rs`
+и включён Enforce HTTPS. Домен оплачен до 02.11.2027, Loopia продлевает его сама.
+
 GitHub отключает расписание в репозиториях без коммитов дольше 60 дней — тогда достаточно нажать «Enable workflow» во вкладке Actions.
 
 ## Не вошло
