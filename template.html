@@ -93,6 +93,16 @@ header {
   border-radius: 20px; padding: 6px 14px; font-size: 14px; width: 200px;
 }
 .search:focus { outline: none; border-color: var(--text); }
+/* свой крестик вместо встроенного: у Firefox его нет, а у Chrome и Safari он у каждого свой */
+.search-box { position: relative; display: inline-flex; }
+.search { padding-right: 34px; }
+.search::-webkit-search-cancel-button { -webkit-appearance: none; }
+.search-clear {
+  position: absolute; right: 7px; top: 50%; transform: translateY(-50%);
+  width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; cursor: pointer;
+  background: var(--soft); color: var(--muted); font-size: 15px; line-height: 20px;
+}
+.search-clear:hover { background: var(--tip-bg); color: var(--tip-text); }
 
 /* ряд разделов под шапкой: в «По медиям» — оглавление, в «Все вести» — фильтр. Свой sticky, чтобы на телефоне
    оставался на экране, даже когда шапка с кнопками уезжает вверх */
@@ -192,7 +202,7 @@ footer p { margin: 0 0 10px; }
   .feed { padding: 0 16px; }
   .notice { width: calc(100% - 32px); }
   .topline { padding: 8px 16px 0; text-align: left; }
-  .search { width: 100%; }
+  .search, .search-box { width: 100%; }
   .controls { width: 100%; }
   .time { width: 40px; font-size: 11px; }
   .details { margin-left: 0; }
@@ -225,7 +235,10 @@ footer p { margin: 0 0 10px; }
         <button data-v="sources" data-t="bySource"></button>
         <button data-v="feed" data-t="feed"></button>
       </div>
-      <input class="search" id="q" type="search">
+      <span class="search-box">
+        <input class="search" id="q" type="search">
+        <button class="search-clear" id="q-clear" type="button" hidden>×</button>
+      </span>
     </div>
   </div>
 </header>
@@ -281,6 +294,7 @@ const UI = {
   orig: "Original",
   scriptHint: "Srpski tekst: kao u originalu, latinicom ili ćirilicom",
   search: "Pretraga naslova",
+  clear: "Obriši pretragu",
   footer: "Zadržite miš na naslovu da vidite kratak opis, a klik otvara članak (na telefonu: prvi dodir prikazuje opis, drugi otvara članak). Podebljane su vesti iz poslednja tri sata, a sive su one koje ste već pročitali. Podela medija po taborima je okvirna – spisak i kategorije se podešavaju u fajlu",
   credits1: "Napravljeno po uzoru na",
   credits2: "– projekat zajednice",
@@ -318,6 +332,7 @@ const UI_RU = {
   all: "Все",
   feed: "Общая лента",
   search: "Поиск по заголовкам",
+  clear: "Очистить поиск",
   footer: "Наведите мышь на заголовок, чтобы увидеть подводку, а клик открывает статью (на телефоне: первое касание показывает подводку, второе открывает статью). Жирным отмечены новости за последние три часа, серым — уже прочитанные. Деление изданий по лагерям условное — список и категории задаются в файле",
   credits1: "Сделано по мотивам",
   credits2: "— проекта сообщества",
@@ -722,6 +737,7 @@ function render() {
   document.title = t("title");
   document.getElementById("script").title = t("scriptHint");
   document.getElementById("q").placeholder = t("search");
+  document.getElementById("q-clear").title = document.getElementById("q-clear").ariaLabel = t("clear");
   document.getElementById("updated").textContent =
     `${t("updated")} ${timeFmt.format(new Date(DATA.generated))} · ${DATA.sources.length} ${t("outlets")}`;
   renderInfo();
@@ -738,10 +754,16 @@ for (const [id, key] of [["lang", "lang"], ["view", "view"], ["script", "script"
   });
 }
 let qTimer;
-document.getElementById("q").addEventListener("input", e => {
+const qInput = document.getElementById("q"), qClear = document.getElementById("q-clear");
+function search(delay) {
+  qClear.hidden = !qInput.value;
   clearTimeout(qTimer);
-  qTimer = setTimeout(() => { state.q = norm(e.target.value.trim()); state.feedLimit = FEED_PAGE; render(); }, 150);
-});
+  qTimer = setTimeout(() => { state.q = norm(qInput.value.trim()); state.feedLimit = FEED_PAGE; render(); }, delay);
+}
+qInput.addEventListener("input", () => search(150));
+qClear.addEventListener("click", () => { qInput.value = ""; search(0); qInput.focus(); });
+// Esc тоже очищает поиск
+qInput.addEventListener("keydown", e => { if (e.key === "Escape" && qInput.value) { qInput.value = ""; search(0); } });
 
 // сколько новостей осталось без перевода (например, сборка шла без ключа)
 const TRANSLATION_GAP = (() => {
