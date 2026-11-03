@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="sr-Latn">
+<html lang="__HTML_LANG__">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Srbija: vesti</title>
+<!--__HEAD__-->
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='11' fill='%23c6363c'/><rect y='11' width='32' height='10' fill='%230c4076'/><rect y='21' width='32' height='11' fill='%23eee'/></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -253,7 +253,7 @@ footer a { color: var(--text); }
 <header>
   <div class="bar">
     <div class="brand">
-      <h1><span class="flag"></span><span data-t="title"></span></h1>
+      <h1><span class="flag"></span><span data-t="title">__H1__</span></h1>
       <span class="updated" id="updated"></span>
     </div>
     <div class="controls">
@@ -284,7 +284,8 @@ footer a { color: var(--text); }
 </header>
 <nav class="chips" id="chips"></nav>
 <div class="notice" id="notice" hidden></div>
-<main id="main"></main>
+<!-- заголовки уже в HTML (вписывает build.py) — для поисковиков и ботов, которые не выполняют JS; скрипт сразу перерисует -->
+<main id="main"><!--__PRERENDER__--></main>
 <!-- на телефоне разделы не липнут к верху: кнопка возвращает к ним из глубины страницы -->
 <button class="to-top" id="to-top" type="button" hidden>↑</button>
 <footer>
@@ -295,6 +296,8 @@ footer a { color: var(--text); }
 
 <script>
 const DATA = /*__DATA__*/null;
+// язык страницы: / — сербская, /ru/ — русская (у поисковиков у каждой свой адрес)
+const PAGE_LANG = /*__PAGE_LANG__*/"sr";
 
 const FRESH_MS = 3 * 3600e3;
 const CARD_LIMIT = 8;
@@ -307,7 +310,7 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
 };
 const state = {
-  lang: store.get("lang", "sr"),
+  lang: PAGE_LANG === "ru" ? "ru" : store.get("lang", "sr"),
   view: store.get("view", "sources"),
   script: store.get("script", "orig"),
   // храним скрытые разделы, а не видимые: новые разделы из sources.json сразу показываются
@@ -318,6 +321,8 @@ const state = {
   expandedCards: new Set(),
   feedLimit: FEED_PAGE,
 };
+// пришли по ссылке на /ru/ — запоминаем русский, чтобы и главная потом открывалась по-русски
+if (PAGE_LANG === "ru") store.set("lang", "ru");
 function markRead(url) {
   state.read.add(url);
   store.set("read", [...state.read].slice(-3000));
@@ -326,6 +331,7 @@ function markRead(url) {
 // ---------- interface text (latinica; ćirilica se dobija transliteracijom) ----------
 const UI = {
   title: "Srbija: vesti",
+  pageTitle: "Srbija: vesti iz svih medija — Vestomat",
   bySource: "Po medijima",
   all: "Sve",
   feed: "Sve vesti",
@@ -367,6 +373,7 @@ const UI = {
 };
 const UI_RU = {
   title: "Сербия: новости",
+  pageTitle: "Новости Сербии на русском — Vestomat",
   bySource: "По изданиям",
   all: "Все",
   feed: "Общая лента",
@@ -441,7 +448,7 @@ function toLatin(s) {
   });
 }
 // слова, которые в сербской кириллице пишутся латиницей (бренды, клавиши, имя файла)
-const KEEP_LATIN = new Set(["Ctrl", "sources", "json", "Google", "News", "RSS", "EN", "RU", "BIRN", "RFE", "RL", "Lat"]);
+const KEEP_LATIN = new Set(["Ctrl", "sources", "json", "Google", "News", "RSS", "EN", "RU", "BIRN", "RFE", "RL", "Lat", "Vestomat"]);
 function toCyrillic(s) {
   return s.replace(/[A-Za-zČĆŽŠĐčćžšđ]+/g, w => {
     if (KEEP_LATIN.has(w)) return w;
@@ -785,7 +792,10 @@ function render() {
   notice.hidden = !ru();
   notice.textContent = TRANSLATION_GAP === "none" ? t("noTranslations")
     : TRANSLATION_GAP ? `${t("aiNote")} ${t("partial")}` : t("aiNote");
-  document.title = t("title");
+  document.title = t("pageTitle");
+  // адрес следует за языком: ссылка, которой делятся, открывается на том же языке
+  const path = ru() ? "/ru/" : "/";
+  if (location.pathname !== path) history.replaceState(null, "", path + location.search + location.hash);
   document.getElementById("script").title = t("scriptHint");
   document.getElementById("q").placeholder = t("search");
   document.getElementById("q-clear").title = document.getElementById("q-clear").ariaLabel = t("clear");

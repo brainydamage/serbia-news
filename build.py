@@ -12,6 +12,7 @@
 import html
 import json
 import re
+import shutil
 import sys
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -29,6 +30,32 @@ SOURCES = ROOT / "sources.json"
 TEMPLATE = ROOT / "template.html"
 OUT_DIR = ROOT / "site"
 DATA_FILE = OUT_DIR / "data.json"
+STATIC_DIR = ROOT / "static"  # картинка-превью, robots.txt, файлы подтверждения для поисковиков
+
+SITE_URL = "https://vestomat.rs"
+CARD_LIMIT = 8  # сколько новостей издания видно сразу — как в template.html
+# у каждого языка свой адрес: так поисковики находят и сербскую, и русскую версию
+PAGES = {
+    "sr": {
+        "path": "",
+        "html_lang": "sr-Latn",
+        "locale": "sr_RS",
+        "h1": "Srbija: vesti",
+        "title": "Srbija: vesti iz svih medija — Vestomat",
+        "description": "Vesti iz Srbije na jednom mestu: nezavisni mediji, mediji bliski SNS-u, državni i regionalni "
+                       "mediji, strani mediji o Srbiji. Naslovi svih izvora, ažurirano tokom celog dana.",
+    },
+    "ru": {
+        "path": "ru/",
+        "html_lang": "ru",
+        "locale": "ru_RU",
+        "h1": "Сербия: новости",
+        "title": "Новости Сербии на русском — Vestomat",
+        "description": "Новости Сербии на русском языке в одном месте: независимые СМИ, издания, близкие к SNS, "
+                       "государственные и региональные медиа, зарубежная пресса о Сербии. Заголовки переводит ИИ, "
+                       "лента обновляется в течение всего дня.",
+    },
+}
 
 ITEMS_PER_SOURCE = 30
 SUMMARY_CHARS = 420
@@ -337,6 +364,96 @@ def collect(source: dict, section: dict, previous: dict, skip: set[str]) -> dict
     return result
 
 
+def head_tags(lang: str) -> str:
+    """<title>, описание, превью для соцсетей и мессенджеров, ссылки между языковыми версиями."""
+    page = PAGES[lang]
+    url = SITE_URL + "/" + page["path"]
+    e = lambda text: html.escape(text, quote=True)
+    tags = [
+        f"<title>{e(page['title'])}</title>",
+        f'<meta name="description" content="{e(page["description"])}">',
+        f'<link rel="canonical" href="{url}">',
+        *(f'<link rel="alternate" hreflang="{l}" href="{SITE_URL}/{p["path"]}">' for l, p in PAGES.items()),
+        f'<link rel="alternate" hreflang="x-default" href="{SITE_URL}/">',
+        '<meta property="og:type" content="website">',
+        '<meta property="og:site_name" content="Vestomat">',
+        f'<meta property="og:title" content="{e(page["title"])}">',
+        f'<meta property="og:description" content="{e(page["description"])}">',
+        f'<meta property="og:url" content="{url}">',
+        f'<meta property="og:locale" content="{page["locale"]}">',
+        f'<meta property="og:image" content="{SITE_URL}/og.png">',
+        '<meta property="og:image:width" content="1200">',
+        '<meta property="og:image:height" content="630">',
+        '<meta name="twitter:card" content="summary_large_image">',
+        '<script type="application/ld+json">' + json.dumps({
+            "@context": "https://schema.org", "@type": "WebSite", "name": "Vestomat",
+            "url": url, "inLanguage": lang, "description": page["description"],
+        }, ensure_ascii=False) + "</script>",
+    ]
+    return "\n".join(tags)
+
+
+def prerender(data: dict, lang: str) -> str:
+    """Те же разделы и колонки, что рисует скрипт, но готовым HTML: заголовки видят и роботы без JS.
+    Разметка повторяет template.html, чтобы до запуска скрипта страница выглядела так же."""
+    e = html.escape
+    ru = lang == "ru"
+    out = []
+    for sec in data["sections"]:
+        cards = []
+        for src in (s for s in data["sources"] if s["section"] == sec["id"] and s["items"]):
+            rows = []
+            for item in src["items"][:CARD_LIMIT]:
+                title = item["ru"]["title"] if ru and item.get("ru") else item["title"]
+                rows.append(f'<li class="item"><div class="row"><span class="time"></span>'
+                            f'<a class="head" href="{e(item["url"])}" target="_blank" rel="noopener">{e(title)}</a></div></li>')
+            cards.append(
+                f'<article class="card"><div class="card-head">'
+                f'<span class="avatar" style="background:var(--c-{sec["id"]})">{e(src["name"][:1])}</span>'
+                f'<div><a href="{e(src["site"])}" target="_blank" rel="noopener">{e(src["name"])}</a></div></div>'
+                f'<ul class="items">{"".join(rows)}</ul></article>'
+            )
+        if not cards:
+            continue
+        title = (sec.get("title_ru") if ru else None) or sec["title"]
+        note = (sec.get("note_ru") if ru else None) or sec.get("note", "")
+        out.append(
+            f'<section class="section" data-id="{e(sec["id"])}"><div class="section-head">'
+            f'<h2><span class="dot" style="background:var(--c-{sec["id"]})"></span>{e(title)}</h2><p>{e(note)}</p></div>'
+            f'<div class="grid">{"".join(cards)}</div></section>'
+        )
+    return "\n".join(out)
+
+
+def write_pages(data: dict) -> None:
+    """index.html и ru/index.html, sitemap.xml и статика."""
+    payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
+    template = TEMPLATE.read_text("utf-8")
+    for lang, page in PAGES.items():
+        out = OUT_DIR / page["path"] / "index.html"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        # данные подставляем последними: в заголовках новостей тоже может встретиться «__HEAD__»
+        text = (template.replace("__HTML_LANG__", page["html_lang"])
+                .replace("<!--__HEAD__-->", head_tags(lang))
+                .replace("__H1__", page["h1"])
+                .replace("<!--__PRERENDER__-->", prerender(data, lang))
+                .replace('/*__PAGE_LANG__*/"sr"', json.dumps(lang))
+                .replace("/*__DATA__*/null", payload))
+        out.write_text(text, "utf-8")
+
+    lastmod = data["generated"]
+    links = "".join(f'<xhtml:link rel="alternate" hreflang="{l}" href="{SITE_URL}/{p["path"]}"/>' for l, p in PAGES.items())
+    urls = "".join(f"<url><loc>{SITE_URL}/{p['path']}</loc><lastmod>{lastmod}</lastmod><changefreq>hourly</changefreq>{links}</url>"
+                   for p in PAGES.values())
+    (OUT_DIR / "sitemap.xml").write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">'
+        f"{urls}</urlset>\n", "utf-8")
+
+    if STATIC_DIR.is_dir():
+        shutil.copytree(STATIC_DIR, OUT_DIR, dirs_exist_ok=True)
+
+
 def main() -> int:
     config = json.loads(SOURCES.read_text("utf-8"))
     previous = load_previous()
@@ -360,12 +477,8 @@ def main() -> int:
     }
 
     OUT_DIR.mkdir(exist_ok=True)
-    payload = json.dumps(data, ensure_ascii=False)
-    DATA_FILE.write_text(payload, "utf-8")
-    page = TEMPLATE.read_text("utf-8").replace(
-        "/*__DATA__*/null", payload.replace("</", "<\\/")
-    )
-    (OUT_DIR / "index.html").write_text(page, "utf-8")
+    DATA_FILE.write_text(json.dumps(data, ensure_ascii=False), "utf-8")
+    write_pages(data)
 
     ok = sum(1 for r in results if not r["error"] and r["feed"] not in skip)
     print(f"\nГотово: {ok}/{len(results) - len(skip)} лент, {OUT_DIR / 'index.html'}", file=sys.stderr)
@@ -373,4 +486,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if "--render-only" in sys.argv:  # пересобрать страницы из site/data.json, без лент и перевода — для правок шаблона
+        write_pages(json.loads(DATA_FILE.read_text("utf-8")))
+        sys.exit(0)
     sys.exit(main())
