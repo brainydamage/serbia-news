@@ -2,9 +2,9 @@
   "sections": [
     {
       "id": "independent",
-      "title": "Nezavisni",
-      "title_ru": "Независимые",
-      "note": "Kritični prema Vučiću i SNS-u", "note_ru": "Критичны к Вучичу и SNS",
+      "title": "Kritični prema SNS-u",
+      "title_ru": "Критичные к SNS",
+      "note": "Televizije, dnevni list, nedeljnici i novinska agencija", "note_ru": "Телеканалы, ежедневная газета, еженедельники и информагентство",
       "sources": [
         {"name": "N1", "site": "https://n1info.rs", "feed": "https://n1info.rs/feed/", "exclude": ["/english/", "/najave-emisija/"]},
         {"name": "Nova", "site": "https://nova.rs", "feed": "https://nova.rs/feed/", "exclude": ["/emisije/", "/zabava/"]},
@@ -79,7 +79,7 @@
       "id": "progov",
       "title": "Bliski SNS-u",
       "title_ru": "Близкие к SNS",
-      "note": "Podržavaju Vučića i SNS", "note_ru": "Поддерживают Вучича и SNS",
+      "note": "Tabloidi, TV Pink, portal B92 i Večernje novosti", "note_ru": "Таблоиды, телеканал Pink, портал B92 и «Вечерние новости»",
       "sources": [
         {"name": "Informer", "site": "https://www.informer.rs", "feed": "https://www.informer.rs/rss/drustvo/srbija"},
         {"name": "Novosti", "site": "https://www.novosti.rs", "feed": "https://www.novosti.rs/rss/vesti"},

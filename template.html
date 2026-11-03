@@ -75,6 +75,14 @@ header {
 .brand .flag { display: inline-block; width: 22px; height: 15px; border-radius: 3px; vertical-align: 1px;
   background: linear-gradient(#c6363c 0 34%, #0c4076 34% 66%, #eee 66%); margin-right: 10px; }
 .updated { color: var(--muted); font-size: 13px; }
+/* вышла новая сборка, а страница открыта давно: плашка сверху и ссылка рядом с «обновлено» */
+.refresh {
+  position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 20;
+  border: 0; border-radius: 999px; padding: 9px 18px; cursor: pointer; white-space: nowrap;
+  background: var(--tip-bg); color: var(--tip-text); font: inherit; font-size: 14px; font-weight: 700;
+  box-shadow: 0 4px 16px rgb(0 0 0 / .25);
+}
+.refresh-link { border: 0; background: none; padding: 0; color: var(--text); font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; }
 .topline { max-width: 1300px; margin: 0 auto; padding: 8px 20px 0; color: var(--muted); font-size: 13px; text-align: right; }
 .topline:empty { display: none; }
 #info > span { white-space: nowrap; }
@@ -189,11 +197,7 @@ dialog.report {
 dialog.report::backdrop { background: rgb(0 0 0 / .35); }
 .report h2 { margin: 0 0 12px; font-size: 20px; }
 .report .orig { margin: 0 0 4px; color: var(--muted); font-size: 13px; }
-.report .tr { margin: 0 0 14px; font-weight: 700; }
-.report textarea {
-  width: 100%; padding: 10px 12px; border: 1px solid var(--soft); border-radius: 12px; resize: vertical;
-  background: var(--bg); color: var(--text); font: inherit; font-size: 16px;
-}
+.report .tr { margin: 0; font-weight: 700; }
 .report .trap { position: absolute; left: -9999px; }
 .report .status { margin: 12px 0 0; color: var(--muted); }
 .report .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
@@ -319,6 +323,7 @@ footer a { color: var(--text); }
 <main id="main"><!--__PRERENDER__--></main>
 <!-- на телефоне разделы не липнут к верху: кнопка возвращает к ним из глубины страницы -->
 <button class="to-top" id="to-top" type="button" hidden>↑</button>
+<button class="refresh" id="refresh" type="button" hidden></button>
 <footer>
   <p><span data-t="credits1"></span> <a href="https://infomate.club" target="_blank" rel="noopener">infomate.club</a>
     <span data-t="credits2"></span> <a href="https://vas3k.club" target="_blank" rel="noopener">Vas3k.Club</a><span data-t="credits3"></span></p>
@@ -377,6 +382,8 @@ const UI = {
   credits3: " — hvala autorima na ideji!",
   stats: "Anonimna statistika bez kolačića:",
   updated: "ažurirano",
+  freshNews: "Ima novih vesti",
+  reload: "osveži",
   din: "din",
   city: "Beograd",
   air: "vazduh",
@@ -417,6 +424,8 @@ const UI_RU = {
   credits3: " — спасибо авторам за идею!",
   stats: "Анонимная статистика без cookies:",
   updated: "обновлено",
+  freshNews: "Есть свежие новости",
+  reload: "обновить",
   din: "дин",
   city: "Белград",
   air: "воздух",
@@ -447,7 +456,6 @@ const UI_RU = {
   // жалоба на перевод — только в русском режиме, поэтому в UI её нет
   report: "Плохой перевод?",
   reportTitle: "Плохой перевод",
-  reportHint: "Что не так? Как было бы правильно? (необязательно)",
   send: "Отправить",
   sending: "Отправляю…",
   cancel: "Отмена",
@@ -521,7 +529,7 @@ function h(tag, attrs = {}, ...children) {
   for (const c of children.flat()) if (c !== null && c !== undefined && c !== false) el.append(c);
   return el;
 }
-const now = Date.now();
+let now = Date.now();  // пересчитывается раз в минуту, см. «свежая сборка»
 const fmt = opts => new Intl.DateTimeFormat(locale(), { timeZone: "Europe/Belgrade", ...opts });
 const timeFmt = { format: d => fmt({ hour: "2-digit", minute: "2-digit" }).format(d) };
 const dayFmt = { format: d => fmt({ day: "numeric", month: "short" }).format(d).replace(/\.$/, "") };
@@ -601,7 +609,6 @@ reportDlg.addEventListener("click", e => { if (e.target === reportDlg) reportDlg
 
 function openReport(item) {
   hideTip();
-  const comment = h("textarea", { rows: 3, maxlength: 500, placeholder: t("reportHint") });
   const trap = h("input", { class: "trap", name: "website", tabindex: "-1", autocomplete: "off", "aria-hidden": "true" });
   const status = h("p", { class: "status", hidden: true });
   const send = h("button", { class: "primary", type: "submit" }, t("send"));
@@ -615,11 +622,11 @@ function openReport(item) {
       try {
         const r = await fetch(REPORT_URL, {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: item.url, comment: comment.value, website: trap.value }),
+          body: JSON.stringify({ url: item.url, website: trap.value }),
         });
         if (!r.ok) throw r.status;
         track("report");
-        comment.hidden = true; send.hidden = true; cancel.textContent = t("close");
+        send.hidden = true; cancel.textContent = t("close");
         done(t("reportThanks"));
       } catch (code) {
         send.disabled = false;
@@ -631,12 +638,12 @@ function openReport(item) {
     h("h2", {}, t("reportTitle")),
     h("p", { class: "orig", lang: "sr" }, item.title),
     h("p", { class: "tr" }, item.ru.title),
-    comment, trap, status,
+    trap, status,
     h("div", { class: "buttons" }, cancel, send),
   );
   reportDlg.replaceChildren(form);
   reportDlg.showModal();
-  if (HOVER) comment.focus();
+  if (HOVER) send.focus();
 }
 
 function renderItem(item, src, { showSource = false } = {}) {
@@ -672,7 +679,7 @@ function renderItem(item, src, { showSource = false } = {}) {
 
   const reportable = REPORT_URL && v.translated;
   li.append(h("div", { class: "row" },
-    h("span", { class: "time", title: item.date ? new Date(item.date).toLocaleString(locale()) : "" }, shortTime(item.date)),
+    h("span", { class: "time", "data-time": item.date || "", title: item.date ? new Date(item.date).toLocaleString(locale()) : "" }, shortTime(item.date)),
     head,
     reportable ? h("button", { class: "report-flag", type: "button", title: t("report"), "aria-label": t("report"), onclick: () => openReport(item) }, "⚑") : null,
   ));
@@ -706,7 +713,8 @@ function renderSources() {
           h("div", {},
             h("a", { href: src.site, target: "_blank", rel: "noopener" }, src.name),
             h("div", { class: "card-meta" },
-              [label(src, "note"), t("lastPost") + " " + ago(latest(src))].filter(Boolean).join(" · "),
+              [label(src, "note"), t("lastPost")].filter(Boolean).join(" · ") + " ",
+              h("span", { "data-ago": latest(src) || "" }, ago(latest(src))),
               src.error ? h("span", { class: "warn", title: src.error }, " · " + t(src.stale ? "stale" : "down")) : null,
             ),
           ),
@@ -895,13 +903,45 @@ function render() {
   document.getElementById("q").placeholder = t("search");
   document.getElementById("q-clear").title = document.getElementById("q-clear").ariaLabel = t("clear");
   document.getElementById("to-top").title = document.getElementById("to-top").ariaLabel = t("toTop");
-  document.getElementById("updated").textContent =
-    `${t("updated")} ${timeFmt.format(new Date(DATA.generated))} · ${DATA.sources.length} ${t("outlets")}`;
+  renderUpdated();
   renderInfo();
   document.querySelector("footer").classList.toggle("narrow", state.view === "feed");
   document.getElementById("main").replaceChildren(...(state.view === "feed" ? renderFeed() : renderSources()));
   renderChips();
 }
+
+// ---------- свежая сборка ----------
+// сборка выходит раз в 15 минут, а открытая страница сама не меняется: проверяем крошечный version.json
+// и предлагаем обновиться — перерисовывать новости под читателем не стоит, он может быть посреди ленты
+let newer = false;
+const refreshBtn = document.getElementById("refresh");
+refreshBtn.addEventListener("click", () => location.reload());
+function renderUpdated() {
+  document.getElementById("updated").replaceChildren(
+    `${t("updated")} ${timeFmt.format(new Date(DATA.generated))} · ${DATA.sources.length} ${t("outlets")}`,
+    newer ? " · " : "", newer ? h("button", { class: "refresh-link", type: "button", onclick: () => location.reload() }, t("reload")) : "");
+  refreshBtn.textContent = `↻ ${t("freshNews")} · ${t("reload")}`;
+}
+async function checkVersion() {
+  if (newer || document.hidden) return;
+  try {
+    const r = await fetch(`/version.json?t=${Date.now()}`, { cache: "no-store" });
+    if (new Date((await r.json()).generated) <= new Date(DATA.generated)) return;
+  } catch {
+    return;
+  }
+  newer = true;
+  refreshBtn.hidden = false;
+  renderUpdated();
+}
+setInterval(checkVersion, 5 * 60e3);
+document.addEventListener("visibilitychange", checkVersion);
+// «12 мин» и «последний пост 2 ч назад» иначе так и застынут с момента открытия
+setInterval(() => {
+  now = Date.now();
+  for (const el of document.querySelectorAll("[data-time]")) el.textContent = shortTime(el.dataset.time);
+  for (const el of document.querySelectorAll("[data-ago]")) el.textContent = ago(el.dataset.ago);
+}, 60e3);
 
 // ---------- статистика ----------
 // GoatCounter: без cookies, считает просмотры страницы сам. Здесь — события: что кликают и как читают.

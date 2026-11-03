@@ -42,7 +42,7 @@ PAGES = {
         "locale": "sr_RS",
         "h1": "Srbija: vesti",
         "title": "Srbija: vesti iz svih medija — Vestomat",
-        "description": "Vesti iz Srbije na jednom mestu: nezavisni mediji, mediji bliski SNS-u, državni i regionalni "
+        "description": "Vesti iz Srbije na jednom mestu: mediji kritični prema SNS-u i bliski SNS-u, državni i regionalni "
                        "mediji, strani mediji o Srbiji. Naslovi svih izvora, ažurirano tokom celog dana.",
     },
     "ru": {
@@ -51,7 +51,7 @@ PAGES = {
         "locale": "ru_RU",
         "h1": "Сербия: новости",
         "title": "Новости Сербии на русском — Vestomat",
-        "description": "Новости Сербии на русском языке в одном месте: независимые СМИ, издания, близкие к SNS, "
+        "description": "Новости Сербии на русском языке в одном месте: СМИ, критичные к SNS и близкие к нему, "
                        "государственные и региональные медиа, зарубежная пресса о Сербии. Заголовки переводит ИИ, "
                        "лента обновляется в течение всего дня.",
     },
@@ -252,11 +252,28 @@ def parse_trends(data: bytes) -> list[dict]:
 
 # ---------- шапка: курс, погода, воздух ----------
 
-# средний курс Народного банка Сербии (зеркало kurs.resenje.org), погода и качество воздуха — Open-Meteo; всё без ключей
+# средний курс Народного банка Сербии (зеркало kurs.resenje.org), погода и качество воздуха — Open-Meteo; всё без ключей.
+# Open-Meteo — расчёт модели: обложной дождь он, бывает, показывает как «пасмурно». Поэтому дождь, снег, туман и облачность
+# берём из наблюдений метеостанции аэропорта (METAR, обновляется раз в полчаса), а модель — запасной вариант
 RATE_URL = "https://kurs.resenje.org/api/v1/currencies/{}/rates/today"
 CITY = (44.82, 20.46)  # Белград
 WEATHER_URL = f"https://api.open-meteo.com/v1/forecast?latitude={CITY[0]}&longitude={CITY[1]}&current=temperature_2m,weather_code,is_day&timezone=Europe/Belgrade"
 AIR_URL = f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={CITY[0]}&longitude={CITY[1]}&current=european_aqi,pm2_5"
+METAR_URL = "https://aviationweather.gov/api/data/metar?ids=LYBE&format=json"  # аэропорт Никола Тесла
+METAR_MAX_AGE = 2 * 3600
+
+
+def observed_code() -> int | None:
+    """Погода по наблюдениям аэропорта в кодах WMO, как у Open-Meteo; None — сводки нет или она устарела."""
+    reports = json.loads(fetch(METAR_URL))
+    if not reports or datetime.now(timezone.utc).timestamp() - reports[0]["obsTime"] > METAR_MAX_AGE:
+        return None
+    # явления «поблизости» (VCSH, VCTS) — не над станцией, их пропускаем
+    weather = " ".join(w for w in (reports[0].get("wxString") or "").split() if not w.startswith("VC"))
+    for codes, wmo in (("TS", 95), ("SN SG", 71), ("RA DZ PL GR GS", 61), ("FG", 45)):
+        if any(code in weather for code in codes.split()):
+            return wmo
+    return {"OVC": 3, "OVX": 3, "BKN": 3, "SCT": 2, "FEW": 1}.get(reports[0].get("cover"), 0)
 
 
 def header_info() -> dict:
@@ -267,7 +284,12 @@ def header_info() -> dict:
 
     def weather():
         now = json.loads(fetch(WEATHER_URL))["current"]
-        return {"temp": now["temperature_2m"], "code": now["weather_code"], "day": now["is_day"]}
+        try:
+            code = observed_code()
+        except Exception as exc:  # noqa: BLE001 — тогда по модели
+            print(f"Шапка: METAR не получен — {type(exc).__name__}: {exc}"[:200], file=sys.stderr)
+            code = None
+        return {"temp": now["temperature_2m"], "code": now["weather_code"] if code is None else code, "day": now["is_day"]}
 
     def air():
         now = json.loads(fetch(AIR_URL))["current"]
@@ -429,10 +451,22 @@ def prerender(data: dict, lang: str) -> str:
     return "\n".join(out)
 
 
+def strip_comments(template: str) -> str:
+    """Комментарии в шаблоне — для разработки, на сайт их не выкладываем; метки вида __HEAD__ оставляем для подстановки."""
+    keep_marks = lambda m: m.group(0) if re.search(r"__[A-Z_]+__", m.group(0)) else ""
+    for comment in (r"<!--(?:(?!-->).)*-->", r"/\*(?:(?!\*/).)*\*/"):  # HTML; CSS и JS
+        template = re.sub(rf"^[ \t]*{comment}[ \t]*\n", keep_marks, template, flags=re.S | re.M)  # строка целиком
+        template = re.sub(rf"[ \t]*{comment}", keep_marks, template, flags=re.S)
+    template = re.sub(r"^[ \t]*//.*\n", "", template, flags=re.M)  # JS: строка целиком
+    return re.sub(r"[ \t]+// .*$", "", template, flags=re.M)  # JS: в конце строки (у адресов перед // нет пробела)
+
+
 def write_pages(data: dict) -> None:
     """index.html и ru/index.html, sitemap.xml и статика."""
     payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
-    template = TEMPLATE.read_text("utf-8")
+    template = strip_comments(TEMPLATE.read_text("utf-8"))
+    # по нему открытая страница узнаёт о новой сборке, не скачивая весь data.json
+    (OUT_DIR / "version.json").write_text(json.dumps({"generated": data["generated"]}), "utf-8")
     for lang, page in PAGES.items():
         out = OUT_DIR / page["path"] / "index.html"
         out.parent.mkdir(parents=True, exist_ok=True)
