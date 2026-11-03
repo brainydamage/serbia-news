@@ -104,6 +104,14 @@ python3 -m http.server 8765 -d site
 домена в GitHub (Settings → Pages аккаунта). В настройках Pages репозитория указан домен `vestomat.rs`
 и включён Enforce HTTPS. Домен оплачен до 02.11.2027, Loopia продлевает его сама.
 
+Расписание GitHub (`schedule` в workflow) у этого репозитория так ни разу и не сработало, поэтому сборку запускает
+[cron-job.org](https://cron-job.org) каждые 15 минут: POST на
+`https://api.github.com/repos/brainydamage/serbia-news/actions/workflows/build.yml/dispatches` с телом `{"ref":"main"}`
+и заголовками `Authorization: Bearer <токен>`, `Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2022-11-28`,
+`User-Agent`. Токен — fine-grained, только этот репозиторий, право Actions: Read and write. **У токена есть срок:**
+когда он истечёт, cron-job.org пришлёт письмо об ошибке (401) — выпустить новый токен и заменить его в задаче.
+`schedule` в workflow оставлен про запас; если он когда-нибудь заработает, лишний параллельный запуск отменит `concurrency`.
+
 GitHub отключает расписание в репозиториях без коммитов дольше 60 дней — тогда достаточно нажать «Enable workflow» во вкладке Actions.
 
 ## Поисковики и превью
