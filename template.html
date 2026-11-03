@@ -171,13 +171,13 @@ main { max-width: 1300px; margin: 0 auto; padding: 0 0 40px; }
 .tip .orig, .details .orig { font-size: 13px; opacity: .65; }
 
 /* жалоба на перевод: на компьютере флажок в конце строки при наведении, на телефоне — ссылка в подводке */
-.flag {
+.report-flag {
   flex: none; align-self: flex-start; border: 0; background: none; padding: 0 2px; cursor: pointer;
   color: var(--faint); font: inherit; font-size: 13px; line-height: 1.6; opacity: 0;
 }
-.row:hover .flag, .flag:focus-visible { opacity: 1; }
-.flag:hover { color: var(--text); }
-@media (hover: none) { .flag { display: none; } }
+.row:hover .report-flag, .report-flag:focus-visible { opacity: 1; }
+.report-flag:hover { color: var(--text); }
+@media (hover: none) { .report-flag { display: none; } }
 .flag-link {
   display: block; margin-top: 10px; border: 0; background: none; padding: 0; cursor: pointer;
   color: inherit; opacity: .65; font: inherit; font-size: 13px; text-decoration: underline;
@@ -671,7 +671,7 @@ function renderItem(item, src, { showSource = false } = {}) {
   li.append(h("div", { class: "row" },
     h("span", { class: "time", title: item.date ? new Date(item.date).toLocaleString(locale()) : "" }, shortTime(item.date)),
     head,
-    reportable ? h("button", { class: "flag", type: "button", title: t("report"), "aria-label": t("report"), onclick: () => openReport(item) }, "⚑") : null,
+    reportable ? h("button", { class: "report-flag", type: "button", title: t("report"), "aria-label": t("report"), onclick: () => openReport(item) }, "⚑") : null,
   ));
   if (!HOVER && state.open.has(item.url) && summary.length) {
     li.append(h("div", { class: "details" }, summary,

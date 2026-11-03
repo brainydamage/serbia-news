@@ -337,18 +337,48 @@ def connect():
     return anthropic, anthropic.Anthropic()
 
 
-def reported_urls() -> set[str]:
-    """Адреса новостей, на перевод которых пожаловались читатели за последнюю неделю."""
+def reports_api(data: dict | None = None) -> dict | None:
+    """Приёмник жалоб (worker/): без data — список жалоб, ждущих итога, с data — отправка итогов."""
     url, token = os.environ.get("REPORTS_URL"), os.environ.get("REPORTS_TOKEN")
     if not (url and token):
-        return set()
-    request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "User-Agent": "vestomat-build"})
+        return None
+    request = urllib.request.Request(
+        url, data=None if data is None else json.dumps(data).encode(),
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": "vestomat-build"},
+    )
     try:
         with urllib.request.urlopen(request, timeout=15) as response:
-            return {report["url"] for report in json.load(response)["reports"]}
+            return json.load(response)
     except Exception as exc:  # noqa: BLE001 — без жалоб сборка всё равно должна пройти
-        print(f"Жалобы на перевод не получены: {type(exc).__name__}: {exc}"[:200], file=sys.stderr)
-        return set()
+        print(f"Приёмник жалоб не ответил: {type(exc).__name__}: {exc}"[:200], file=sys.stderr)
+        return None
+
+
+def reported_urls() -> set[str]:
+    """Адреса новостей, на перевод которых пожаловались читатели за последнюю неделю."""
+    answer = reports_api()
+    return {report["url"] for report in answer["reports"]} if answer else set()
+
+
+def report_results(reported: set[str], copies: dict, cache: dict, before: dict) -> None:
+    """Итоги по жалобам — Worker отметит ими сообщения в Telegram (статусы описаны в worker/src/index.js)."""
+    key_of = {item["url"]: key for key, items in copies.items() for item in items}
+    results = []
+    for url in reported:
+        key = key_of.get(url)
+        if key is None:
+            status = "gone"
+        elif cache.get(key, {}).get("by") != REVIEW_MODEL:
+            if key not in before:
+                continue  # до неё не дошла очередь или нечем переводить — попробуем в следующую сборку
+            status = "error"
+        else:
+            old = before.get(key, cache[key])
+            changed = any(old.get(k) != cache[key].get(k) for k in ("title", "summary"))
+            status = "fixed" if changed else "same"
+        results.append({"url": url, "status": status})
+    if results:
+        reports_api({"results": results})
 
 
 def attach_translations(sources: list[dict]) -> None:
@@ -425,7 +455,9 @@ def attach_translations(sources: list[dict]) -> None:
             file=sys.stderr,
         )
 
+    before = {}  # переводы до жалобы — чтобы понять, изменила ли что-то сильная модель
     if review and client:
+        before = {key: cache[key] for key, _ in review}
         print(f"\nПо жалобам читателей перевожу заново {len(review)} новостей ({REVIEW_MODEL})…", file=sys.stderr)
         tokens_in = tokens_out = 0
         for batch in (review[i:i + RETRY_BATCH] for i in range(0, len(review), RETRY_BATCH)):
@@ -440,6 +472,8 @@ def attach_translations(sources: list[dict]) -> None:
         cost = tokens_in / 1e6 * REVIEW_PRICE[0] + tokens_out / 1e6 * REVIEW_PRICE[1]
         print(f"По жалобам: переведено {sum(cache[k].get('by') == REVIEW_MODEL for k, _ in review)} из {len(review)}, "
               f"{tokens_in} + {tokens_out} токенов ≈ ${cost:.3f}", file=sys.stderr)
+    if reported:
+        report_results(reported, copies, cache, before)
 
     for key, items in copies.items():
         for item in items:
