@@ -2,6 +2,8 @@
 // POST /report {url, comment} — от читателя: присылает жалобу в Telegram и хранит неделю.
 // GET /reports — для сборки (с токеном): какие новости перевести заново моделью посильнее.
 // POST /reports {results: [{url, status}]} — от сборки: чем кончилось, отмечаем реакцией на сообщение в Telegram.
+// POST /stats {kinds: {new|retry|review: {items, in, out, usd}}} — от сборки: сколько она потратила на перевод.
+//   Копим в ключе KV "stats": итоги по дням навсегда и каждую сборку за последние две недели (смотреть — costs.py).
 // Оригинал и перевод берём не из запроса, а из опубликованного data.json: так пожаловаться можно
 // только на настоящую новость с сайта, а в Telegram не попадёт чужой текст под её видом.
 
@@ -13,6 +15,9 @@ const COMMENT_MAX = 500;
 // fixed — перевели заново, same — перевод сильной модели вышел (или уже был) таким же, gone — новость ушла из ленты,
 // error — не вышло: жалоба остаётся в списке, и следующая сборка попробует ещё раз
 const REACTIONS = { fixed: "👍", same: "👎", gone: "🤷", error: "🤯" };
+// new — первый перевод новых новостей, retry — повтор непереведённого, review — перевод заново по жалобам
+const KINDS = ["new", "retry", "review"];
+const BUILDS_DAYS = 14;
 
 export default {
   async fetch(request, env, ctx) {
@@ -31,9 +36,10 @@ export default {
       for (const [k, v] of Object.entries(cors)) response.headers.set(k, v);
       return response;
     }
-    if (pathname === "/reports" && !authorized(request, env)) return json({ error: "unauthorized" }, 401);
+    if (["/reports", "/stats"].includes(pathname) && !authorized(request, env)) return json({ error: "unauthorized" }, 401);
     if (pathname === "/reports" && request.method === "GET") return list(env);
     if (pathname === "/reports" && request.method === "POST") return resolve(request, env);
+    if (pathname === "/stats" && request.method === "POST") return stats(request, env);
     return json({ error: "not found" }, 404);
   },
 };
@@ -118,6 +124,35 @@ async function resolve(request, env) {
       { expirationTtl: Math.max(60, Math.round(left)) });
   }
   return json({ ok: true });
+}
+
+async function stats(request, env) {
+  const { kinds } = await request.json();
+  const build = { at: belgrade(Date.now()) };
+  for (const kind of KINDS) {
+    const spent = kinds?.[kind];
+    if (!spent) continue;
+    build[kind] = {};
+    for (const field of ["items", "in", "out", "usd"]) build[kind][field] = Number(spent[field]) || 0;
+  }
+  if (!KINDS.some(k => build[k])) return json({ error: "nothing spent" }, 400);
+  // сборки идут по очереди, так что читать и перезаписывать один ключ безопасно
+  const all = (await env.REPORTS.get("stats", "json")) || { days: {}, builds: [] };
+  const day = (all.days[build.at.slice(0, 10)] ||= { builds: 0 });
+  day.builds++;
+  for (const kind of KINDS.filter(k => build[k])) {
+    const sum = (day[kind] ||= {});
+    for (const [field, value] of Object.entries(build[kind])) sum[field] = Math.round(((sum[field] || 0) + value) * 1e6) / 1e6;
+  }
+  const since = belgrade(Date.now() - BUILDS_DAYS * 86400e3);
+  all.builds = [...all.builds.filter(b => b.at >= since), build];
+  await env.REPORTS.put("stats", JSON.stringify(all));
+  return json({ ok: true });
+}
+
+// время по Белграду строкой «2026-11-03 20:21:06» — такие строки сравниваются как даты
+function belgrade(ms) {
+  return new Date(ms).toLocaleString("sv-SE", { timeZone: "Europe/Belgrade" });
 }
 
 async function findItem(url, dataUrl) {

@@ -10,6 +10,7 @@ import json
 import os
 import re
 import sys
+import threading
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -17,7 +18,7 @@ from pathlib import Path
 MODEL = "claude-haiku-5-5"
 # "medium" на замере 03.11.2026 оказался не лучше "low" и чуть дороже; Sonnet заметно лучше, но ~в 10 раз дороже
 EFFORT = "low"
-PRICE_PER_MTOK = (0.10, 0.50)  # вход / выход, $ — только для оценки в логе
+PRICE_PER_MTOK = (0.10, 0.50)  # вход / выход, $ — для оценки в логе и в статистике расходов
 BATCH_SIZE = 25
 # повтор для того, что не перевелось с первого раза: пачки меньше, модель думает дольше
 RETRY_EFFORT = "medium"
@@ -30,7 +31,13 @@ REVIEW_MODEL = "claude-sonnet-5-5"
 REVIEW_EFFORT = "medium"
 REVIEW_PRICE = (2.0, 10.0)
 REVIEW_LIMIT = 30  # за одну сборку — на случай, если жалобы шлёт бот
+# виды работы: модель и effort; расходы по ним сборка отправляет в worker/ (POST /stats), смотреть — costs.py
+KINDS = {"new": (MODEL, EFFORT), "retry": (MODEL, RETRY_EFFORT), "review": (REVIEW_MODEL, REVIEW_EFFORT)}
+PRICES = {MODEL: PRICE_PER_MTOK, REVIEW_MODEL: REVIEW_PRICE}
 CACHE_FILE = Path(__file__).parent / "cache" / "translations.json"
+# потрачено за эту сборку: вид работы → {"items", "in", "out"}; пачки переводятся в несколько потоков
+USAGE: dict[str, dict] = {}
+USAGE_LOCK = threading.Lock()
 
 # при изменении промпта поменяйте версию — кэш сбросится и всё переведётся заново;
 # мелкую правку можно не версионировать: она применится к новым новостям, а старые за день-два уйдут из ленты
@@ -296,7 +303,8 @@ def load_cache() -> dict:
         return {}
 
 
-def translate_batch(client, batch: list[tuple[str, dict]], effort: str = EFFORT, model: str = MODEL) -> tuple[dict, int, int]:
+def translate_batch(client, batch: list[tuple[str, dict]], kind: str = "new") -> dict:
+    model, effort = KINDS[kind]
     # модели даём короткие номера, а не хэши: длинные id она иногда переписывает с ошибкой
     payload = [{"id": str(n), "title": item["title"], "summary": item.get("summary", "")} for n, (_, item) in enumerate(batch)]
     names = {entry["sr"]: entry["ru"] for _, item in batch for entry in glossary_for(item)}
@@ -311,6 +319,8 @@ def translate_batch(client, batch: list[tuple[str, dict]], effort: str = EFFORT,
         output_config={"effort": effort, "format": {"type": "json_schema", "schema": SCHEMA}},
         messages=[{"role": "user", "content": content}],
     )
+    # считаем до проверок: за оборванный или негодный ответ тоже платим
+    spend(kind, len(batch), response.usage)
     if response.stop_reason in ("max_tokens", "refusal"):
         raise RuntimeError(f"stop_reason={response.stop_reason}")
     text = next(b.text for b in response.content if b.type == "text")
@@ -321,7 +331,26 @@ def translate_batch(client, batch: list[tuple[str, dict]], effort: str = EFFORT,
         # проверяем до russify: сербские буквы в «переводе» — тоже признак, что модель не перевела
         if item and looks_translated(item, t):
             out[key] = {k: fix_caps(russify(fix_abbreviations(t[k]))) for k in ("title", "summary")}
-    return out, response.usage.input_tokens, response.usage.output_tokens
+    return out
+
+
+def spend(kind: str, items: int, usage) -> None:
+    with USAGE_LOCK:
+        total = USAGE.setdefault(kind, {"items": 0, "in": 0, "out": 0})
+        total["items"] += items
+        total["in"] += usage.input_tokens
+        total["out"] += usage.output_tokens
+
+
+def cost(*kinds: str) -> tuple[int, int, float]:
+    """Токены на входе, на выходе и примерная цена в $ за эти виды работы в текущей сборке."""
+    tokens_in = tokens_out = usd = 0
+    for kind in kinds:
+        total, price = USAGE.get(kind, {}), PRICES[KINDS[kind][0]]
+        tokens_in += total.get("in", 0)
+        tokens_out += total.get("out", 0)
+        usd += total.get("in", 0) / 1e6 * price[0] + total.get("out", 0) / 1e6 * price[1]
+    return tokens_in, tokens_out, usd
 
 
 def connect():
@@ -337,13 +366,14 @@ def connect():
     return anthropic, anthropic.Anthropic()
 
 
-def reports_api(data: dict | None = None) -> dict | None:
-    """Приёмник жалоб (worker/): без data — список жалоб, ждущих итога, с data — отправка итогов."""
+def reports_api(data: dict | None = None, path: str = "reports") -> dict | None:
+    """Приёмник жалоб (worker/): без data — список жалоб, ждущих итога, с data — отправка итогов.
+    path="stats" — туда же отправляем расходы сборки."""
     url, token = os.environ.get("REPORTS_URL"), os.environ.get("REPORTS_TOKEN")
     if not (url and token):
         return None
     request = urllib.request.Request(
-        url, data=None if data is None else json.dumps(data).encode(),
+        url.rsplit("/", 1)[0] + "/" + path, data=None if data is None else json.dumps(data).encode(),
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": "vestomat-build"},
     )
     try:
@@ -406,12 +436,12 @@ def attach_translations(sources: list[dict]) -> None:
 
     if missing and client:
         batches = [missing[i:i + BATCH_SIZE] for i in range(0, len(missing), BATCH_SIZE)]
-        tokens_in = tokens_out = failed = 0
+        failed = 0
         print(f"\nПеревожу {len(missing)} новостей ({len(batches)} пачек)…", file=sys.stderr)
 
-        def run(batch, effort=EFFORT):
+        def run(batch, kind="new"):
             try:
-                return translate_batch(client, batch, effort)
+                return translate_batch(client, batch, kind)
             except anthropic.AuthenticationError:
                 raise
             except Exception as exc:  # noqa: BLE001 — не переведённое попробуем в следующую сборку
@@ -424,10 +454,7 @@ def attach_translations(sources: list[dict]) -> None:
                     if result is None:
                         failed += 1
                     else:
-                        done, t_in, t_out = result
-                        cache.update(done)
-                        tokens_in += t_in
-                        tokens_out += t_out
+                        cache.update(result)
                     print(f"  пачка {n}/{len(batches)}", file=sys.stderr, flush=True)
 
             # что модель не перевела (или переписала по-сербски кириллицей) — ещё раз, внимательнее
@@ -438,20 +465,17 @@ def attach_translations(sources: list[dict]) -> None:
                     break
                 print(f"  повтор для {len(retry)} непереведённых, effort={RETRY_EFFORT}", file=sys.stderr, flush=True)
                 for batch in (retry[i:i + RETRY_BATCH] for i in range(0, len(retry), RETRY_BATCH)):
-                    result = run(batch, RETRY_EFFORT)
+                    result = run(batch, "retry")
                     if result:
-                        done, t_in, t_out = result
-                        cache.update(done)
-                        tokens_in += t_in
-                        tokens_out += t_out
+                        cache.update(result)
         except anthropic.AuthenticationError:
             print("Перевод пропущен: ключ ANTHROPIC_API_KEY не подошёл", file=sys.stderr)
 
-        cost = tokens_in / 1e6 * PRICE_PER_MTOK[0] + tokens_out / 1e6 * PRICE_PER_MTOK[1]
+        tokens_in, tokens_out, usd = cost("new", "retry")
         left = sum(key not in cache for key, _ in missing)
         print(
             f"Перевод: {len(missing)} новых, не переведено {left}, {failed} пачек с ошибкой, "
-            f"{tokens_in} + {tokens_out} токенов ≈ ${cost:.3f}",
+            f"{tokens_in} + {tokens_out} токенов ≈ ${usd:.3f}",
             file=sys.stderr,
         )
 
@@ -459,19 +483,18 @@ def attach_translations(sources: list[dict]) -> None:
     if review and client:
         before = {key: cache[key] for key, _ in review}
         print(f"\nПо жалобам читателей перевожу заново {len(review)} новостей ({REVIEW_MODEL})…", file=sys.stderr)
-        tokens_in = tokens_out = 0
         for batch in (review[i:i + RETRY_BATCH] for i in range(0, len(review), RETRY_BATCH)):
             try:
-                done, t_in, t_out = translate_batch(client, batch, REVIEW_EFFORT, model=REVIEW_MODEL)
+                done = translate_batch(client, batch, "review")
             except Exception as exc:  # noqa: BLE001 — попробуем в следующую сборку
                 print(f"  пачка не переведена: {type(exc).__name__}: {exc}"[:200], file=sys.stderr)
                 continue
             cache.update({key: {**tr, "by": REVIEW_MODEL} for key, tr in done.items()})
-            tokens_in += t_in
-            tokens_out += t_out
-        cost = tokens_in / 1e6 * REVIEW_PRICE[0] + tokens_out / 1e6 * REVIEW_PRICE[1]
+        tokens_in, tokens_out, usd = cost("review")
         print(f"По жалобам: переведено {sum(cache[k].get('by') == REVIEW_MODEL for k, _ in review)} из {len(review)}, "
-              f"{tokens_in} + {tokens_out} токенов ≈ ${cost:.3f}", file=sys.stderr)
+              f"{tokens_in} + {tokens_out} токенов ≈ ${usd:.3f}", file=sys.stderr)
+    if USAGE:
+        reports_api({"kinds": {kind: {**total, "usd": round(cost(kind)[2], 6)} for kind, total in USAGE.items()}}, "stats")
     if reported:
         report_results(reported, copies, cache, before)
 
