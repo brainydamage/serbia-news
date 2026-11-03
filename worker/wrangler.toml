@@ -1,0 +1,10 @@
+# Приёмник жалоб на перевод. Секреты задаются командой `npx wrangler@4.150.0 secret put <ИМЯ>`:
+# TELEGRAM_TOKEN, TELEGRAM_CHAT_ID — куда присылать жалобы; REPORTS_TOKEN — пароль для сборки
+# (тот же, что в секрете репозитория REPORTS_TOKEN на GitHub).
+name = "vestomat-reports"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+[[kv_namespaces]]
+binding = "REPORTS"
+id = "70b68a9d0dcd4a6fa758ff1e81aeba71"

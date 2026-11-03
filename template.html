@@ -169,6 +169,37 @@ main { max-width: 1300px; margin: 0 auto; padding: 0 0 40px; }
 .tip p, .details p { margin: 0; }
 .tip p + p, .details p + p { margin-top: 10px; }
 .tip .orig, .details .orig { font-size: 13px; opacity: .65; }
+
+/* жалоба на перевод: на компьютере флажок в конце строки при наведении, на телефоне — ссылка в подводке */
+.flag {
+  flex: none; align-self: flex-start; border: 0; background: none; padding: 0 2px; cursor: pointer;
+  color: var(--faint); font: inherit; font-size: 13px; line-height: 1.6; opacity: 0;
+}
+.row:hover .flag, .flag:focus-visible { opacity: 1; }
+.flag:hover { color: var(--text); }
+@media (hover: none) { .flag { display: none; } }
+.flag-link {
+  display: block; margin-top: 10px; border: 0; background: none; padding: 0; cursor: pointer;
+  color: inherit; opacity: .65; font: inherit; font-size: 13px; text-decoration: underline;
+}
+dialog.report {
+  border: 0; border-radius: 20px; padding: 20px 22px; width: min(460px, calc(100% - 32px));
+  background: var(--bg); color: var(--text); font: inherit; box-shadow: 0 12px 40px rgb(0 0 0 / .25);
+}
+dialog.report::backdrop { background: rgb(0 0 0 / .35); }
+.report h2 { margin: 0 0 12px; font-size: 20px; }
+.report .orig { margin: 0 0 4px; color: var(--muted); font-size: 13px; }
+.report .tr { margin: 0 0 14px; font-weight: 700; }
+.report textarea {
+  width: 100%; padding: 10px 12px; border: 1px solid var(--soft); border-radius: 12px; resize: vertical;
+  background: var(--bg); color: var(--text); font: inherit; font-size: 16px;
+}
+.report .trap { position: absolute; left: -9999px; }
+.report .status { margin: 12px 0 0; color: var(--muted); }
+.report .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.report button { border: 0; border-radius: 999px; padding: 9px 16px; background: var(--soft); color: var(--text); font: inherit; font-weight: 700; cursor: pointer; }
+.report button.primary { background: var(--tip-bg); color: var(--tip-text); }
+.report button:disabled { opacity: .5; cursor: default; }
 .notice { max-width: 1260px; width: calc(100% - 40px); margin: 16px auto 0; padding: 12px 18px; border-radius: 20px; background: var(--soft); color: var(--muted); font-size: 14px; }
 .more { border: 0; background: none; color: var(--muted); font-weight: 700; cursor: pointer; font-size: 14px; padding: 0 0 0 52px; }
 .more:hover { color: var(--text); }
@@ -413,6 +444,16 @@ const UI_RU = {
   aiNote: "Переведены только заголовки и подводки — сами статьи откроются в оригинале. Перевод делает ИИ (Claude), так что возможны ошибки и неточности.",
   noTranslations: "Перевода пока нет — заголовки показаны в оригинале.",
   partial: "Часть свежих новостей ещё не переведена и показана в оригинале.",
+  // жалоба на перевод — только в русском режиме, поэтому в UI её нет
+  report: "Плохой перевод?",
+  reportTitle: "Плохой перевод",
+  reportHint: "Что не так? Как было бы правильно? (необязательно)",
+  send: "Отправить",
+  cancel: "Отмена",
+  close: "Закрыть",
+  reportThanks: "Спасибо! Новость переведём заново моделью посильнее — обычно это занимает до 15 минут.",
+  reportLimit: "Слишком много жалоб подряд — попробуйте через час.",
+  reportError: "Не получилось отправить. Попробуйте позже.",
 };
 const ru = () => state.lang === "ru";
 const t = key => ru() ? (UI_RU[key] ?? UI[key] ?? key)
@@ -549,6 +590,52 @@ function showTip(anchor, nodes) {
 function hideTip() { clearTimeout(tipTimer); tipEl.hidden = true; }
 addEventListener("scroll", hideTip, { passive: true });
 
+// ---------- жалоба на перевод ----------
+// жалобы принимает Cloudflare Worker (папка worker/): присылает их в Telegram, а сборка переводит
+// отмеченные новости заново моделью посильнее. Локально — wrangler dev на порту 8787
+const REPORT_URL = location.hostname === "localhost" ? "http://localhost:8787/report" : "https://vestomat-reports.vestomat.workers.dev/report";
+const reportDlg = h("dialog", { class: "report" });
+document.body.append(reportDlg);
+reportDlg.addEventListener("click", e => { if (e.target === reportDlg) reportDlg.close(); });  // клик мимо окна
+
+function openReport(item) {
+  hideTip();
+  const comment = h("textarea", { rows: 3, maxlength: 500, placeholder: t("reportHint") });
+  const trap = h("input", { class: "trap", name: "website", tabindex: "-1", autocomplete: "off", "aria-hidden": "true" });
+  const status = h("p", { class: "status", hidden: true });
+  const send = h("button", { class: "primary", type: "submit" }, t("send"));
+  const cancel = h("button", { type: "button", onclick: () => reportDlg.close() }, t("cancel"));
+  const done = text => { status.textContent = text; status.hidden = false; };
+  const form = h("form", {
+    onsubmit: async e => {
+      e.preventDefault();
+      send.disabled = true;
+      try {
+        const r = await fetch(REPORT_URL, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: item.url, comment: comment.value, website: trap.value }),
+        });
+        if (!r.ok) throw r.status;
+        track("report");
+        comment.hidden = true; send.hidden = true; cancel.textContent = t("close");
+        done(t("reportThanks"));
+      } catch (code) {
+        send.disabled = false;
+        done(t(code === 429 ? "reportLimit" : "reportError"));
+      }
+    },
+  },
+    h("h2", {}, t("reportTitle")),
+    h("p", { class: "orig", lang: "sr" }, item.title),
+    h("p", { class: "tr" }, item.ru.title),
+    comment, trap, status,
+    h("div", { class: "buttons" }, cancel, send),
+  );
+  reportDlg.replaceChildren(form);
+  reportDlg.showModal();
+  if (HOVER) comment.focus();
+}
+
 function renderItem(item, src, { showSource = false } = {}) {
   const fresh = item.date && now - new Date(item.date) < FRESH_MS;
   const v = textOf(item, src);
@@ -580,11 +667,16 @@ function renderItem(item, src, { showSource = false } = {}) {
     head.addEventListener("mouseleave", hideTip);
   }
 
+  const reportable = REPORT_URL && v.translated;
   li.append(h("div", { class: "row" },
     h("span", { class: "time", title: item.date ? new Date(item.date).toLocaleString(locale()) : "" }, shortTime(item.date)),
     head,
+    reportable ? h("button", { class: "flag", type: "button", title: t("report"), "aria-label": t("report"), onclick: () => openReport(item) }, "⚑") : null,
   ));
-  if (!HOVER && state.open.has(item.url) && summary.length) li.append(h("div", { class: "details" }, summary));
+  if (!HOVER && state.open.has(item.url) && summary.length) {
+    li.append(h("div", { class: "details" }, summary,
+      reportable ? h("button", { class: "flag-link", type: "button", onclick: () => openReport(item) }, t("report")) : null));
+  }
   return li;
 }
 

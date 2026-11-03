@@ -46,6 +46,9 @@ jobs:
       - run: python build.py
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # жалобы на перевод (worker/): адрес — переменная репозитория, пароль — секрет
+          REPORTS_URL: ${{ vars.REPORTS_URL }}
+          REPORTS_TOKEN: ${{ secrets.REPORTS_TOKEN }}
 
       - name: Save data
         uses: actions/cache/save@v4
