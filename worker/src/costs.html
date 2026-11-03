@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer">
+<title>Вестомат — расходы</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface: #fcfcfb;
+    --raised: #f3f2ef;
+    --line: #e4e3df;
+    --text: #0b0b0b;
+    --muted: #52514e;
+    --new: #2a78d6;
+    --retry: #eb6834;
+    --review: #1baf7a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --surface: #1a1a19;
+      --raised: #242423;
+      --line: #353533;
+      --text: #f0efec;
+      --muted: #c3c2b7;
+      --new: #3987e5;
+      --retry: #d95926;
+      --review: #199e70;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--surface); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 32px 0 10px; }
+  .note { color: var(--muted); font-size: 13px; margin: 0; }
+  .num { font-variant-numeric: tabular-nums; }
+
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 20px; }
+  @media (max-width: 600px) { .tiles { grid-template-columns: repeat(2, 1fr); } .tile b { font-size: 20px; } }
+  .tile { background: var(--raised); border-radius: 10px; padding: 12px 14px; }
+  .tile b { display: block; font-size: 24px; font-weight: 600; }
+  .tile span { color: var(--muted); font-size: 13px; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--muted); margin-bottom: 10px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+  .chart { position: relative; display: flex; height: 180px; padding-left: 52px; }
+  .grid { position: absolute; inset: 0 0 0 52px; pointer-events: none; }
+  .grid div { position: absolute; left: 0; right: 0; border-top: 1px solid var(--line); }
+  .grid span { position: absolute; right: calc(100% + 6px); top: -8px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .col { flex: 1; display: flex; flex-direction: column-reverse; justify-content: flex-start; gap: 2px; padding: 0 1px; cursor: default; position: relative; z-index: 1; }
+  .col div { min-height: 1px; }
+  .col div:last-child { border-radius: 4px 4px 0 0; }
+  .col:hover div { filter: brightness(1.12); }
+  .axis { display: flex; padding-left: 52px; font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .axis span { flex: 1; text-align: center; white-space: nowrap; overflow: visible; }
+  .tip { position: fixed; z-index: 5; pointer-events: none; background: var(--text); color: var(--surface); border-radius: 8px; padding: 8px 10px; font-size: 13px; line-height: 1.5; display: none; }
+  .tip i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; }
+
+  .wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { padding: 6px 8px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line); }
+  th { font-weight: 500; color: var(--muted); font-size: 13px; }
+  th:first-child, td:first-child { text-align: left; }
+  td small { color: var(--muted); }
+  tr.day[data-open] { cursor: pointer; }
+  tr.day[data-open] td:first-child::before { content: "▸"; display: inline-block; width: 14px; color: var(--muted); }
+  tr.day[data-open="1"] td:first-child::before { content: "▾"; }
+  tr.build td { background: var(--raised); font-size: 13px; }
+  tr.build td:first-child { padding-left: 22px; }
+  .message { margin-top: 40px; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Расходы на перевод</h1>
+  <p class="note">Оценка по токенам, время белградское. Точное списание — в Anthropic Console → Usage / Cost. Ручные проверки <code>audit_*.py</code> сюда не попадают.</p>
+  <div id="app"></div>
+</main>
+<div class="tip" id="tip"></div>
+<script>
+const KINDS = { new: "новые", retry: "повтор", review: "жалобы" };
+const MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
+const MONTH_NAMES = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"];
+const WEEKDAYS = ["вс", "пн", "вт", "ср", "чт", "пт", "сб"];
+const CHART_DAYS = 30;
+const app = document.getElementById("app");
+const tip = document.getElementById("tip");
+
+const usd = v => "$" + (v >= 1 ? v.toFixed(2) : v >= 0.01 ? v.toFixed(3) : v.toFixed(4));
+const total = row => Object.keys(KINDS).reduce((sum, k) => sum + (row[k]?.usd || 0), 0);
+const dayLabel = day => {
+  const d = new Date(day + "T12:00:00Z");
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}, ${WEEKDAYS[d.getUTCDay()]}`;
+};
+const shiftDay = (day, n) => new Date(Date.parse(day + "T12:00:00Z") + n * 86400e3).toISOString().slice(0, 10);
+const el = (tag, attrs = {}, ...children) => {
+  const node = Object.assign(document.createElement(tag), attrs);
+  node.append(...children);
+  return node;
+};
+const cell = spent => el("td", { className: "num" }, spent ? usd(spent.usd) : "—",
+  ...(spent ? [el("small", {}, ` · ${spent.items}`)] : []));
+
+function tile(value, label) {
+  return el("div", { className: "tile" }, el("b", { className: "num" }, value), el("span", {}, label));
+}
+
+function tiles(days, today) {
+  const sum = list => list.reduce((s, [, row]) => s + total(row), 0);
+  const week = days.filter(([d]) => d > shiftDay(today, -7));
+  const month = days.filter(([d]) => d.startsWith(today.slice(0, 7)));
+  const full = days.filter(([d]) => d > shiftDay(today, -8) && d < today);
+  return el("div", { className: "tiles" },
+    tile(usd(sum(days.filter(([d]) => d === today))), "сегодня"),
+    tile(usd(sum(week)), "за 7 дней"),
+    tile(usd(sum(month)), `за ${MONTH_NAMES[+today.slice(5, 7) - 1]}`),
+    tile(full.length ? usd(sum(full) / full.length) : "—", "в среднем в день за неделю"));
+}
+
+function chart(byDay, today) {
+  const span = Array.from({ length: CHART_DAYS }, (_, i) => shiftDay(today, i - CHART_DAYS + 1));
+  const max = Math.max(...span.map(d => byDay[d] ? total(byDay[d]) : 0), 0.0001);
+  // шаг сетки — «круглое» число, чтобы подписи читались
+  const raw = max / 3, power = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 5, 10].map(m => m * power).find(s => s >= raw);
+  const top = Math.ceil(max / step) * step;
+
+  const grid = el("div", { className: "grid" });
+  for (let v = 0; v <= top + step / 2; v += step) {
+    grid.append(el("div", { style: `bottom:${v / top * 100}%` }, el("span", { className: "num" }, "$" + +v.toPrecision(6))));
+  }
+  const box = el("div", { className: "chart" }, grid);
+  for (const day of span) {
+    const row = byDay[day] || {};
+    const col = el("div", { className: "col" });
+    for (const kind of Object.keys(KINDS)) {
+      if (row[kind]?.usd) col.append(el("div", { style: `height:calc(${row[kind].usd / top * 100}% - 2px);background:var(--${kind})` }));
+    }
+    col.addEventListener("mousemove", e => showTip(e, day, row));
+    col.addEventListener("mouseleave", () => tip.style.display = "none");
+    box.append(col);
+  }
+  const axis = el("div", { className: "axis" });
+  span.forEach((day, i) => axis.append(el("span", {}, (CHART_DAYS - 1 - i) % 5 === 0 ? String(+day.slice(8)) : "")));
+  const legend = el("div", { className: "legend" },
+    ...Object.entries(KINDS).map(([k, name]) => el("span", {}, el("i", { style: `background:var(--${k})` }), name)));
+  return el("section", {}, el("h2", {}, `По дням, последние ${CHART_DAYS}`), legend, box, axis);
+}
+
+function showTip(e, day, row) {
+  tip.replaceChildren(el("b", {}, dayLabel(day)), el("br"));
+  for (const [k, name] of Object.entries(KINDS)) {
+    if (row[k]) tip.append(el("i", { style: `background:var(--${k})` }), `${name}: ${usd(row[k].usd)} · ${row[k].items} нов.`, el("br"));
+  }
+  tip.append(row.builds ? `итого ${usd(total(row))}, сборок: ${row.builds}` : "нет расходов");
+  tip.style.display = "block";
+  const x = Math.min(e.clientX + 12, innerWidth - tip.offsetWidth - 8);
+  tip.style.left = x + "px";
+  tip.style.top = (e.clientY - tip.offsetHeight - 12) + "px";
+}
+
+function header(first) {
+  return el("tr", {}, el("th", {}, first), el("th", {}, "сборок"),
+    ...Object.values(KINDS).map(name => el("th", {}, `${name}, $ · новостей`)), el("th", {}, "итого"));
+}
+
+function row(label, data, count, className) {
+  return el("tr", { className }, el("td", {}, label), el("td", { className: "num" }, count ?? ""),
+    ...Object.keys(KINDS).map(k => cell(data[k])), el("td", { className: "num" }, el("b", {}, usd(total(data)))));
+}
+
+function daysTable(days, builds) {
+  const body = el("tbody");
+  for (const [day, data] of [...days].reverse()) {
+    const own = builds.filter(b => b.at.startsWith(day));
+    const tr = row(dayLabel(day), data, data.builds, "day");
+    body.append(tr);
+    if (!own.length) continue;
+    const rows = own.reverse().map(b => row(b.at.slice(11, 16), b, "", "build"));
+    tr.dataset.open = "0";
+    tr.title = "Показать сборки";
+    tr.addEventListener("click", () => {
+      const open = tr.dataset.open === "1";
+      tr.dataset.open = open ? "0" : "1";
+      open ? rows.forEach(r => r.remove()) : tr.after(...rows);
+    });
+  }
+  return el("section", {}, el("h2", {}, "По дням"),
+    el("p", { className: "note" }, "Нажмите на день, чтобы увидеть каждую сборку — они хранятся две недели. Считаются только сборки, которые что-то переводили."),
+    el("div", { className: "wrap" }, el("table", {}, el("thead", {}, header("день")), body)));
+}
+
+function monthsTable(days) {
+  const months = {};
+  for (const [day, data] of days) {
+    const m = (months[day.slice(0, 7)] ||= { builds: 0 });
+    m.builds += data.builds;
+    for (const k of Object.keys(KINDS)) {
+      if (!data[k]) continue;
+      m[k] ||= { usd: 0, items: 0 };
+      m[k].usd += data[k].usd;
+      m[k].items += data[k].items;
+    }
+  }
+  const body = el("tbody", {}, ...Object.entries(months).reverse()
+    .map(([m, data]) => row(`${MONTH_NAMES[+m.slice(5) - 1]} ${m.slice(0, 4)}`, data, data.builds)));
+  return el("section", {}, el("h2", {}, "По месяцам"),
+    el("div", { className: "wrap" }, el("table", {}, el("thead", {}, header("месяц")), body)));
+}
+
+async function main() {
+  const key = location.hash.slice(1);
+  if (!key) return app.append(el("p", { className: "message" }, "Откройте страницу по ссылке с ключом (часть адреса после #)."));
+  const response = await fetch("/stats", { headers: { Authorization: `Bearer ${key}` }, cache: "no-store" });
+  if (response.status === 401) return app.append(el("p", { className: "message" }, "Ключ в ссылке не подходит."));
+  if (!response.ok) return app.append(el("p", { className: "message" }, `Не удалось загрузить данные (${response.status}).`));
+  const stats = await response.json();
+  const days = Object.entries(stats.days).sort(([a], [b]) => a.localeCompare(b));
+  if (!days.length) return app.append(el("p", { className: "message" }, "Данных пока нет — их пишет сборка, которая что-то переводила."));
+  const today = new Date().toLocaleString("sv-SE", { timeZone: "Europe/Belgrade" }).slice(0, 10);
+  app.append(tiles(days, today), chart(stats.days, today), daysTable(days, stats.builds), monthsTable(days));
+}
+main();
+</script>
+</body>
+</html>

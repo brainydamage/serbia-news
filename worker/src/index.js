@@ -3,9 +3,13 @@
 // GET /reports — для сборки (с токеном): какие новости перевести заново моделью посильнее.
 // POST /reports {results: [{url, status}]} — от сборки: чем кончилось, отмечаем реакцией на сообщение в Telegram.
 // POST /stats {kinds: {new|retry|review: {items, in, out, usd}}} — от сборки: сколько она потратила на перевод.
-//   Копим в ключе KV "stats": итоги по дням навсегда и каждую сборку за последние две недели (смотреть — costs.py).
+//   Копим в ключе KV "stats": итоги по дням навсегда и каждую сборку за последние две недели.
+// GET /costs — страница с этой статистикой, GET /stats — сами данные для неё (с ключом STATS_KEY).
+//   Ключ страница берёт из адреса после # — эта часть не уходит ни на сервер, ни в Referer.
 // Оригинал и перевод берём не из запроса, а из опубликованного data.json: так пожаловаться можно
 // только на настоящую новость с сайта, а в Telegram не попадёт чужой текст под её видом.
+
+import COSTS_PAGE from "./costs.html";
 
 const ORIGINS = ["https://vestomat.rs", "http://localhost:8765"];
 const DATA_URL = "https://vestomat.rs/data.json";
@@ -36,7 +40,14 @@ export default {
       for (const [k, v] of Object.entries(cors)) response.headers.set(k, v);
       return response;
     }
-    if (["/reports", "/stats"].includes(pathname) && !authorized(request, env)) return json({ error: "unauthorized" }, 401);
+    if (pathname === "/costs" && request.method === "GET") {
+      return new Response(COSTS_PAGE, { headers: { "Content-Type": "text/html; charset=utf-8", "X-Robots-Tag": "noindex" } });
+    }
+    if (pathname === "/stats" && request.method === "GET") {
+      if (!authorized(request, env.STATS_KEY)) return json({ error: "unauthorized" }, 401);
+      return json((await env.REPORTS.get("stats", "json")) || { days: {}, builds: [] });
+    }
+    if (["/reports", "/stats"].includes(pathname) && !authorized(request, env.REPORTS_TOKEN)) return json({ error: "unauthorized" }, 401);
     if (pathname === "/reports" && request.method === "GET") return list(env);
     if (pathname === "/reports" && request.method === "POST") return resolve(request, env);
     if (pathname === "/stats" && request.method === "POST") return stats(request, env);
@@ -90,8 +101,8 @@ async function save(env, url, comment, { item, src }) {
   }), { expirationTtl: KEEP_SECONDS });
 }
 
-function authorized(request, env) {
-  return env.REPORTS_TOKEN && request.headers.get("Authorization") === `Bearer ${env.REPORTS_TOKEN}`;
+function authorized(request, secret) {
+  return secret && request.headers.get("Authorization") === `Bearer ${secret}`;
 }
 
 async function list(env) {
