@@ -59,6 +59,12 @@ PAGES = {
 
 ITEMS_PER_SOURCE = 30
 SUMMARY_CHARS = 420
+# подводка короче — это рубрика вроде «Iza Ekrana 137» у Radar, а не текст
+SUMMARY_MIN = 20
+# длиннее и без точки в конце — значит, лента обрезала текст: N1 и Nova режут на 150 знаках посреди слова,
+# WordPress — на 55 словах посреди фразы
+SUMMARY_CUT = 140
+SENTENCE_END = tuple('.!?…"»“”\')')
 TIMEOUT = 25
 LOCAL_TZ = ZoneInfo("Europe/Belgrade")
 # Reddit без авторизации отвечает примерно на один запрос в минуту, остальным отдаёт 429.
@@ -127,8 +133,10 @@ def parse_date(value: str):
 TAG_RE = re.compile(r"<[^>]+>")
 UNCLOSED_TAG_RE = re.compile(r"<[a-zA-Z/][^>]*$")
 SPACE_RE = re.compile(r"\s+")
-# WordPress-хвосты вида «The post ... appeared first on ...» и «[…]», подпись Reddit «submitted by /u/... [comments]»
-TAIL_RE = re.compile(r"(The post .*? appeared first on .*|\[(…|&hellip;|\.\.\.)\]|Opširnije.*|Pročitajte više.*|submitted by\s+/u/.*)$", re.I)
+# WordPress-хвосты вида «The post ... appeared first on ...», «[…]», «[...] Source», «… Read more →»,
+# подпись Reddit «submitted by /u/... [comments]»; их бывает несколько подряд, поэтому снимаем по одному
+TAIL_RE = re.compile(r"(The post .*? appeared first on .*|\[(…|&hellip;|\.\.\.)\]|(?<=\])\s*Source|Read more\s*→?|Continue reading.*"
+                     r"|Opširnije.*|Pročitajte više.*|submitted by\s+/u/.*)$", re.I)
 
 
 def clean_text(raw: str) -> str:
@@ -141,7 +149,9 @@ def clean_text(raw: str) -> str:
     # и обрезает подводку посреди тега картинки: незакрытый хвост «<img width=… title="Tužil…» тоже убираем
     text = UNCLOSED_TAG_RE.sub(" ", TAG_RE.sub(" ", text))
     text = SPACE_RE.sub(" ", text).strip()
-    return TAIL_RE.sub("", text).strip()
+    while (stripped := TAIL_RE.sub("", text).strip()) != text:
+        text = stripped
+    return text
 
 
 def shorten(text: str, limit: int) -> str:
@@ -149,6 +159,18 @@ def shorten(text: str, limit: int) -> str:
         return text
     cut = text[:limit].rsplit(" ", 1)[0]
     return cut.rstrip(",.;:—-– ") + "…"
+
+
+def tidy_summary(text: str) -> str:
+    """Подводка без рубрик и обрывков: обрезанную лентой — по последнее целое слово и с многоточием."""
+    if len(text) < SUMMARY_MIN:
+        return ""
+    if len(text) > SUMMARY_CHARS:
+        return shorten(text, SUMMARY_CHARS)
+    # смайлик в конце (Reddit) — не обрыв, просто так пишут
+    if len(text) >= SUMMARY_CUT and not text.endswith(SENTENCE_END) and (text[-1].isalnum() or text[-1] in ",;:—-–"):
+        return text.rsplit(" ", 1)[0].rstrip(",.;:—-– ") + "…"
+    return text
 
 
 def parse_feed(data: bytes) -> list[dict]:
@@ -185,7 +207,7 @@ def parse_feed(data: bytes) -> list[dict]:
         items.append({
             "title": title,
             "url": link,
-            "summary": shorten(summary, SUMMARY_CHARS),
+            "summary": tidy_summary(summary),
             "date": date.isoformat() if date else None,
         })
     return items

@@ -190,6 +190,12 @@ main { max-width: 1300px; margin: 0 auto; padding: 0 0 40px; }
   display: block; margin-top: 10px; border: 0; background: none; padding: 0; cursor: pointer;
   color: inherit; opacity: .65; font: inherit; font-size: 13px; text-decoration: underline;
 }
+.details-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-top: 12px; }
+.details-actions .flag-link { margin: 0; }
+.read-link {
+  padding: 8px 14px; border-radius: 999px; background: var(--tip-text); color: var(--tip-bg);
+  font-size: 14px; font-weight: 700; text-decoration: none;
+}
 dialog.report {
   border: 0; border-radius: 20px; padding: 20px 22px; width: min(460px, calc(100% - 32px));
   background: var(--bg); color: var(--text); font: inherit; box-shadow: 0 12px 40px rgb(0 0 0 / .25);
@@ -353,7 +359,7 @@ const state = {
   sections: new Set(DATA.sections.map(s => s.id).filter(id => !store.get("hiddenSections", []).includes(id))),
   q: "",
   read: new Set(store.get("read", [])),
-  open: new Set(),
+  open: null,  // на телефоне: адрес новости с раскрытой подводкой — раскрыта всегда только одна
   expandedCards: new Set(),
   feedLimit: FEED_PAGE,
 };
@@ -406,6 +412,7 @@ const UI = {
   nothing: "Ništa nije pronađeno",
   more: "Još",
   showMore: "Prikaži još",
+  readOn: "Pročitaj na",
   stale: "feed nije osvežen",
   down: "feed nije dostupan",
 };
@@ -448,6 +455,7 @@ const UI_RU = {
   nothing: "Ничего не нашлось",
   more: "Ещё",
   showMore: "Показать ещё",
+  readOn: "Читать на",
   stale: "лента не обновилась",
   down: "лента недоступна",
   aiNote: "Переведены только заголовки и подводки — сами статьи откроются в оригинале. Перевод делает ИИ (Claude), так что возможны ошибки и неточности.",
@@ -653,13 +661,29 @@ function renderItem(item, src, { showSource = false } = {}) {
   const li = h("li", { class: "item" + (state.read.has(item.url) ? " read" : ""), lang: v.lang });
 
   const opened = () => { markRead(item.url); li.classList.add("read"); hideTip(); track(`click/${src.section}/${src.name}`); };
-  const onclick = e => {
-    // без мыши наводить нечем: первое касание показывает подводку, второе открывает статью
-    if (!HOVER && summary.length && !state.open.has(item.url)) {
-      e.preventDefault();
-      state.open.add(item.url);
+  const reportable = REPORT_URL && v.translated;
+  const details = () => h("div", { class: "details" }, summary,
+    h("div", { class: "details-actions" },
+      h("a", { class: "read-link", href: item.url, target: "_blank", rel: "noopener", onclick: opened }, `${t("readOn")} ${item.via || src.name} ↗`),
+      reportable ? h("button", { class: "flag-link", type: "button", onclick: () => openReport(item) }, t("report")) : null));
+  const toggle = () => {
+    const top = li.getBoundingClientRect().top;
+    document.querySelector(".details")?.remove();
+    if (state.open === item.url) state.open = null;
+    else {
+      state.open = item.url;
       markRead(item.url);
-      li.replaceWith(renderItem(item, src, { showSource }));
+      li.classList.add("read");
+      li.append(details());
+    }
+    // свернулась подводка выше — возвращаем строку под палец
+    scrollBy(0, li.getBoundingClientRect().top - top);
+  };
+  const onclick = e => {
+    // без мыши наводить нечем: касание раскрывает и сворачивает подводку, статья открывается кнопкой в ней
+    if (!HOVER && summary.length) {
+      e.preventDefault();
+      toggle();
       return;
     }
     opened();
@@ -677,16 +701,12 @@ function renderItem(item, src, { showSource = false } = {}) {
     head.addEventListener("mouseleave", hideTip);
   }
 
-  const reportable = REPORT_URL && v.translated;
   li.append(h("div", { class: "row" },
     h("span", { class: "time", "data-time": item.date || "", title: item.date ? new Date(item.date).toLocaleString(locale()) : "" }, shortTime(item.date)),
     head,
     reportable ? h("button", { class: "report-flag", type: "button", title: t("report"), "aria-label": t("report"), onclick: () => openReport(item) }, "⚑") : null,
   ));
-  if (!HOVER && state.open.has(item.url) && summary.length) {
-    li.append(h("div", { class: "details" }, summary,
-      reportable ? h("button", { class: "flag-link", type: "button", onclick: () => openReport(item) }, t("report")) : null));
-  }
+  if (!HOVER && state.open === item.url && summary.length) li.append(details());
   return li;
 }
 

@@ -81,7 +81,7 @@
       "title_ru": "Близкие к SNS",
       "note": "Tabloidi, TV Pink, portal B92 i Večernje novosti", "note_ru": "Таблоиды, телеканал Pink, портал B92 и «Вечерние новости»",
       "sources": [
-        {"name": "Informer", "site": "https://www.informer.rs", "feed": "https://www.informer.rs/rss/drustvo/srbija"},
+        {"name": "Informer", "site": "https://www.informer.rs", "feed": "https://www.informer.rs/rss/politika"},
         {"name": "Novosti", "site": "https://www.novosti.rs", "feed": "https://www.novosti.rs/rss/vesti"},
         {"name": "Alo", "site": "https://www.alo.rs", "feed": "https://www.alo.rs/rss.html", "exclude": ["/vip/", "/razonoda/"]},
         {"name": "Kurir", "site": "https://www.kurir.rs", "feed": "https://www.kurir.rs/rss/vesti/politika", "note": "rubrika „Politika“", "note_ru": "раздел «Политика»"},
