@@ -449,6 +449,7 @@ const UI_RU = {
   reportTitle: "Плохой перевод",
   reportHint: "Что не так? Как было бы правильно? (необязательно)",
   send: "Отправить",
+  sending: "Отправляю…",
   cancel: "Отмена",
   close: "Закрыть",
   reportThanks: "Спасибо! Новость переведём заново моделью посильнее — обычно это занимает до 15 минут.",
@@ -610,6 +611,7 @@ function openReport(item) {
     onsubmit: async e => {
       e.preventDefault();
       send.disabled = true;
+      send.textContent = t("sending");
       try {
         const r = await fetch(REPORT_URL, {
           method: "POST", headers: { "Content-Type": "application/json" },
@@ -621,6 +623,7 @@ function openReport(item) {
         done(t("reportThanks"));
       } catch (code) {
         send.disabled = false;
+        send.textContent = t("send");
         done(t(code === 429 ? "reportLimit" : "reportError"));
       }
     },

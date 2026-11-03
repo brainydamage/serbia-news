@@ -27,7 +27,7 @@ export default {
       });
     }
     if (pathname === "/report" && request.method === "POST") {
-      const response = await report(request, env);
+      const response = await report(request, env, ctx);
       for (const [k, v] of Object.entries(cors)) response.headers.set(k, v);
       return response;
     }
@@ -38,7 +38,7 @@ export default {
   },
 };
 
-async function report(request, env) {
+async function report(request, env, ctx) {
   let body;
   try {
     body = await request.json();
@@ -55,12 +55,17 @@ async function report(request, env) {
   const limitKey = `ip:${ip}:${Math.floor(Date.now() / 3600e3)}`;
   const count = Number(await env.REPORTS.get(limitKey)) || 0;
   if (count >= PER_IP_PER_HOUR) return json({ error: "too many" }, 429);
-  await env.REPORTS.put(limitKey, String(count + 1), { expirationTtl: 3600 });
-
-  const found = await findItem(url, env.DATA_URL || DATA_URL);
+  const [found] = await Promise.all([
+    findItem(url, env.DATA_URL || DATA_URL),
+    env.REPORTS.put(limitKey, String(count + 1), { expirationTtl: 3600 }),
+  ]);
   if (!found) return json({ error: "unknown item" }, 404);
-  const { item, src } = found;
+  // Telegram и запись жалобы — уже после ответа читателю, чтобы окно не ждало их
+  ctx.waitUntil(save(env, url, comment, found));
+  return json({ ok: true });
+}
 
+async function save(env, url, comment, { item, src }) {
   const key = "r:" + (await sha1(url));
   const old = await env.REPORTS.get(key, "json");
   const lines = [`⚑ Плохой перевод${old ? ` (жалоба №${(old.count || 0) + 1})` : ""} — ${src.name}`, "",
@@ -77,7 +82,6 @@ async function report(request, env) {
     comments: [...(old?.comments || []), ...(comment ? [comment] : [])].slice(-10),
     messages: [...(old?.messages || []), ...(message ? [message] : [])], reacted: old?.reacted || 0,
   }), { expirationTtl: KEEP_SECONDS });
-  return json({ ok: true });
 }
 
 function authorized(request, env) {
