@@ -63,12 +63,13 @@ jobs:
         uses: actions/deploy-pages@v4
 
       # IndexNow: сообщаем Bing и Яндексу, что страницы обновились. Ключ публичный по устройству протокола —
-      # он лежит в static/<ключ>.txt. По расписанию — раз в 6 часов, чтобы не выглядеть спамом; при пуше — всегда
+      # он лежит в static/<ключ>.txt. При пуше — всегда; остальные запуски (расписание GitHub и cron-job.org,
+      # который дёргает workflow_dispatch каждые 20 минут) — раз в 6 часов, чтобы не выглядеть спамом
       - name: Ping IndexNow
         run: |
           hour=$(( 10#$(date -u +%H) )); minute=$(( 10#$(date -u +%M) ))
-          if [ "${{ github.event_name }}" = "schedule" ] && { [ $((hour % 6)) -ne 0 ] || [ $minute -ge 20 ]; }; then
-            echo "пропуск: по расписанию пингуем раз в 6 часов"; exit 0
+          if [ "${{ github.event_name }}" != "push" ] && { [ $((hour % 6)) -ne 0 ] || [ $minute -ge 20 ]; }; then
+            echo "пропуск: вне пуша пингуем раз в 6 часов"; exit 0
           fi
           curl -sS -o /dev/null -w "IndexNow: HTTP %{http_code}\n" -X POST https://api.indexnow.org/indexnow \
             -H "Content-Type: application/json; charset=utf-8" \
