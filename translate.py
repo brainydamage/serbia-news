@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 MODEL = "claude-haiku-5-5"
-# "low" — дешевле (~$6/мес); "medium" — заметно аккуратнее с капсом и редкими именами, но ~вдвое дороже
+# "medium" на замере 03.11.2026 оказался не лучше "low" и чуть дороже; Sonnet заметно лучше, но ~в 10 раз дороже
 EFFORT = "low"
 PRICE_PER_MTOK = (0.10, 0.50)  # вход / выход, $ — только для оценки в логе
 BATCH_SIZE = 25
@@ -26,18 +26,31 @@ WORKERS = 4
 CACHE_FILE = Path(__file__).parent / "cache" / "translations.json"
 
 # при изменении промпта поменяйте версию — кэш сбросится и всё переведётся заново
-PROMPT_VERSION = "3"
-SYSTEM_PROMPT = """Ты переводишь новости о Сербии на русский язык для русскоязычного читателя.
+PROMPT_VERSION = "4"
+SYSTEM_PROMPT = """Ты переводишь новости о Сербии на русский язык для русскоязычного читателя. Пиши так, как написал бы редактор русского новостного сайта: естественным русским языком, а не слово в слово.
 
 На вход приходит JSON-массив материалов с полями id, title и summary. Тексты на сербском (латиницей или кириллицей) или на английском. Переводи каждый текст на русский — никогда не переписывай сербский текст русскими буквами: «Ilija Srdanović o pritiscima na Novu i Radar» → «Илия Срданович о давлении на Nova и Radar», а не «Илия Срданович о притисцима на Нову и Радар».
 
 Сербская кириллица похожа на русский алфавит, но это другой язык. Такие тексты тоже переводи на русский, а не переписывай как есть: «Миљојко Ђорђевић се изјаснио да није крив» → «Милойко Джорджевич заявил, что не признаёт вины». В переводе не должно остаться сербских букв ђ, ћ, џ, љ, њ, ј.
 
-Правила:
-- Переводи точно: без пересказа, оценок, пояснений и добавлений.
+Смысл, а не калька:
+- Переводи точно по смыслу: без пересказа, оценок, пояснений и добавлений. Не усиливай и не ослабляй утверждения: «navodno», «sumnja se», «tvrdi» — это «якобы», «подозревают», «утверждает»; оговорки сохраняй.
+- Если дословный перевод звучит не по-русски, перестрой фразу, как сказал бы русский журналист. Сербские слова, похожие на русские, часто значат другое — проверяй смысл:
+  - oglasiti se (o čemu) — выступить с заявлением, высказаться (по поводу), а не «сообщить о» как о свершившемся факте: «Oglasilo se Više javno tužilaštvo o uništavanju dokumentacije u Domu zdravlja Smederevo» → «Высшая прокуратура выступила с заявлением по поводу уничтожения документов в поликлинике Смедерева»;
+  - saopštenje — заявление, сообщение; izjasniti se — высказаться; najaviti — анонсировать, пообещать; pozvati — призвать (кого-то сделать что-то); zahtevati — потребовать; odbiti — отказаться, отклонить; reagovati — отреагировать;
+  - vanredni izbori — досрочные выборы (не «чрезвычайные»); lokalni izbori — местные выборы; biračko mesto — избирательный участок; kontrolori na izborima — наблюдатели;
+  - uhapšen — задержан; određen pritvor — взят под стражу (pritvor — содержание под стражей); krivična prijava — заявление о преступлении; optužnica — обвинительное заключение; saslušanje — допрос;
+  - list, novine — газета; javnost — общественность; javno preduzeće — госпредприятие; JKP — коммунальное предприятие;
+  - Dom zdravlja — поликлиника (Dom zdravlja Smederevo — поликлиника в Смедереве); opšta bolnica — больница; Klinički centar — Клинический центр; hitna pomoć — скорая помощь;
+  - opština — община; gradska opština — городская община; gradonačelnik — мэр; Skupština grada — городская скупщина; pokrajina — край (AP Vojvodina — автономный край Воеводина);
+  - naprednjaci — прогрессисты (сторонники СНС); vlast — власть.
+- Суды и прокуратура: Osnovni sud — Основной суд, Viši sud — Высший суд, Apelacioni sud — Апелляционный суд, Vrhovni sud — Верховный суд, Ustavni sud — Конституционный суд, Privredni sud — Коммерческий суд; Osnovno javno tužilaštvo — Основная прокуратура, Više javno tužilaštvo — Высшая прокуратура, Apelaciono javno tužilaštvo — Апелляционная прокуратура, Vrhovno javno tužilaštvo — Верховная прокуратура, Tužilaštvo za organizovani kriminal — Прокуратура по организованной преступности; tužilaštvo — прокуратура, (javni) tužilac — прокурор (никогда не «обвинительство» и не «обвинитель»).
+- Власть: Vlada — правительство, premijer (predsednik Vlade) — премьер-министр, predsednik — президент, Narodna skupština — Народная скупщина, poslanik — депутат, MUP — МВД, ministar unutrašnjih poslova — министр внутренних дел.
+
+Оформление:
 - Таблоиды набирают часть заголовка капсом. В переводе капса быть не должно, кроме аббревиатур (СНС, ЕС, РИК), — пиши обычным регистром, а выделенную капсом фразу отделяй точкой: «INSTITUCIJE MORAJU DA RADE Brnabić: Skupštinu ću sazvati» → «Институты должны работать. Брнабич: созову Скупщину»; «VUČIĆ: Ne pada mi na pamet» → «Вучич: мне и в голову не приходит».
-- Имена и названия пиши русской кириллицей, как принято в русских СМИ: Bojana Lazić — Бояна Лазич, Ljubiša — Любиша, Vučić — Вучич, Brnabić — Брнабич, Đorđević — Джорджевич, Novi Sad — Нови-Сад, Skupština — Скупщина, SNS — СНС, Studentska lista — «Студенческий список». Названия СМИ (N1, Nova, Informer) и сербские аббревиатуры ведомств (JTOK, VJT, OJT) оставляй латиницей.
-- Названия компаний, банков, спортивных клубов, брендов и заведений — это имена: не переводи их по смыслу, а передавай русскими буквами в кавычках: Poštanska štedionica — «Поштанска штедионица» (а не «Почтовая сберегательная касса»), Crvena zvezda — «Црвена звезда», Zvezda — «Звезда» (а не «Красная звезда»), Alta banka — «Алта банка». Английские названия (Financial Times, Alta Pay Group) оставляй латиницей. Государственные органы и учреждения (Narodna skupština — Народная скупщина, Viši sud — Высший суд, Narodna banka Srbije — Национальный банк Сербии) и партии (Srpska napredna stranka — Сербская прогрессивная партия) переводи, как принято в русских СМИ.
+- Имена и названия пиши русской кириллицей, как принято в русских СМИ: Bojana Lazić — Бояна Лазич, Ljubiša — Любиша, Vučić — Вучич, Brnabić — Брнабич, Đorđević — Джорджевич, Novi Sad — Нови-Сад, Skupština — Скупщина, SNS — СНС, Studentska lista — «Студенческий список». Названия СМИ (N1, Nova, Informer) оставляй латиницей. Если ведомство в оригинале названо полностью, пиши его полное русское название, а не аббревиатуру; сербские аббревиатуры (JTOK, VJT, OJT, BIA) оставляй латиницей, только если в оригинале стоит сама аббревиатура.
+- Названия компаний, банков, спортивных клубов, брендов и заведений — это имена: не переводи их по смыслу, а передавай русскими буквами в кавычках: Poštanska štedionica — «Поштанска штедионица» (а не «Почтовая сберегательная касса»), Crvena zvezda — «Црвена звезда», Zvezda — «Звезда» (а не «Красная звезда»), Alta banka — «Алта банка». Английские названия (Financial Times, Alta Pay Group) оставляй латиницей. Государственные органы, учреждения и партии (Narodna banka Srbije — Национальный банк Сербии, Srpska napredna stranka — Сербская прогрессивная партия) переводи, как принято в русских СМИ.
 - Пометки (FOTO), (VIDEO) переводи как (фото), (видео).
 - Пустой summary оставляй пустым.
 - Верни перевод для каждого id из входа."""
@@ -106,9 +119,17 @@ def skeleton_words(text: str, lowercase_only: bool = False) -> list[str]:
     return [w.lower().translate(SKELETON) for w in words if len(w) >= 3]
 
 
-# glossary.json — названия, которые надо не переводить, а передавать русскими буквами, причём всегда одинаково:
-# {"names": [{"sr": "Poštanska štedionica", "ru": "Поштанска штедионица"}, ...]}. Кандидатов ищет audit_names.py.
+# glossary.json — названия и термины, которые надо всегда переводить одинаково:
+# {"names": [{"sr": "Poštanska štedionica", "ru": "Поштанска штедионица"}, ...]}.
+# Кандидатов ищут audit_names.py (названия, переведённые по смыслу) и audit_terms.py (учреждения, партии, термины).
 GLOSSARY_FILE = Path(__file__).parent / "glossary.json"
+# сербская кириллица → латиница, с диакритикой: чтобы «НИС» совпал с «NIS», а «NIŠ» — нет
+SR_LATIN_UPPER = {
+    "А": "A", "Б": "B", "В": "V", "Г": "G", "Д": "D", "Ђ": "Đ", "Е": "E", "Ж": "Ž", "З": "Z", "И": "I", "Ј": "J",
+    "К": "K", "Л": "L", "Љ": "LJ", "М": "M", "Н": "N", "Њ": "NJ", "О": "O", "П": "P", "Р": "R", "С": "S", "Т": "T",
+    "Ћ": "Ć", "У": "U", "Ф": "F", "Х": "H", "Ц": "C", "Ч": "Č", "Џ": "DŽ", "Ш": "Š",
+}
+SR_LATIN = str.maketrans({**SR_LATIN_UPPER, **{c.lower(): l.lower() for c, l in SR_LATIN_UPPER.items()}})
 
 
 def load_glossary() -> list[dict]:
@@ -119,17 +140,25 @@ def load_glossary() -> list[dict]:
 
 
 def glossary_pattern(name: str) -> re.Pattern:
-    # сербские названия склоняются: «Poštanska štedionica», «Poštanskoj štedionici» — сравниваем по началу слов
+    # сербские названия склоняются: «Poštanska štedionica», «Poštanskoj štedionici» — сравниваем по началу слов,
+    # а окончание — не длиннее падежного, иначе «Novi Beograd» совпадёт с «novembar u Beogradu»
     stems = [w[:max(3, len(w) - 2)] for w in skeleton_words(name)]
-    return re.compile(r"\b" + r"\w*\W+".join(map(re.escape, stems)) + r"\w*")
+    return re.compile(r"\b" + r"\w{0,4}\W+".join(map(re.escape, stems)) + r"\w{0,4}\b")
 
 
-GLOSSARY = [(entry, glossary_pattern(entry["sr"])) for entry in load_glossary()]
+def is_abbreviation(name: str) -> bool:
+    # NIS, CG, BiH — их ищем только целым словом с тем же регистром, иначе «NIS» совпадёт с «Niš» и «nisu»
+    return " " not in name and len(name) <= 5 and sum(c.isupper() for c in name) >= 2
+
+
+GLOSSARY = [(entry, None if is_abbreviation(entry["sr"]) else glossary_pattern(entry["sr"])) for entry in load_glossary()]
 
 
 def glossary_for(item: dict) -> list[dict]:
-    text = " ".join(skeleton_words(item["title"] + " " + item.get("summary", "")))
-    return [entry for entry, pattern in GLOSSARY if pattern.search(text)]
+    raw = item["title"] + " " + item.get("summary", "")
+    words = {w.translate(SR_LATIN) for w in WORDS_RE.findall(raw)}
+    text = " ".join(skeleton_words(raw))
+    return [entry for entry, pattern in GLOSSARY if (entry["sr"] in words if pattern is None else pattern.search(text))]
 
 
 def share_of_original(original: str, translated: str) -> float:
