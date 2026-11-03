@@ -364,6 +364,10 @@ def collect(source: dict, section: dict, previous: dict, skip: set[str]) -> dict
     return result
 
 
+def section_meta(config: dict) -> list[dict]:
+    return [{k: s.get(k, "") for k in ("id", "title", "note", "title_ru", "note_ru")} for s in config["sections"]]
+
+
 def head_tags(lang: str) -> str:
     """<title>, описание, превью для соцсетей и мессенджеров, ссылки между языковыми версиями."""
     page = PAGES[lang]
@@ -471,7 +475,7 @@ def main() -> int:
 
     data = {
         "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "sections": [{k: s.get(k, "") for k in ("id", "title", "note", "title_ru", "note_ru")} for s in config["sections"]],
+        "sections": section_meta(config),
         "sources": results,
         "info": header_info(),
     }
@@ -487,6 +491,8 @@ def main() -> int:
 
 if __name__ == "__main__":
     if "--render-only" in sys.argv:  # пересобрать страницы из site/data.json, без лент и перевода — для правок шаблона
-        write_pages(json.loads(DATA_FILE.read_text("utf-8")))
+        data = json.loads(DATA_FILE.read_text("utf-8"))
+        data["sections"] = section_meta(json.loads(SOURCES.read_text("utf-8")))  # порядок и названия разделов — свежие
+        write_pages(data)
         sys.exit(0)
     sys.exit(main())
