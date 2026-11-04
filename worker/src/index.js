@@ -4,9 +4,12 @@
 // POST /reports {results: [{url, status}]} — от сборки: чем кончилось, отмечаем реакцией на сообщение в Telegram.
 // POST /stats {kinds: {new|retry|review: {items, in, out, usd}}} — от сборки: сколько она потратила на перевод.
 //   Копим в ключе KV "stats": итоги по дням навсегда и каждую сборку за последние две недели.
-// POST /untranslated {items: [{url, source, title, summary, reason, attempt}]} — от сборки: новости, которые модель
+// POST /untranslated {items: [{url, source, title, summary, reason, attempt, attempt_summary}]} — от сборки: новости, которые модель
 //   не перевела и с подсказкой (обычно мешает название — его стоит добавить в glossary.json). Присылаем в Telegram
 //   одним сообщением, каждую новость один раз: сборка шлёт их снова, пока они в ленте.
+// POST /telegram — webhook бота: строки «Air Serbia = Air Serbia» или «удалить Air Serbia» из нашего чата
+//   worker коммитит в glossary.json на GitHub (секрет GITHUB_TOKEN), а коммит запускает сборку.
+//   Webhook worker подключает сам при первой сборке после выкатки (см. ensureWebhook).
 // GET /costs — страница с этой статистикой, GET /stats — сами данные для неё (с ключом STATS_KEY).
 //   Ключ страница берёт из адреса после # — эта часть не уходит ни на сервер, ни в Referer.
 // Оригинал и перевод берём не из запроса, а из опубликованного data.json: так пожаловаться можно
@@ -27,6 +30,15 @@ const KINDS = ["new", "retry", "review"];
 const BUILDS_DAYS = 14;
 const UNTRANSLATED_MAX = 10;  // за одну сборку — чтобы сообщение влезло в лимит Telegram
 const UNTRANSLATED_SECONDS = 4 * 24 * 3600;  // дольше, чем новость держится в ленте
+const REPO = "brainydamage/serbia-news";
+const GLOSSARY_PATH = "glossary.json";
+// поменять, если изменятся настройки webhook, — worker подключит его заново
+const WEBHOOK_VERSION = "1";
+const GLOSSARY_HELP = [
+  "Чтобы добавить название в глоссарий, напиши строку «как в оригинале = как по-русски», можно несколько строк:",
+  "Air Serbia = Air Serbia", "Republika Srpska = Республика Сербская", "",
+  "Убрать: «удалить Air Serbia». Новости с этим названием переведутся заново в ближайшей сборке.",
+].join("\n");
 
 export default {
   async fetch(request, env, ctx) {
@@ -45,6 +57,7 @@ export default {
       for (const [k, v] of Object.entries(cors)) response.headers.set(k, v);
       return response;
     }
+    if (pathname === "/telegram" && request.method === "POST") return telegramUpdate(request, env);
     if (pathname === "/costs" && request.method === "GET") {
       return new Response(COSTS_PAGE, { headers: { "Content-Type": "text/html; charset=utf-8", "X-Robots-Tag": "noindex" } });
     }
@@ -55,7 +68,11 @@ export default {
     if (["/reports", "/stats", "/untranslated"].includes(pathname) && !authorized(request, env.REPORTS_TOKEN)) return json({ error: "unauthorized" }, 401);
     if (pathname === "/reports" && request.method === "GET") return list(env);
     if (pathname === "/reports" && request.method === "POST") return resolve(request, env);
-    if (pathname === "/stats" && request.method === "POST") return stats(request, env);
+    if (pathname === "/stats" && request.method === "POST") {
+      // сборка приходит сюда каждые 15 минут — заодно проверяем, что webhook бота подключён
+      ctx.waitUntil(ensureWebhook(env, new URL(request.url).origin));
+      return stats(request, env);
+    }
     if (pathname === "/untranslated" && request.method === "POST") return untranslated(request, env);
     return json({ error: "not found" }, 404);
   },
@@ -180,7 +197,9 @@ async function untranslated(request, env) {
   const blocks = fresh.map(({ item }) => {
     const lines = [`${cut(item.source)}: ${cut(item.title)}`];
     if (item.summary) lines.push(`Подводка: ${cut(item.summary)}`);
-    lines.push(`Модель: ${cut(item.attempt)}`, `Причина: ${cut(item.reason)}`, cut(item.url));
+    lines.push(`Модель: ${cut(item.attempt)}`);
+    if (item.attempt_summary) lines.push(`Модель, подводка: ${cut(item.attempt_summary)}`);
+    lines.push(`Причина: ${cut(item.reason)}`, cut(item.url));
     return lines.join("\n");
   });
   const message = await notify(env, [`⚠️ Не перевелось: ${fresh.length}`, ...blocks].join("\n\n"));
@@ -189,6 +208,99 @@ async function untranslated(request, env) {
     await Promise.all(fresh.map(({ key }) => env.REPORTS.put(key, "1", { expirationTtl: UNTRANSLATED_SECONDS })));
   }
   return json({ ok: true, new: fresh.length, sent: Boolean(message) });
+}
+
+// секретная метка webhook: Telegram ставит её в заголовок каждого запроса, так чужой не притворится Telegram.
+// Выводим её из токена бота, чтобы не заводить ещё один секрет
+async function webhookSecret(env) {
+  return env.TELEGRAM_TOKEN ? sha1("webhook:" + env.TELEGRAM_TOKEN) : null;
+}
+
+async function ensureWebhook(env, origin) {
+  if (!env.TELEGRAM_TOKEN || (await env.REPORTS.get("webhook")) === WEBHOOK_VERSION) return;
+  const done = await telegram(env, "setWebhook", {
+    url: `${origin}/telegram`, secret_token: await webhookSecret(env), allowed_updates: ["message"],
+  });
+  if (done) await env.REPORTS.put("webhook", WEBHOOK_VERSION);
+}
+
+// ответ Telegram всегда 200: на ошибку он стал бы присылать то же сообщение снова и снова
+async function telegramUpdate(request, env) {
+  const secret = await webhookSecret(env);
+  if (!secret || request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== secret) return json({ error: "unauthorized" }, 401);
+  const message = (await request.json()).message;
+  if (!message?.text || String(message.chat?.id) !== String(env.TELEGRAM_CHAT_ID)) return json({ ok: true });
+  const reply = text => telegram(env, "sendMessage", { text, reply_parameters: { message_id: message.message_id } });
+
+  const changes = [];
+  for (const line of message.text.split("\n").map(l => l.trim()).filter(Boolean)) {
+    const remove = line.match(/^удалить\s+(.+)$/i);
+    const pair = line.match(/^(.+?)\s*(?:=|→)\s*(.+)$/);
+    if (remove) changes.push({ sr: remove[1].trim() });
+    else if (pair && pair[1].length <= 100 && pair[2].length <= 100) changes.push({ sr: pair[1].trim(), ru: pair[2].trim() });
+    else {
+      await reply(GLOSSARY_HELP);
+      return json({ ok: true });
+    }
+  }
+  try {
+    await reply(await editGlossary(env, changes));
+  } catch (error) {
+    await reply(`Не получилось: ${error.message}`.slice(0, 1000));
+  }
+  return json({ ok: true });
+}
+
+// glossary.json — по записи на строку, как его пишем руками; дописываем в конец, существующую — правим на месте
+async function editGlossary(env, changes) {
+  if (!env.GITHUB_TOKEN) throw new Error("у worker нет секрета GITHUB_TOKEN");
+  const api = `${env.GITHUB_API || "https://api.github.com"}/repos/${REPO}/contents/${GLOSSARY_PATH}`;
+  const headers = {
+    Authorization: `Bearer ${env.GITHUB_TOKEN}`, Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "vestomat-bot", "Content-Type": "application/json",
+  };
+  // если файл успели поменять между чтением и записью, GitHub ответит 409 — читаем заново
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const file = await fetch(`${api}?ref=main`, { headers });
+    if (!file.ok) throw new Error(`GitHub не отдал ${GLOSSARY_PATH}: ${file.status}`);
+    const { content, sha } = await file.json();
+    const names = JSON.parse(fromBase64(content)).names;
+    const done = [];
+    for (const change of changes) {
+      const at = names.findIndex(e => e.sr.toLowerCase() === change.sr.toLowerCase());
+      if (!change.ru) {
+        if (at < 0) done.push(`«${change.sr}» в глоссарии нет`);
+        else done.push(`− ${names.splice(at, 1)[0].sr}`);
+      } else if (at < 0) {
+        names.push({ sr: change.sr, ru: change.ru });
+        done.push(`+ ${change.sr} → ${change.ru}`);
+      } else if (names[at].ru !== change.ru) {
+        done.push(`✎ ${names[at].sr} → ${change.ru} (было: ${names[at].ru})`);
+        names[at] = { sr: names[at].sr, ru: change.ru };
+      } else done.push(`= ${change.sr} → ${change.ru} уже есть`);
+    }
+    const changed = done.filter(d => /^[+−✎]/.test(d));
+    if (!changed.length) return done.join("\n");
+    const text = `{\n  "names": [\n${names.map(e => `    {"sr": ${JSON.stringify(e.sr)}, "ru": ${JSON.stringify(e.ru)}}`).join(",\n")}\n  ]\n}\n`;
+    const saved = await fetch(api, {
+      method: "PUT", headers,
+      body: JSON.stringify({ message: `Glossary from Telegram: ${changed.join(", ")}`.slice(0, 200), content: toBase64(text), sha, branch: "main" }),
+    });
+    if (saved.status === 409) continue;
+    if (!saved.ok) throw new Error(`GitHub не сохранил ${GLOSSARY_PATH}: ${saved.status}`);
+    return [...done, "", "Новости с этими названиями переведутся заново в ближайшей сборке, минуты через 3."].join("\n");
+  }
+  throw new Error("glossary.json всё время меняется, попробуй ещё раз");
+}
+
+function fromBase64(text) {
+  return new TextDecoder().decode(Uint8Array.from(atob(text.replace(/\s/g, "")), c => c.charCodeAt(0)));
+}
+
+function toBase64(text) {
+  let binary = "";
+  for (const byte of new TextEncoder().encode(text)) binary += String.fromCharCode(byte);
+  return btoa(binary);
 }
 
 // время по Белграду строкой «2026-11-03 20:21:06» — такие строки сравниваются как даты
@@ -214,7 +326,7 @@ async function findItem(url, dataUrl) {
 
 async function telegram(env, method, payload) {
   if (!env.TELEGRAM_TOKEN || !env.TELEGRAM_CHAT_ID) return null;
-  const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_TOKEN}/${method}`, {
+  const response = await fetch(`${env.TELEGRAM_API || "https://api.telegram.org"}/bot${env.TELEGRAM_TOKEN}/${method}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, ...payload }),

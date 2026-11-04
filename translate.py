@@ -328,8 +328,8 @@ def load_cache() -> dict:
 
 def translate_batch(client, batch: list[tuple[str, dict]], kind: str = "new", strict: bool = True,
                                     rejected: dict | None = None) -> dict:
-    """Переводы, прошедшие проверку. rejected — что отбраковали в прошлых попытках: ключ → {"reason", "attempt"}
-    (причина и отбракованный заголовок); причины уходят модели подсказкой, сюда же пишутся отбракованные в этой."""
+    """Переводы, прошедшие проверку. rejected — что отбраковали в прошлых попытках: ключ → {"reason", "attempt", "attempt_summary"}
+    (причина и отбракованный перевод); причины уходят модели подсказкой, сюда же пишутся отбракованные в этой."""
     model, effort = KINDS[kind]
     # модели даём короткие номера, а не хэши: длинные id она иногда переписывает с ошибкой
     payload = [{"id": str(n), "title": item["title"], "summary": item.get("summary", "")} for n, (_, item) in enumerate(batch)]
@@ -364,7 +364,7 @@ def translate_batch(client, batch: list[tuple[str, dict]], kind: str = "new", st
         if reason is None:
             out[key] = {k: fix_caps(russify(fix_abbreviations(t[k]))) for k in ("title", "summary")}
         elif rejected is not None:
-            rejected[key] = {"reason": reason, "attempt": t["title"]}
+            rejected[key] = {"reason": reason, "attempt": t["title"], "attempt_summary": t["summary"]}
     return out
 
 

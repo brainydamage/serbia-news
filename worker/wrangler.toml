@@ -2,6 +2,8 @@
 # TELEGRAM_TOKEN, TELEGRAM_CHAT_ID — куда присылать жалобы; REPORTS_TOKEN — пароль для сборки
 # (тот же, что в секрете репозитория REPORTS_TOKEN на GitHub).
 # STATS_KEY — ключ страницы расходов /costs (в её адресе после #).
+# GITHUB_TOKEN — fine-grained токен GitHub (только serbia-news, Contents: Read and write): им бот коммитит glossary.json.
+# GITHUB_API, TELEGRAM_API — только для локальной проверки с заглушками, в бою не задаются.
 name = "vestomat-reports"
 main = "src/index.js"
 compatibility_date = "2026-10-01"
