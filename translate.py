@@ -101,6 +101,20 @@ def text_key(item: dict) -> str:
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
+# метка прямой трансляции в начале заголовка: «UŽIVO Vučić: …», «(UŽIVO) ČLANOVI REM…».
+# Модель передаёт её как попало («ВЖИВУЮ», «В прямом эфире»), поэтому переводим заголовок без неё,
+# а «ОНЛАЙН» ставим сами. «Uživo» с заглавной — метка, только если за ним скобка или знак: «Uživo prenos» — нет
+LIVE_TAG = re.compile(r"\W*(UŽIVO|UZIVO|УЖИВО|Uživo|Уживо)(?!\w)(\W*)")
+
+
+def split_live(title: str) -> tuple[str, str]:
+    """«(UŽIVO) ČLANOVI REM» → («(ОНЛАЙН) », «ČLANOVI REM»); без метки — («», title)."""
+    m = LIVE_TAG.match(title)
+    if not m or not title[m.end():] or (m.group(1)[1:].islower() and not m.group(2).strip()):
+        return "", title
+    return title[:m.end()].replace(m.group(1), "ОНЛАЙН").rstrip() + " ", title[m.end():]
+
+
 SERBIAN_ONLY_LETTERS = re.compile("[ђћџљњјЂЋЏЉЊЈ]")
 # Сербский и русский пишем одной «скелетной» латиницей без диакритики, чтобы сравнивать слова
 SKELETON = str.maketrans({
@@ -418,8 +432,9 @@ def attach_translations(sources: list[dict]) -> None:
     for src in sources:
         for item in src["items"]:
             if item.get("lang", src["lang"]) != "ru":
-                key = text_key(item)
-                todo[key] = item
+                bare = {**item, "title": split_live(item["title"])[1]}
+                key = text_key(bare)
+                todo[key] = bare
                 copies.setdefault(key, []).append(item)
 
     cache = load_cache()
@@ -502,6 +517,7 @@ def attach_translations(sources: list[dict]) -> None:
         for item in items:
             if key in cache:
                 item["ru"] = {k: cache[key][k] for k in ("title", "summary")}
+                item["ru"]["title"] = split_live(item["title"])[0] + item["ru"]["title"]
             else:
                 item.pop("ru", None)  # мог остаться в данных прошлой сборки
 
