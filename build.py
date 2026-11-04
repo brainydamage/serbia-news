@@ -249,6 +249,8 @@ def tidy_google_news(items: list[dict]) -> list[dict]:
     return [item for item in items if not item["title"].startswith("- ")]
 
 
+SECTION_PAGE_RE = re.compile(r"^(Kategorija|Rubrika|Autor|Tag|Arhiva)\b|\d{1,2}\.\d{1,2}\.\d{4}\.?$|^[\w ]{1,20} vesti$", re.I)
+
 TRENDS_NS = "{https://trends.google.com/trending/rss}"
 TRAFFIC_RE = re.compile(r"\D")
 
@@ -404,8 +406,9 @@ def collect(source: dict, section: dict, previous: dict, skip: set[str]) -> dict
             items = tidy_google_news(items)
             if "site:" in source["feed"]:
                 # лента одного сайта через Google News (у 021.rs, RTV и др. своей RSS нет): издание и так в заголовке
-                # карточки, а заголовки из одного-двух слов — это страницы рубрик («Srem», «Kategorija Hronika»)
-                items = [i for i in items if len(i["title"].split()) >= 3]
+                # карточки, а заголовки из одного-двух слов — это страницы рубрик («Srem», «Kategorija Hronika»),
+                # как и страницы авторов, архивы по дням и «Novi Sad vesti»
+                items = [i for i in items if len(i["title"].split()) >= 3 and not SECTION_PAGE_RE.search(i["title"])]
                 for item in items:
                     item.pop("via", None)
         if not items:
@@ -436,7 +439,35 @@ def collect(source: dict, section: dict, previous: dict, skip: set[str]) -> dict
 
 
 def section_meta(config: dict) -> list[dict]:
-    return [{k: s.get(k, "") for k in ("id", "title", "note", "title_ru", "note_ru")} for s in config["sections"]]
+    meta = []
+    for sec in config["sections"]:
+        entry = {k: sec.get(k, "") for k in ("id", "title", "note", "title_ru", "note_ru")}
+        if "groups" in sec:
+            # «groups» — несколько изданий в одной общей карточке (региональные: карточка на регион)
+            names = {src["name"] for src in sec["sources"]}
+            unknown = [name for group in sec["groups"] for name in group["sources"] if name not in names]
+            if unknown:
+                raise ValueError(f"в groups раздела {sec['id']} нет таких изданий: {unknown}")
+            entry["groups"] = sec["groups"]
+        meta.append(entry)
+    return meta
+
+
+def cards_of(sec: dict, sources: list[dict]) -> list[tuple[str | dict, str | None, list[dict]]]:
+    """Карточки раздела как (издание или группа, сайт, новости): издание — своя карточка, группа — одна общая,
+    новости в ней вперемешку по времени. Карточка группы стоит там, где первое её издание."""
+    group_of = {name: group for group in sec.get("groups", []) for name in group["sources"]}
+    cards, done = [], set()
+    for src in sources:
+        group = group_of.get(src["name"])
+        if not group:
+            cards.append((src["name"], src["site"], src["items"]))
+        elif group["title"] not in done:
+            done.add(group["title"])
+            items = [i for s in sources if s["name"] in group["sources"] for i in s["items"]]
+            items.sort(key=lambda i: i["date"] or "", reverse=True)
+            cards.append((group, None, items))
+    return cards
 
 
 def head_tags(lang: str) -> str:
@@ -476,16 +507,20 @@ def prerender(data: dict, lang: str) -> str:
     out = []
     for sec in data["sections"]:
         cards = []
-        for src in (s for s in data["sources"] if s["section"] == sec["id"] and s["items"]):
+        for name, site, items in cards_of(sec, [s for s in data["sources"] if s["section"] == sec["id"] and s["items"]]):
+            if isinstance(name, dict):  # группа изданий
+                name = (name.get("title_ru") if ru else None) or name["title"]
             rows = []
-            for item in src["items"][:CARD_LIMIT]:
+            for item in items[:CARD_LIMIT]:
                 title = item["ru"]["title"] if ru and item.get("ru") else item["title"]
                 rows.append(f'<li class="item"><div class="row"><span class="time"></span>'
                             f'<a class="head" href="{e(item["url"])}" target="_blank" rel="noopener">{e(title)}</a></div></li>')
+            heading = (f'<a class="card-name" href="{e(site)}" target="_blank" rel="noopener">{e(name)}</a>' if site
+                       else f'<span class="card-name">{e(name)}</span>')
             cards.append(
                 f'<article class="card"><div class="card-head">'
-                f'<span class="avatar" style="background:var(--c-{sec["id"]})">{e(src["name"][:1])}</span>'
-                f'<div><a href="{e(src["site"])}" target="_blank" rel="noopener">{e(src["name"])}</a></div></div>'
+                f'<span class="avatar" style="background:var(--c-{sec["id"]})">{e(name[:1])}</span>'
+                f'<div>{heading}</div></div>'
                 f'<ul class="items">{"".join(rows)}</ul></article>'
             )
         if not cards:

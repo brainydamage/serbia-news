@@ -56,6 +56,22 @@
       ]
     },
     {
+      "id": "progov",
+      "title": "Bliski SNS-u",
+      "title_ru": "Близкие к SNS",
+      "note": "Tabloidi, TV Pink, portal B92 i Večernje novosti", "note_ru": "Таблоиды, телеканал Pink, портал B92 и «Вечерние новости»",
+      "sources": [
+        {"name": "Informer", "site": "https://www.informer.rs", "feed": "https://www.informer.rs/rss/politika"},
+        {"name": "Novosti", "site": "https://www.novosti.rs", "feed": "https://www.novosti.rs/rss/vesti"},
+        {"name": "Alo", "site": "https://www.alo.rs", "feed": "https://www.alo.rs/rss.html", "exclude": ["/vip/", "/razonoda/"]},
+        {"name": "Kurir", "site": "https://www.kurir.rs", "feed": "https://www.kurir.rs/rss/vesti/politika", "note": "rubrika „Politika“", "note_ru": "раздел «Политика»"},
+        {"name": "Pink", "site": "https://pink.rs", "feed": "https://pink.rs/rss-feed", "exclude": ["/zadruga/", "/showbiz/", "/pop-kultura/"]},
+        {"name": "B92", "site": "https://www.b92.net", "feed": "https://www.b92.net/info/rss/vesti.xml"},
+        {"name": "Espreso", "site": "https://www.espreso.co.rs", "feed": "https://www.espreso.co.rs/rss", "exclude": ["/showbiz/", "/lifestyle/"]},
+        {"name": "Srbija Danas", "site": "https://www.srbijadanas.com", "feed": "https://www.srbijadanas.com/rss.xml", "exclude": ["/sport/", "/vip/", "/zena/"]}
+      ]
+    },
+    {
       "id": "economy",
       "title": "Ekonomija",
       "title_ru": "Экономика",
@@ -63,19 +79,6 @@
       "sources": [
         {"name": "Nova ekonomija", "site": "https://novaekonomija.rs", "feed": "https://novaekonomija.rs/feed", "exclude": ["/lepsi-zivot/"]},
         {"name": "Biznis.rs", "site": "https://biznis.rs", "feed": "https://biznis.rs/feed/"}
-      ]
-    },
-    {
-      "id": "foreign-sr",
-      "title": "Strani mediji na srpskom",
-      "title_ru": "Иностранные на сербском",
-      "note": "Redakcije stranih medija na srpskom i jezicima regiona", "note_ru": "Редакции зарубежных СМИ на сербском и языках региона",
-      "sources": [
-        {"name": "Slobodna Evropa", "site": "https://www.slobodnaevropa.org", "feed": "https://www.slobodnaevropa.org/api/", "note": "RFE/RL, SAD", "note_ru": "RFE/RL, США"},
-        {"name": "BBC na srpskom", "site": "https://www.bbc.com/serbian/lat", "feed": "https://feeds.bbci.co.uk/serbian/lat/rss.xml", "note": "Velika Britanija", "note_ru": "Великобритания"},
-        {"name": "DW na srpskom", "site": "https://www.dw.com/sr", "feed": "https://rss.dw.com/rdf/rss-ser-all", "note": "Nemačka", "note_ru": "Германия"},
-        {"name": "Sputnik Srbija", "site": "https://sputnikportal.rs", "feed": "https://sputnikportal.rs/export/rss2/archive/index.xml", "note": "Rusija, državni medij", "note_ru": "Россия, госСМИ"},
-        {"name": "Al Jazeera Balkans", "site": "https://balkans.aljazeera.net", "feed": "https://balkans.aljazeera.net/rss.xml", "note": "Katar, redakcija u Sarajevu", "note_ru": "Катар, редакция в Сараеве"}
       ]
     },
     {
@@ -90,19 +93,14 @@
       ]
     },
     {
-      "id": "progov",
-      "title": "Bliski SNS-u",
-      "title_ru": "Близкие к SNS",
-      "note": "Tabloidi, TV Pink, portal B92 i Večernje novosti", "note_ru": "Таблоиды, телеканал Pink, портал B92 и «Вечерние новости»",
+      "id": "foreign-sr",
+      "title": "Strani mediji na srpskom",
+      "title_ru": "Иностранные на сербском",
+      "note": "Srpske redakcije stranih medija", "note_ru": "Сербские редакции зарубежных СМИ",
       "sources": [
-        {"name": "Informer", "site": "https://www.informer.rs", "feed": "https://www.informer.rs/rss/politika"},
-        {"name": "Novosti", "site": "https://www.novosti.rs", "feed": "https://www.novosti.rs/rss/vesti"},
-        {"name": "Alo", "site": "https://www.alo.rs", "feed": "https://www.alo.rs/rss.html", "exclude": ["/vip/", "/razonoda/"]},
-        {"name": "Kurir", "site": "https://www.kurir.rs", "feed": "https://www.kurir.rs/rss/vesti/politika", "note": "rubrika „Politika“", "note_ru": "раздел «Политика»"},
-        {"name": "Pink", "site": "https://pink.rs", "feed": "https://pink.rs/rss-feed", "exclude": ["/zadruga/", "/showbiz/", "/pop-kultura/"]},
-        {"name": "B92", "site": "https://www.b92.net", "feed": "https://www.b92.net/info/rss/vesti.xml"},
-        {"name": "Espreso", "site": "https://www.espreso.co.rs", "feed": "https://www.espreso.co.rs/rss", "exclude": ["/showbiz/", "/lifestyle/"]},
-        {"name": "Srbija Danas", "site": "https://www.srbijadanas.com", "feed": "https://www.srbijadanas.com/rss.xml", "exclude": ["/sport/", "/vip/", "/zena/"]}
+        {"name": "Slobodna Evropa", "site": "https://www.slobodnaevropa.org", "feed": "https://www.slobodnaevropa.org/api/", "note": "RFE/RL, SAD", "note_ru": "RFE/RL, США"},
+        {"name": "BBC na srpskom", "site": "https://www.bbc.com/serbian/lat", "feed": "https://feeds.bbci.co.uk/serbian/lat/rss.xml", "note": "Velika Britanija", "note_ru": "Великобритания"},
+        {"name": "Sputnik Srbija", "site": "https://sputnikportal.rs", "feed": "https://sputnikportal.rs/export/rss2/archive/index.xml", "note": "Rusija, državni medij", "note_ru": "Россия, госСМИ"}
       ]
     },
     {
@@ -132,6 +130,14 @@
       "title": "Regionalni",
       "title_ru": "Региональные",
       "note": "Lokalni mediji iz cele Srbije", "note_ru": "Местные СМИ со всей Сербии",
+      "groups": [
+        {"title": "Vojvodina", "title_ru": "Воеводина", "sources": ["021.rs", "RTV", "Autonomija", "Subotica.com", "Zrenjaninski", "Pančevac", "Somborske novine"]},
+        {"title": "Centralna Srbija", "title_ru": "Центр Сербии", "sources": ["Kragujevačke", "InfoKG", "Kruševac Grad"]},
+        {"title": "Zapadna Srbija", "title_ru": "Запад Сербии", "sources": ["Ozon press", "Podrinske", "Kolubarske"]},
+        {"title": "Jug i istok Srbije", "title_ru": "Юг и восток Сербии", "sources": ["Južne vesti", "Niške vesti", "JUGpress", "Pirotske vesti", "RTV Bor"]},
+        {"title": "Sandžak", "title_ru": "Санджак", "sources": ["Sandžak press"]},
+        {"title": "Kosovo", "title_ru": "Косово", "sources": ["KoSSev", "Kosovo Online"]}
+      ],
       "sources": [
         {"name": "021.rs", "site": "https://www.021.rs", "feed": "https://news.google.com/rss/search?hl=sr&gl=RS&ceid=RS:sr&q=site:021.rs+when:2d", "note": "Novi Sad", "note_ru": "Нови-Сад"},
         {"name": "RTV", "site": "https://www.rtv.rs/sr_lat", "feed": "https://news.google.com/rss/search?hl=sr&gl=RS&ceid=RS:sr&q=site:rtv.rs+-site:media.rtv.rs+when:2d", "note": "javni servis Vojvodine", "note_ru": "общественный вещатель Воеводины"},

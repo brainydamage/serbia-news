@@ -149,10 +149,12 @@ main { max-width: 1300px; margin: 0 auto; padding: 0 0 40px; }
   display: grid; place-items: center; color: #fff; font-weight: 900; font-size: 16px;
 }
 .avatar img { position: absolute; inset: 0; width: 100%; height: 100%; background: var(--bg); }
-.card-head a { text-decoration: none; font-weight: 700; font-size: 20.8px; line-height: 1.2; }
-.card-head a:hover { color: var(--hover); }
+.card-name { text-decoration: none; font-weight: 700; font-size: 20.8px; line-height: 1.2; }
+a.card-name:hover { color: var(--hover); }
 .card-meta { color: var(--muted); font-size: 11.2px; margin-top: 2px; }
 .card-meta .warn { color: #d97706; }
+.card-meta a { color: inherit; text-decoration: none; }
+.card-meta a:hover { color: var(--hover); }
 
 .items { list-style: none; margin: 0; padding: 0; }
 .row { display: flex; gap: 10px; margin-bottom: 8px; }
@@ -271,7 +273,7 @@ footer a { color: var(--text); }
   .section-head p { font-size: 13px; }
   .card { padding: 22px 16px 0; }
   .card-head { margin-bottom: 10px; }
-  .card-head a { font-size: 18px; }
+  .card-name { font-size: 18px; }
   .feed { padding: 0 16px; }
   .feed .day { font-size: 18px; margin: 28px 0 14px; padding-bottom: 8px; }
   .topline { padding: 8px 16px 0; text-align: left; font-size: 12px; }
@@ -655,9 +657,11 @@ function openReport(item) {
   if (HOVER) send.focus();
 }
 
-function renderItem(item, src, { showSource = false } = {}) {
+// showVia — подписать издание у новости (в общей карточке региона)
+function renderItem(item, src, { showSource = false, showVia = false } = {}) {
   const fresh = item.date && now - new Date(item.date) < FRESH_MS;
   const v = textOf(item, src);
+  const via = item.via || (showVia ? src.name : null);
   const summary = summaryOf(item, src);
   const li = h("li", { class: "item" + (state.read.has(item.url) ? " read" : ""), lang: v.lang });
 
@@ -665,7 +669,7 @@ function renderItem(item, src, { showSource = false } = {}) {
   const reportable = REPORT_URL && v.translated;
   const details = () => h("div", { class: "details" }, summary,
     h("div", { class: "details-actions" },
-      h("a", { class: "read-link", href: item.url, target: "_blank", rel: "noopener", onclick: opened }, `${t("readOn")} ${item.via || src.name} ↗`),
+      h("a", { class: "read-link", href: item.url, target: "_blank", rel: "noopener", onclick: opened }, `${t("readOn")} ${via || src.name} ↗`),
       reportable ? h("button", { class: "flag-link", type: "button", onclick: () => openReport(item) }, t("report")) : null));
   const toggle = () => {
     const top = li.getBoundingClientRect().top;
@@ -694,7 +698,7 @@ function renderItem(item, src, { showSource = false } = {}) {
     onauxclick: e => { if (e.button === 1) opened(); } },  // только колёсико: правая кнопка — это меню, а не открытие
     showSource ? h("span", { class: "src" }, h("span", { class: "dot", style: `background:var(--c-${src.section})` }), src.name) : null,
     script(v.title, v.lang),
-    item.via ? h("span", { class: "via" }, "— " + item.via) : null,
+    via ? h("span", { class: "via" }, "— " + via) : null,
     item.traffic ? h("span", { class: "traffic" }, `· ${item.traffic} ${t("searches")}`) : null,
   );
   if (HOVER && summary.length) {
@@ -722,7 +726,16 @@ function renderSources() {
   const out = [];
   for (const sec of DATA.sections) {
     const cards = [];
-    for (const src of DATA.sources.filter(s => s.section === sec.id)) {
+    const groupOf = new Map((sec.groups || []).flatMap(g => g.sources.map(name => [name, g])));
+    const sources = DATA.sources.filter(s => s.section === sec.id);
+    const done = new Set();
+    for (const src of sources) {
+      const group = groupOf.get(src.name);
+      if (group) {
+        if (!done.has(group)) cards.push(renderGroup(group, sources.filter(s => group.sources.includes(s.name)), sec));
+        done.add(group);
+        continue;
+      }
       const items = src.items.filter(matches);
       if ((state.q || !src.error) && !items.length) continue;  // пустая лента без ошибки — Reddit ещё ждёт очереди
       const expanded = state.expandedCards.has(src.feed) || state.q;
@@ -732,7 +745,7 @@ function renderSources() {
           h("span", { class: "avatar", style: `background:var(--c-${src.section})` }, src.name[0],
             h("img", { src: favicon(src.site), alt: "", loading: "lazy", onerror: e => e.target.remove() })),
           h("div", {},
-            h("a", { href: src.site, target: "_blank", rel: "noopener" }, src.name),
+            h("a", { class: "card-name", href: src.site, target: "_blank", rel: "noopener" }, src.name),
             h("div", { class: "card-meta" },
               [label(src, "note"), t("lastPost")].filter(Boolean).join(" · ") + " ",
               h("span", { "data-ago": latest(src) || "" }, ago(latest(src))),
@@ -747,16 +760,43 @@ function renderSources() {
       );
       cards.push(card);
     }
-    if (!cards.length) continue;
+    const shownCards = cards.filter(Boolean);
+    if (!shownCards.length) continue;
     out.push(h("section", { class: "section", "data-id": sec.id },
       h("div", { class: "section-head" },
         h("h2", {}, h("span", { class: "dot", style: `background:var(--c-${sec.id})` }), label(sec, "title")),
         h("p", {}, label(sec, "note")),
       ),
-      h("div", { class: "grid" }, cards),
+      h("div", { class: "grid" }, shownCards),
     ));
   }
   return out.length ? out : [h("p", { class: "empty" }, t("nothing"))];
+}
+
+// несколько изданий одного региона — одна карточка, новости вперемешку по времени, у каждой подписано издание
+function renderGroup(group, sources, sec) {
+  const items = sources.flatMap(src => src.items.filter(matches).map(item => [item, src]))
+    .sort((a, b) => (b[0].date || "").localeCompare(a[0].date || ""));
+  if (!items.length) return null;
+  const key = "group:" + group.title;
+  const shown = state.expandedCards.has(key) || state.q ? items : items.slice(0, CARD_LIMIT);
+  const last = latest({ items: items.map(([item]) => item) });
+  const outlets = sources.flatMap((src, i) => [i ? " · " : "",
+    h("a", { href: src.site, target: "_blank", rel: "noopener", class: src.error ? "warn" : null,
+      title: [label(src, "note"), src.error ? t(src.stale ? "stale" : "down") : ""].filter(Boolean).join(" · ") }, src.name)]);
+  return h("article", { class: "card" },
+    h("div", { class: "card-head" },
+      h("span", { class: "avatar", style: `background:var(--c-${sec.id})` }, label(group, "title")[0]),
+      h("div", {},
+        h("span", { class: "card-name" }, label(group, "title")),
+        h("div", { class: "card-meta" }, ...outlets, ` · ${t("lastPost")} `, h("span", { "data-ago": last || "" }, ago(last))),
+      ),
+    ),
+    h("ul", { class: "items" }, shown.map(([item, src]) => renderItem(item, src, { showVia: true }))),
+    items.length > shown.length
+      ? h("button", { class: "more", onclick: () => { state.expandedCards.add(key); render(); } }, `${t("more")} ${items.length - shown.length}`)
+      : null,
+  );
 }
 
 function renderFeed() {
