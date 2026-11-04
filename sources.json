@@ -51,7 +51,7 @@
       "sources": [
         {"name": "Blic", "site": "https://www.blic.rs", "feed": "https://www.blic.rs/rss/Vesti/Politika", "note": "rubrika „Politika“", "note_ru": "раздел «Политика»"},
         {"name": "Politika", "site": "https://www.politika.rs", "feed": "https://www.politika.rs/rss"},
-        {"name": "Telegraf", "site": "https://www.telegraf.rs", "feed": "https://www.telegraf.rs/rss", "exclude": ["/jetset/", "/dom-i-dekor/"]},
+        {"name": "Telegraf", "site": "https://www.telegraf.rs", "feed": "https://www.telegraf.rs/rss", "exclude": ["/jetset/", "/dom-i-dekor/"], "rewrite": ["^https://www\\.telegraf\\.rs/(\\d+-)", "https://politika.telegraf.rs/\\1"]},
         {"name": "Dnevnik", "site": "https://www.dnevnik.rs", "feed": "https://www.dnevnik.rs/rss.xml", "note": "Novi Sad", "note_ru": "Нови-Сад"}
       ]
     },

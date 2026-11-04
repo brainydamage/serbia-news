@@ -442,6 +442,12 @@ def collect(source: dict, section: dict, previous: dict, skip: set[str]) -> dict
     try:
         data = fetch(source["feed"])
         items = parse_trends(data) if "trends.google.com" in source["feed"] else parse_feed(data)
+        # «rewrite» в sources.json — [шаблон, замена] для адресов, которые лента отдаёт битыми
+        # (Telegraf пишет материалы с politika.telegraf.rs как www.telegraf.rs/<номер>-… — там 404)
+        if source.get("rewrite"):
+            pattern, repl = source["rewrite"]
+            for i in items:
+                i["url"] = re.sub(pattern, repl, i["url"])
         # «exclude» в sources.json — куски адресов разделов, которые не нужны: шоу-бизнес, реалити, анонсы эфиров
         exclude = source.get("exclude", [])
         items = [i for i in items if not any(part in i["url"] for part in exclude)]
