@@ -137,9 +137,9 @@ def parse_date(value: str):
 TAG_RE = re.compile(r"<[^>]+>")
 UNCLOSED_TAG_RE = re.compile(r"<[a-zA-Z/][^>]*$")
 SPACE_RE = re.compile(r"\s+")
-# WordPress-хвосты вида «The post ... appeared first on ...», «[…]», «[...] Source», «… Read more →»,
+# WordPress-хвосты вида «The post ... appeared first on ...» (или «first appeared on»), «[…]», «[...] Source», «… Read more →»,
 # подпись Reddit «submitted by /u/... [comments]»; их бывает несколько подряд, поэтому снимаем по одному
-TAIL_RE = re.compile(r"(The post .*? appeared first on .*|\[(…|&hellip;|\.\.\.)\]|(?<=\])\s*Source|Read more\s*→?|Continue reading.*"
+TAIL_RE = re.compile(r"(The post .*? (appeared first|first appeared) on .*|\[(…|&hellip;|\.\.\.)\]|(?<=\])\s*Source|Read more\s*→?|Continue reading.*"
                      r"|Opširnije.*|Pročitajte više.*|submitted by\s+/u/.*)$", re.I)
 
 

@@ -4,7 +4,7 @@
       "id": "independent",
       "title": "Kritični prema SNS-u",
       "title_ru": "Критичные к SNS",
-      "note": "Televizije, dnevni list, nedeljnici i novinska agencija", "note_ru": "Телеканалы, ежедневная газета, еженедельники и информагентство",
+      "note": "Televizije, dnevni list, nedeljnici, portal i novinska agencija", "note_ru": "Телеканалы, ежедневная газета, еженедельники, портал и информагентство",
       "sources": [
         {"name": "N1", "site": "https://n1info.rs", "feed": "https://n1info.rs/feed/", "exclude": ["/english/", "/najave-emisija/"]},
         {"name": "Nova", "site": "https://nova.rs", "feed": "https://nova.rs/feed/", "exclude": ["/emisije/", "/zabava/"]},
@@ -12,6 +12,7 @@
         {"name": "Radar", "site": "https://radar.nova.rs", "feed": "https://radar.nova.rs/feed/"},
         {"name": "Vreme", "site": "https://www.vreme.com", "feed": "https://www.vreme.com/feed/"},
         {"name": "Insajder", "site": "https://insajder.net", "feed": "https://insajder.net/feed", "exclude": ["/tv-najava/"]},
+        {"name": "Serbian Times", "site": "https://serbiantimes.info", "feed": "https://serbiantimes.info/feed/"},
         {"name": "Beta", "site": "https://beta.rs", "feed": "https://beta.rs/rss", "note": "nezavisna agencija", "note_ru": "независимое агентство"}
       ]
     },
