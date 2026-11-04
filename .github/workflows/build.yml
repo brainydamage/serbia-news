@@ -1,9 +1,8 @@
 name: build
 
+# по расписанию сборку запускает cron-job.org через workflow_dispatch каждые 15 минут: расписание самого GitHub
+# (schedule) у этого репозитория почти не срабатывало, а когда срабатывало — давало лишнюю сборку
 on:
-  schedule:
-    # каждые 20 минут, но не ровно в :00/:20/:40 — на эти минуты у GitHub пик, запуски откладываются и теряются
-    - cron: "7,27,47 * * * *"
   workflow_dispatch:
   push:
     branches: [main]
@@ -79,12 +78,12 @@ jobs:
         uses: actions/deploy-pages@v5
 
       # IndexNow: сообщаем Bing и Яндексу, что страницы обновились. Ключ публичный по устройству протокола —
-      # он лежит в static/<ключ>.txt. При пуше — всегда; остальные запуски (расписание GitHub и cron-job.org,
-      # который дёргает workflow_dispatch каждые 20 минут) — раз в 6 часов, чтобы не выглядеть спамом
+      # он лежит в static/<ключ>.txt. При пуше — всегда; запуски от cron-job.org (каждые 15 минут) — раз в 6 часов,
+      # чтобы не выглядеть спамом
       - name: Ping IndexNow
         run: |
           hour=$(( 10#$(date -u +%H) )); minute=$(( 10#$(date -u +%M) ))
-          if [ "${{ github.event_name }}" != "push" ] && { [ $((hour % 6)) -ne 0 ] || [ $minute -ge 20 ]; }; then
+          if [ "${{ github.event_name }}" != "push" ] && { [ $((hour % 6)) -ne 0 ] || [ $minute -ge 15 ]; }; then
             echo "пропуск: вне пуша пингуем раз в 6 часов"; exit 0
           fi
           curl -sS -o /dev/null -w "IndexNow: HTTP %{http_code}\n" -X POST https://api.indexnow.org/indexnow \
