@@ -443,7 +443,11 @@ def collect(source: dict, section: dict, previous: dict, skip: set[str]) -> dict
                     result[key] = prev[key]
         return result
     try:
-        data = fetch(source["feed"])
+        url = source["feed"]
+        if source.get("nocache"):
+            # Pink, Insajder, Pančevac отдают ленту из кэша на час-два старше; с параметром в адресе — свежую
+            url += ("&" if "?" in url else "?") + f"_={int(datetime.now().timestamp())}"
+        data = fetch(url)
         items = parse_trends(data) if "trends.google.com" in source["feed"] else parse_feed(data)
         # «more_feeds» — ещё ленты того же издания: у Telegraf новости и политика (поддомен politika.) идут разными лентами
         for feed in source.get("more_feeds", []):

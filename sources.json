@@ -11,7 +11,7 @@
         {"name": "Danas", "site": "https://www.danas.rs", "feed": "https://www.danas.rs/feed/", "exclude": ["/svet/", "/sport/", "/zivot/"]},
         {"name": "Radar", "site": "https://radar.nova.rs", "feed": "https://radar.nova.rs/feed/", "exclude": ["/global/"]},
         {"name": "Vreme", "site": "https://www.vreme.com", "feed": "https://www.vreme.com/feed/"},
-        {"name": "Insajder", "site": "https://insajder.net", "feed": "https://insajder.net/feed", "exclude": ["/tv-najava/"]},
+        {"name": "Insajder", "site": "https://insajder.net", "feed": "https://insajder.net/feed", "exclude": ["/tv-najava/"], "nocache": true},
         {"name": "Serbian Times", "site": "https://serbiantimes.info", "feed": "https://serbiantimes.info/feed/", "exclude_category": ["sport"]},
         {"name": "NIN", "site": "https://www.nin.rs", "feed": "https://www.nin.rs/rss/najnovije", "exclude": ["/magazin/", "/svet/"], "note": "nedeljnik", "note_ru": "еженедельник"},
         {"name": "Mašina", "site": "https://www.masina.rs", "feed": "https://www.masina.rs/feed/", "note": "rad i društvo", "note_ru": "о труде и обществе"},
@@ -52,7 +52,7 @@
         {"name": "Blic", "site": "https://www.blic.rs", "feed": "https://www.blic.rs/rss/Vesti/Politika", "note": "rubrika „Politika“", "note_ru": "раздел «Политика»"},
         {"name": "Politika", "site": "https://www.politika.rs", "feed": "https://www.politika.rs/rss", "exclude": ["/sport/"]},
         {"name": "Telegraf", "site": "https://www.telegraf.rs", "feed": "https://www.telegraf.rs/rss/vesti", "exclude": ["/vesti/svet/"], "more_feeds": ["https://politika.telegraf.rs/rss"]},
-        {"name": "Dnevnik", "site": "https://www.dnevnik.rs", "feed": "https://www.dnevnik.rs/rss.xml", "note": "Novi Sad", "note_ru": "Нови-Сад", "exclude": ["/magazin/", "/sport/", "/vesti/svet/"]}
+        {"name": "Dnevnik", "site": "https://www.dnevnik.rs", "feed": "https://www.dnevnik.rs/rss.xml", "note": "Novi Sad", "note_ru": "Нови-Сад", "exclude": ["/magazin/", "/sport/", "/vesti/svet/", "/citulje/", "/sahrane-", "/lov-ribolov/"]}
       ]
     },
     {
@@ -65,7 +65,7 @@
         {"name": "Novosti", "site": "https://www.novosti.rs", "feed": "https://www.novosti.rs/rss/vesti"},
         {"name": "Alo", "site": "https://www.alo.rs", "feed": "https://www.alo.rs/rss.html", "exclude": ["/vip/", "/razonoda/", "/vesti/svet/", "/vesti/ukrajina/", "/sport/"]},
         {"name": "Kurir", "site": "https://www.kurir.rs", "feed": "https://www.kurir.rs/rss/vesti/politika", "note": "rubrika „Politika“", "note_ru": "раздел «Политика»"},
-        {"name": "Pink", "site": "https://pink.rs", "feed": "https://pink.rs/rss-feed", "exclude": ["/zadruga/", "/showbiz/", "/pop-kultura/", "/svet/", "/sport/", "/dom-lepota-i-moda/", "/recepti/", "/extra/", "/horoskop/"]},
+        {"name": "Pink", "site": "https://pink.rs", "feed": "https://pink.rs/rss-feed", "exclude": ["/zadruga/", "/showbiz/", "/pop-kultura/", "/svet/", "/sport/", "/dom-lepota-i-moda/", "/recepti/", "/extra/", "/horoskop/"], "nocache": true},
         {"name": "B92", "site": "https://www.b92.net", "feed": "https://www.b92.net/info/rss/vesti.xml", "exclude": ["/info/svet/"]},
         {"name": "Espreso", "site": "https://www.espreso.co.rs", "feed": "https://www.espreso.co.rs/rss/vesti"},
         {"name": "Srbija Danas", "site": "https://www.srbijadanas.com", "feed": "https://www.srbijadanas.com/rss.xml", "exclude": ["/sport/", "/vip/", "/zena/", "/vesti/svet/", "/ukrajina/"]}
@@ -144,7 +144,7 @@
         {"name": "Autonomija", "site": "https://www.autonomija.info", "feed": "https://www.autonomija.info/feed", "note": "Vojvodina", "note_ru": "Воеводина", "exclude_category": ["Planeta"]},
         {"name": "Subotica.com", "site": "https://www.subotica.com", "feed": "https://www.subotica.com/rss/vesti/najnovije", "exclude": ["/promocija/", "/oni-dolaze/"], "note": "Subotica", "note_ru": "Суботица"},
         {"name": "Zrenjaninski", "site": "https://zrenjaninski.com", "feed": "https://zrenjaninski.com/feed/", "note": "Zrenjanin", "note_ru": "Зренянин", "exclude": ["/sport/"]},
-        {"name": "Pančevac", "site": "https://pancevac-online.rs", "feed": "https://pancevac-online.rs/feed/", "note": "Pančevo", "note_ru": "Панчево"},
+        {"name": "Pančevac", "site": "https://pancevac-online.rs", "feed": "https://pancevac-online.rs/feed/", "note": "Pančevo", "note_ru": "Панчево", "nocache": true},
         {"name": "Somborske novine", "site": "https://somborskenovine.rs", "feed": "https://somborskenovine.rs/feed/", "note": "Sombor", "note_ru": "Сомбор", "exclude_category": ["Sport"]},
         {"name": "Kragujevačke", "site": "https://www.kragujevacke.rs", "feed": "https://www.kragujevacke.rs/feed", "note": "Kragujevac", "note_ru": "Крагуевац", "exclude": ["/sport/"]},
         {"name": "InfoKG", "site": "https://www.infokg.rs", "feed": "https://www.infokg.rs/rss/", "note": "Kragujevac", "note_ru": "Крагуевац", "exclude": ["/sport/"]},
