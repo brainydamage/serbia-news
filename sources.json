@@ -139,7 +139,7 @@
         {"title": "Kosovo", "title_ru": "Косово", "sources": ["KoSSev", "Kosovo Online"]}
       ],
       "sources": [
-        {"name": "021.rs", "site": "https://www.021.rs", "feed": "https://news.google.com/rss/search?hl=sr&gl=RS&ceid=RS:sr&q=site:021.rs+when:2d", "note": "Novi Sad", "note_ru": "Нови-Сад"},
+        {"name": "021.rs", "site": "https://www.021.rs", "feed": "https://news.google.com/rss/search?hl=sr&gl=RS&ceid=RS:sr&q=site:021.rs+when:2d", "links": ["https://www.021.rs/najnovije/3", "https://www.021.rs/najnovije/3/20", "https://www.021.rs/najnovije/3/40", "https://www.021.rs/najnovije/3/60", "https://www.021.rs/najnovije/3/80"], "note": "Novi Sad", "note_ru": "Нови-Сад"},
         {"name": "RTV", "site": "https://www.rtv.rs/sr_lat", "feed": "https://news.google.com/rss/search?hl=sr&gl=RS&ceid=RS:sr&q=site:rtv.rs+-site:media.rtv.rs+when:2d", "note": "javni servis Vojvodine", "note_ru": "общественный вещатель Воеводины"},
         {"name": "Autonomija", "site": "https://www.autonomija.info", "feed": "https://www.autonomija.info/feed", "note": "Vojvodina", "note_ru": "Воеводина"},
         {"name": "Subotica.com", "site": "https://www.subotica.com", "feed": "https://news.google.com/rss/search?hl=sr&gl=RS&ceid=RS:sr&q=site:subotica.com/vesti+when:3d", "note": "Subotica", "note_ru": "Суботица"},

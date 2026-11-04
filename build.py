@@ -19,6 +19,7 @@ import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
+from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
@@ -249,6 +250,46 @@ def tidy_google_news(items: list[dict]) -> list[dict]:
     return [item for item in items if not item["title"].startswith("- ")]
 
 
+class PageLinks(HTMLParser):
+    """Ссылки страницы: текст ссылки (или title/alt картинки в ней) → адрес."""
+
+    def __init__(self):
+        super().__init__()
+        self.links, self.href, self.text = [], None, []
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == "a":
+            self.href, self.text = attrs.get("href"), []
+        elif tag == "img" and self.href:
+            self.text.append(attrs.get("title") or attrs.get("alt") or "")
+
+    def handle_data(self, data):
+        if self.href:
+            self.text.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "a" and self.href:
+            self.links.append((" ".join(self.text), self.href))
+            self.href = None
+
+
+def title_key(title: str) -> str:
+    return " ".join(WORDS_RE.findall(title.lower()))
+
+
+def real_links(page: str, site: str) -> dict[str, str]:
+    """Заголовок → адрес материала по странице сайта со списком свежих новостей («links» в sources.json —
+    такие страницы по порядку, от свежих к старым).
+    Google News иногда ведёт не на материал, а на его копию с тем же заголовком: у 021.rs — на страницу
+    комментариев. Берём только ссылки на сам сайт и без якоря (#commlist — это ссылка на комментарии)."""
+    parser = PageLinks()
+    parser.feed(fetch(page).decode("utf-8", "replace"))
+    host = urlparse(site).netloc
+    return {title_key(text): href for text, href in parser.links
+            if urlparse(href).netloc == host and href.startswith("https://") and "#" not in href and title_key(text)}
+
+
 SECTION_PAGE_RE = re.compile(r"^(Kategorija|Rubrika|Autor|Tag|Arhiva)\b|\d{1,2}\.\d{1,2}\.\d{4}\.?$|^[\w ]{1,20} vesti$", re.I)
 
 TRENDS_NS = "{https://trends.google.com/trending/rss}"
@@ -428,6 +469,24 @@ def collect(source: dict, section: dict, previous: dict, skip: set[str]) -> dict
                 seen |= keys
                 unique.append(item)
         result["items"] = unique[:ITEMS_PER_SOURCE]
+        if source.get("links"):
+            # адреса, найденные прошлой сборкой, берём из её данных, а новые новости ищем по страницам списка
+            # (свежие — на первой), пока не найдём все: обычно хватает одной страницы.
+            # Чего не нашла прошлая сборка, не ищем снова — так и останется ссылкой Google News
+            before = {title_key(i["title"]): i["url"] for i in (prev or {}).get("items", [])}
+            for item in result["items"]:
+                item["url"] = before.get(title_key(item["title"]), item["url"])
+            for page in source["links"]:
+                left = [i for i in result["items"] if "news.google.com" in i["url"] and title_key(i["title"]) not in before]
+                if not left:
+                    break
+                try:
+                    real = real_links(page, source["site"])
+                except Exception as exc:  # noqa: BLE001 — без настоящих адресов остаются ссылки Google News
+                    print(f"  {source['name']}: страница со ссылками не открылась: {type(exc).__name__}: {exc}"[:200], file=sys.stderr)
+                    break
+                for item in left:
+                    item["url"] = real.get(title_key(item["title"]), item["url"])
         result["fetched"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     except Exception as exc:  # noqa: BLE001 — одна сломанная лента не должна ронять всю сборку
         result["error"] = f"{type(exc).__name__}: {exc}"[:200]
