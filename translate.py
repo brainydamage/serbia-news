@@ -210,6 +210,18 @@ def lost_text(original: dict, translated: dict) -> bool:
             or (bool(original.get("summary", "").strip()) and not translated["summary"].strip()))
 
 
+LATIN_WORD_RE = re.compile(r"[a-z\u00c0-\u024f]+")
+
+
+def latin_words(original: dict, translated: dict) -> list[str]:
+    """Обычные слова латиницей, которых нет в оригинале: модель иногда вставляет английское слово
+    вместо русского — «прослушивала редакцию и following главного редактора», «плотина near Куршумлии».
+    Названия (Radar, N1) пишутся с заглавной и сюда не попадают."""
+    source = {w.lower() for w in WORDS_RE.findall(original["title"] + " " + original.get("summary", ""))}
+    text = URL_RE.sub(" ", translated["title"] + " " + translated["summary"])
+    return list(dict.fromkeys(w for w in WORDS_RE.findall(text) if LATIN_WORD_RE.fullmatch(w) and w not in source))
+
+
 def rejection(original: dict, translated: dict, strict: bool = True) -> str | None:
     """Почему «перевод» на деле остался сербским текстом (None — перевод годный). Например, сербский,
     переписанный кириллицей: «о притисцима на Нову и Радар» вместо «о давлении на Nova и Radar».
@@ -230,6 +242,8 @@ def rejection(original: dict, translated: dict, strict: bool = True) -> str | No
     # сербские буквы в именах поправит russify, а в обычных словах («још», «уређивачку») — это непереведённый текст
     if found := [w for w in words if w.islower() and SERBIAN_ONLY_LETTERS.search(w)]:
         return "остались сербские слова: " + ", ".join(dict.fromkeys(found))
+    if found := latin_words(original, translated):
+        return "слова латиницей вместо русских: " + ", ".join(found)
     if found := MIXED_SCRIPT_RE.findall(text):
         return "слова из двух алфавитов: " + ", ".join(dict.fromkeys(found))
     if found := [c for c in text if foreign_letter(c)]:
@@ -460,7 +474,7 @@ def attach_translations(sources: list[dict]) -> None:
 
     cache = load_cache()
     # такие сбои уже могли попасть в кэш до появления проверки — переводим их заново
-    for key in [k for k in todo if k in cache and lost_text(todo[k], cache[k])]:
+    for key in [k for k in todo if k in cache and (lost_text(todo[k], cache[k]) or latin_words(todo[k], cache[k]))]:
         del cache[key]
     missing = [(key, item) for key, item in todo.items() if key not in cache]
 
