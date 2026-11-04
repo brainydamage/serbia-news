@@ -140,9 +140,9 @@
       ],
       "sources": [
         {"name": "021.rs", "site": "https://www.021.rs", "feed": "https://news.google.com/rss/search?hl=sr&gl=RS&ceid=RS:sr&q=site:021.rs+when:2d", "links": ["https://www.021.rs/najnovije/3", "https://www.021.rs/najnovije/3/20", "https://www.021.rs/najnovije/3/40", "https://www.021.rs/najnovije/3/60", "https://www.021.rs/najnovije/3/80"], "note": "Novi Sad", "note_ru": "Нови-Сад"},
-        {"name": "RTV", "site": "https://www.rtv.rs/sr_lat", "feed": "https://news.google.com/rss/search?hl=sr&gl=RS&ceid=RS:sr&q=site:rtv.rs+-site:media.rtv.rs+when:2d", "note": "javni servis Vojvodine", "note_ru": "общественный вещатель Воеводины"},
+        {"name": "RTV", "site": "https://www.rtv.rs/sr_lat", "feed": "https://news.google.com/rss/search?hl=sr&gl=RS&ceid=RS:sr&q=site:rtv.rs+-site:media.rtv.rs+when:2d", "links": ["https://www.rtv.rs/sr_lat/sve-vesti", "https://www.rtv.rs/sr_ci/sve-vesti"], "note": "javni servis Vojvodine", "note_ru": "общественный вещатель Воеводины"},
         {"name": "Autonomija", "site": "https://www.autonomija.info", "feed": "https://www.autonomija.info/feed", "note": "Vojvodina", "note_ru": "Воеводина"},
-        {"name": "Subotica.com", "site": "https://www.subotica.com", "feed": "https://news.google.com/rss/search?hl=sr&gl=RS&ceid=RS:sr&q=site:subotica.com/vesti+when:3d", "note": "Subotica", "note_ru": "Суботица"},
+        {"name": "Subotica.com", "site": "https://www.subotica.com", "feed": "https://www.subotica.com/rss/vesti/najnovije", "exclude": ["/promocija/", "/oni-dolaze/"], "note": "Subotica", "note_ru": "Суботица"},
         {"name": "Zrenjaninski", "site": "https://zrenjaninski.com", "feed": "https://zrenjaninski.com/feed/", "note": "Zrenjanin", "note_ru": "Зренянин"},
         {"name": "Pančevac", "site": "https://pancevac-online.rs", "feed": "https://pancevac-online.rs/feed/", "note": "Pančevo", "note_ru": "Панчево"},
         {"name": "Somborske novine", "site": "https://somborskenovine.rs", "feed": "https://somborskenovine.rs/feed/", "note": "Sombor", "note_ru": "Сомбор"},
@@ -150,8 +150,8 @@
         {"name": "InfoKG", "site": "https://www.infokg.rs", "feed": "https://www.infokg.rs/rss/", "note": "Kragujevac", "note_ru": "Крагуевац"},
         {"name": "Ozon press", "site": "https://www.ozonpress.net", "feed": "https://www.ozonpress.net/feed", "note": "Čačak i zapadna Srbija", "note_ru": "Чачак и запад Сербии"},
         {"name": "Podrinske", "site": "https://podrinske.com", "feed": "https://podrinske.com/feed", "note": "Šabac", "note_ru": "Шабац"},
-        {"name": "Kolubarske", "site": "https://www.kolubarske.rs", "feed": "https://news.google.com/rss/search?hl=sr&gl=RS&ceid=RS:sr&q=site:kolubarske.rs+when:3d", "note": "Valjevo", "note_ru": "Валево"},
-        {"name": "Kruševac Grad", "site": "https://www.krusevacgrad.rs", "feed": "https://news.google.com/rss/search?hl=sr&gl=RS&ceid=RS:sr&q=site:krusevacgrad.rs+when:3d", "note": "Kruševac", "note_ru": "Крушевац"},
+        {"name": "Kolubarske", "site": "https://www.kolubarske.rs", "feed": "https://www.kolubarske.rs/rss.xml", "note": "Valjevo", "note_ru": "Валево"},
+        {"name": "Kruševac Grad", "site": "https://www.krusevacgrad.rs", "feed": "https://www.krusevacgrad.rs/feed", "note": "Kruševac", "note_ru": "Крушевац"},
         {"name": "Južne vesti", "site": "https://www.juznevesti.com", "feed": "https://www.juznevesti.com/rss", "note": "Niš", "note_ru": "Ниш"},
         {"name": "Niške vesti", "site": "https://niskevesti.rs", "feed": "https://niskevesti.rs/rss.xml", "note": "Niš", "note_ru": "Ниш"},
         {"name": "JUGpress", "site": "https://jugpress.com", "feed": "https://jugpress.com/feed", "note": "Leskovac", "note_ru": "Лесковац"},
@@ -159,7 +159,7 @@
         {"name": "RTV Bor", "site": "https://rtvbor.rs", "feed": "https://rtvbor.rs/feed/", "note": "Bor", "note_ru": "Бор"},
         {"name": "Sandžak press", "site": "https://sandzakpress.net", "feed": "https://sandzakpress.net/feed", "note": "Novi Pazar", "note_ru": "Нови-Пазар"},
         {"name": "KoSSev", "site": "https://kossev.info", "feed": "https://news.google.com/rss/search?hl=sr&gl=RS&ceid=RS:sr&q=site:kossev.info+when:2d", "note": "sever Kosova, nezavisni", "note_ru": "север Косова, независимый"},
-        {"name": "Kosovo Online", "site": "https://www.kosovo-online.com", "feed": "https://news.google.com/rss/search?hl=sr&gl=RS&ceid=RS:sr&q=site:kosovo-online.com+when:2d", "note": "bliski zvaničnom Beogradu", "note_ru": "близок к официальному Белграду"}
+        {"name": "Kosovo Online", "site": "https://www.kosovo-online.com", "feed": "https://www.kosovo-online.com/rss.xml", "exclude": ["/sq/", "/en/"], "note": "bliski zvaničnom Beogradu", "note_ru": "близок к официальному Белграду"}
       ]
     }
   ]

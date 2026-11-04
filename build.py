@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from zoneinfo import ZoneInfo
 
 from translate import SKELETON, WORDS_RE, attach_translations
@@ -286,7 +286,8 @@ def real_links(page: str, site: str) -> dict[str, str]:
     parser = PageLinks()
     parser.feed(fetch(page).decode("utf-8", "replace"))
     host = urlparse(site).netloc
-    return {title_key(text): href for text, href in parser.links
+    links = [(text, urljoin(page, href)) for text, href in parser.links]  # у RTV ссылки относительные: /sr_lat/…
+    return {title_key(text): href for text, href in links
             if urlparse(href).netloc == host and href.startswith("https://") and "#" not in href and title_key(text)}
 
 
