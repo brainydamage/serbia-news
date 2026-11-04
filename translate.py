@@ -68,7 +68,11 @@ SYSTEM_PROMPT = """Ты переводишь новости о Сербии на
 - Названия компаний, банков, спортивных клубов, брендов и заведений — это имена: не переводи их по смыслу, а передавай русскими буквами в кавычках: Poštanska štedionica — «Поштанска штедионица» (а не «Почтовая сберегательная касса»), Crvena zvezda — «Црвена звезда», Zvezda — «Звезда» (а не «Красная звезда»), Alta banka — «Алта банка». Английские названия (Financial Times, Alta Pay Group) оставляй латиницей. Государственные органы, учреждения и партии (Narodna banka Srbije — Национальный банк Сербии, Srpska napredna stranka — Сербская прогрессивная партия) переводи, как принято в русских СМИ.
 - Пометки (FOTO), (VIDEO) переводи как (фото), (видео).
 - Пустой summary оставляй пустым.
-- Верни перевод для каждого id из входа."""
+- Верни перевод для каждого id из входа.
+
+Оценка подводки (поле lead_ok) — по оригиналу, а не по переводу:
+- true — заголовок вместе с подводкой отвечают на вопрос «что произошло»: кто что сделал, решил, заявил, что случилось или что и когда состоится (объявление о событии с датой и местом — тоже true);
+- false — подводка сути не сообщает: зазывает к материалу («смотрите», «читайте», «узнайте»), задаёт вопрос, даёт общую фразу или оценку без факта, повторяет заголовок, говорит о другом, реклама, гороскоп, рецепт, пустая подводка."""
 
 SCHEMA = {
     "type": "object",
@@ -81,8 +85,9 @@ SCHEMA = {
                     "id": {"type": "string"},
                     "title": {"type": "string"},
                     "summary": {"type": "string"},
+                    "lead_ok": {"type": "boolean"},
                 },
-                "required": ["id", "title", "summary"],
+                "required": ["id", "title", "summary", "lead_ok"],
                 "additionalProperties": False,
             },
         }
@@ -333,6 +338,16 @@ def fix_caps(text: str) -> str:
     return " ".join(words)
 
 
+def lead_state(item: dict, lead_ok: bool | None) -> str | None:
+    """Подводка новости — для сводки, где по ней понятно, что произошло: "none" — подводки нет (пустая или
+    повторяет заголовок), "good"/"bad" — отвечает ли она на «что произошло», по оценке модели при переводе.
+    None — оценки нет: русскоязычная новость или переведённая до появления оценки (04.11.2026)."""
+    summary = WORDS_RE.findall(item.get("summary", "").lower())
+    if not summary or summary == WORDS_RE.findall(item["title"].lower()):
+        return "none"
+    return None if lead_ok is None else "good" if lead_ok else "bad"
+
+
 def load_cache() -> dict:
     try:
         return json.loads(CACHE_FILE.read_text("utf-8"))
@@ -377,6 +392,7 @@ def translate_batch(client, batch: list[tuple[str, dict]], kind: str = "new", st
         reason = rejection(item, t, strict)
         if reason is None:
             out[key] = {k: fix_caps(russify(fix_abbreviations(t[k]))) for k in ("title", "summary")}
+            out[key]["lead_ok"] = t["lead_ok"]
         elif rejected is not None:
             rejected[key] = {"reason": reason, "attempt": t["title"], "attempt_summary": t["summary"]}
     return out
@@ -460,7 +476,7 @@ def report_results(reported: set[str], copies: dict, cache: dict, before: dict) 
 
 
 def attach_translations(sources: list[dict]) -> None:
-    """Добавляет к каждой нерусскоязычной новости поле "ru": {"title", "summary"}."""
+    """Добавляет к каждой нерусскоязычной новости поле "ru": {"title", "summary"}, а ко всем — "lead" (см. lead_state)."""
     # один и тот же текст агентства бывает у нескольких изданий: переводим один раз, раздаём всем
     todo, copies, source_of = {}, {}, {}
     for src in sources:
@@ -565,6 +581,15 @@ def attach_translations(sources: list[dict]) -> None:
                 item["ru"]["title"] = split_live(item["title"])[0] + item["ru"]["title"]
             else:
                 item.pop("ru", None)  # мог остаться в данных прошлой сборки
+
+    lead_ok = {id(item): cache[key].get("lead_ok") for key, items in copies.items() if key in cache for item in items}
+    for src in sources:
+        for item in src["items"]:
+            lead = lead_state(item, lead_ok.get(id(item)))
+            if lead:
+                item["lead"] = lead
+            else:
+                item.pop("lead", None)
 
     # в кэше держим только то, что сейчас на странице, чтобы файл не рос бесконечно
     CACHE_FILE.parent.mkdir(exist_ok=True)
