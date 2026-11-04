@@ -214,6 +214,8 @@ def parse_feed(data: bytes) -> list[dict]:
             "url": link,
             "summary": tidy_summary(summary),
             "date": date.isoformat() if date else None,
+            # рубрики ленты — только для «exclude_category», в data.json не попадают
+            "categories": [clean_text(c.text or c.get("term") or "") for c in el if local(c.tag) == "category"],
         })
     return items
 
@@ -442,15 +444,20 @@ def collect(source: dict, section: dict, previous: dict, skip: set[str]) -> dict
     try:
         data = fetch(source["feed"])
         items = parse_trends(data) if "trends.google.com" in source["feed"] else parse_feed(data)
-        # «rewrite» в sources.json — [шаблон, замена] для адресов, которые лента отдаёт битыми
-        # (Telegraf пишет материалы с politika.telegraf.rs как www.telegraf.rs/<номер>-… — там 404)
-        if source.get("rewrite"):
-            pattern, repl = source["rewrite"]
-            for i in items:
-                i["url"] = re.sub(pattern, repl, i["url"])
+        # «more_feeds» — ещё ленты того же издания: у Telegraf новости и политика (поддомен politika.) идут разными лентами
+        for feed in source.get("more_feeds", []):
+            try:
+                items += parse_feed(fetch(feed))
+            except Exception as exc:
+                print(f"  {source['name']}: лента {feed} не открылась: {type(exc).__name__}: {exc}"[:200], file=sys.stderr)
         # «exclude» в sources.json — куски адресов разделов, которые не нужны: шоу-бизнес, реалити, анонсы эфиров
         exclude = source.get("exclude", [])
         items = [i for i in items if not any(part in i["url"] for part in exclude)]
+        # «exclude_category» — то же по рубрикам ленты (<category>), у кого рубрики нет в адресе: Beta, Serbian Times
+        skip = {c.lower() for c in source.get("exclude_category", [])}
+        items = [i for i in items if not skip & {c.lower() for c in i.get("categories", [])}]
+        for i in items:
+            i.pop("categories", None)
         # ссылка из чужой ленты попадает в href: «javascript:…» выполнился бы на нашей странице по клику
         items = [i for i in items if i["url"].startswith(("https://", "http://"))]
         if "news.google.com" in source["feed"]:
