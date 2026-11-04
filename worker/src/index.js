@@ -4,6 +4,9 @@
 // POST /reports {results: [{url, status}]} — от сборки: чем кончилось, отмечаем реакцией на сообщение в Telegram.
 // POST /stats {kinds: {new|retry|review: {items, in, out, usd}}} — от сборки: сколько она потратила на перевод.
 //   Копим в ключе KV "stats": итоги по дням навсегда и каждую сборку за последние две недели.
+// POST /untranslated {items: [{url, source, title, summary, reason, attempt}]} — от сборки: новости, которые модель
+//   не перевела и с подсказкой (обычно мешает название — его стоит добавить в glossary.json). Присылаем в Telegram
+//   одним сообщением, каждую новость один раз: сборка шлёт их снова, пока они в ленте.
 // GET /costs — страница с этой статистикой, GET /stats — сами данные для неё (с ключом STATS_KEY).
 //   Ключ страница берёт из адреса после # — эта часть не уходит ни на сервер, ни в Referer.
 // Оригинал и перевод берём не из запроса, а из опубликованного data.json: так пожаловаться можно
@@ -22,6 +25,8 @@ const REACTIONS = { fixed: "👍", same: "👎", gone: "🤷", error: "🤯" };
 // new — первый перевод новых новостей, retry — повтор непереведённого, review — перевод заново по жалобам
 const KINDS = ["new", "retry", "review"];
 const BUILDS_DAYS = 14;
+const UNTRANSLATED_MAX = 10;  // за одну сборку — чтобы сообщение влезло в лимит Telegram
+const UNTRANSLATED_SECONDS = 4 * 24 * 3600;  // дольше, чем новость держится в ленте
 
 export default {
   async fetch(request, env, ctx) {
@@ -47,10 +52,11 @@ export default {
       if (!authorized(request, env.STATS_KEY)) return json({ error: "unauthorized" }, 401);
       return json((await env.REPORTS.get("stats", "json")) || { days: {}, builds: [] });
     }
-    if (["/reports", "/stats"].includes(pathname) && !authorized(request, env.REPORTS_TOKEN)) return json({ error: "unauthorized" }, 401);
+    if (["/reports", "/stats", "/untranslated"].includes(pathname) && !authorized(request, env.REPORTS_TOKEN)) return json({ error: "unauthorized" }, 401);
     if (pathname === "/reports" && request.method === "GET") return list(env);
     if (pathname === "/reports" && request.method === "POST") return resolve(request, env);
     if (pathname === "/stats" && request.method === "POST") return stats(request, env);
+    if (pathname === "/untranslated" && request.method === "POST") return untranslated(request, env);
     return json({ error: "not found" }, 404);
   },
 };
@@ -159,6 +165,30 @@ async function stats(request, env) {
   all.builds = [...all.builds.filter(b => b.at >= since), build];
   await env.REPORTS.put("stats", JSON.stringify(all));
   return json({ ok: true });
+}
+
+async function untranslated(request, env) {
+  const { items } = await request.json();
+  const fresh = [];
+  for (const item of (items || []).slice(0, UNTRANSLATED_MAX)) {
+    if (typeof item?.url !== "string") continue;
+    const key = "u:" + (await sha1(item.url));
+    if (!(await env.REPORTS.get(key))) fresh.push({ key, item });
+  }
+  if (!fresh.length) return json({ ok: true, new: 0 });
+  const cut = value => String(value || "").slice(0, 300);
+  const blocks = fresh.map(({ item }) => {
+    const lines = [`${cut(item.source)}: ${cut(item.title)}`];
+    if (item.summary) lines.push(`Подводка: ${cut(item.summary)}`);
+    lines.push(`Модель: ${cut(item.attempt)}`, `Причина: ${cut(item.reason)}`, cut(item.url));
+    return lines.join("\n");
+  });
+  const message = await notify(env, [`⚠️ Не перевелось: ${fresh.length}`, ...blocks].join("\n\n"));
+  // не дошло до Telegram — не запоминаем: следующая сборка пришлёт эти новости ещё раз
+  if (message || !env.TELEGRAM_TOKEN) {
+    await Promise.all(fresh.map(({ key }) => env.REPORTS.put(key, "1", { expirationTtl: UNTRANSLATED_SECONDS })));
+  }
+  return json({ ok: true, new: fresh.length, sent: Boolean(message) });
 }
 
 // время по Белграду строкой «2026-11-03 20:21:06» — такие строки сравниваются как даты

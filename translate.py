@@ -210,28 +210,36 @@ def lost_text(original: dict, translated: dict) -> bool:
             or (bool(original.get("summary", "").strip()) and not translated["summary"].strip()))
 
 
-def looks_translated(original: dict, translated: dict, strict: bool = True) -> bool:
-    """Отсеивает «переводы», которые на деле остались сербским текстом, — например, сербский,
+def rejection(original: dict, translated: dict, strict: bool = True) -> str | None:
+    """Почему «перевод» на деле остался сербским текстом (None — перевод годный). Например, сербский,
     переписанный кириллицей: «о притисцима на Нову и Радар» вместо «о давлении на Nova и Radar».
+    Причину видит модель при повторе и мы в Telegram, если новость так и не перевелась.
     Пороги подобраны на реальных переводах: общие для двух языков слова («после», «против», «видео»)
     хорошие переводы через них не перешагивают. strict=False — без сравнения со словами оригинала:
     короткий заголовок вроде «Средњи курс динара за евро» по-русски почти дословно тот же."""
     title, summary = translated["title"].strip(), translated["summary"]
+    if not title:
+        return "пустой заголовок"
     # без букв переводить нечего: запрос Google Trends «2026» так и остаётся «2026»
-    if not title or (title == original["title"].strip() and WORDS_RE.search(title)):
-        return False
+    if title == original["title"].strip() and WORDS_RE.search(title):
+        return "заголовок остался как в оригинале"
     if lost_text(original, translated):
-        return False
+        return "в переводе пропала большая часть заголовка или подводки"
     text = URL_RE.sub(" ", title + " " + summary)
+    words = WORDS_RE.findall(text)
     # сербские буквы в именах поправит russify, а в обычных словах («још», «уређивачку») — это непереведённый текст
-    if any(SERBIAN_ONLY_LETTERS.search(w) for w in WORDS_RE.findall(text) if w.islower()):
-        return False
-    if MIXED_SCRIPT_RE.search(text) or any(map(foreign_letter, text)):
-        return False
-    if sum(w.lower().translate(SKELETON) in SERBIAN_WORDS for w in WORDS_RE.findall(text)) >= 3:
-        return False
-    return not strict or (share_of_original(original["title"], title) < 0.7
-                          and share_of_original(original.get("summary", ""), summary) < 0.6)
+    if found := [w for w in words if w.islower() and SERBIAN_ONLY_LETTERS.search(w)]:
+        return "остались сербские слова: " + ", ".join(dict.fromkeys(found))
+    if found := MIXED_SCRIPT_RE.findall(text):
+        return "слова из двух алфавитов: " + ", ".join(dict.fromkeys(found))
+    if found := [c for c in text if foreign_letter(c)]:
+        return "посторонние буквы: " + "".join(dict.fromkeys(found))
+    if len(found := [w for w in words if w.lower().translate(SKELETON) in SERBIAN_WORDS]) >= 3:
+        return "остались сербские служебные слова: " + ", ".join(dict.fromkeys(found))
+    if strict and (share_of_original(original["title"], title) >= 0.7
+                   or share_of_original(original.get("summary", ""), summary) >= 0.6):
+        return "перевод почти дословно повторяет сербский оригинал"
+    return None
 
 
 CAPS_WORD = re.compile(r"^[^\w]*[A-ZА-ЯЁ]+[^\w]*$")
@@ -318,12 +326,18 @@ def load_cache() -> dict:
         return {}
 
 
-def translate_batch(client, batch: list[tuple[str, dict]], kind: str = "new", strict: bool = True) -> dict:
+def translate_batch(client, batch: list[tuple[str, dict]], kind: str = "new", strict: bool = True,
+                                    rejected: dict | None = None) -> dict:
+    """Переводы, прошедшие проверку. rejected — что отбраковали в прошлых попытках: ключ → {"reason", "attempt"}
+    (причина и отбракованный заголовок); причины уходят модели подсказкой, сюда же пишутся отбракованные в этой."""
     model, effort = KINDS[kind]
     # модели даём короткие номера, а не хэши: длинные id она иногда переписывает с ошибкой
     payload = [{"id": str(n), "title": item["title"], "summary": item.get("summary", "")} for n, (_, item) in enumerate(batch)]
     names = {entry["sr"]: entry["ru"] for _, item in batch for entry in glossary_for(item)}
     content = json.dumps(payload, ensure_ascii=False)
+    hints = [f"id {n}: {rejected[key]['reason']}" for n, (key, _) in enumerate(batch) if key in (rejected or {})]
+    if hints:
+        content = ("Прошлый перевод этих материалов не годится — исправь:\n" + "\n".join(hints) + "\n\n" + content)
     if names:
         content = ("Названия из глоссария — пиши их именно так, склоняя по-русски, если нужно:\n"
                    + "\n".join(f"{sr} → {ru}" for sr, ru in names.items()) + "\n\n" + content)
@@ -343,9 +357,14 @@ def translate_batch(client, batch: list[tuple[str, dict]], kind: str = "new", st
     out = {}
     for t in json.loads(text)["items"]:
         key, item = by_number.get(t["id"], (None, None))
+        if not item:
+            continue
         # проверяем до russify: сербские буквы в «переводе» — тоже признак, что модель не перевела
-        if item and looks_translated(item, t, strict):
+        reason = rejection(item, t, strict)
+        if reason is None:
             out[key] = {k: fix_caps(russify(fix_abbreviations(t[k]))) for k in ("title", "summary")}
+        elif rejected is not None:
+            rejected[key] = {"reason": reason, "attempt": t["title"]}
     return out
 
 
@@ -383,7 +402,7 @@ def connect():
 
 def reports_api(data: dict | None = None, path: str = "reports") -> dict | None:
     """Приёмник жалоб (worker/): без data — список жалоб, ждущих итога, с data — отправка итогов.
-    path="stats" — туда же отправляем расходы сборки."""
+    path="stats" — туда же отправляем расходы сборки, path="untranslated" — новости, которые не перевелись."""
     url, token = os.environ.get("REPORTS_URL"), os.environ.get("REPORTS_TOKEN")
     if not (url and token):
         return None
@@ -429,7 +448,7 @@ def report_results(reported: set[str], copies: dict, cache: dict, before: dict) 
 def attach_translations(sources: list[dict]) -> None:
     """Добавляет к каждой нерусскоязычной новости поле "ru": {"title", "summary"}."""
     # один и тот же текст агентства бывает у нескольких изданий: переводим один раз, раздаём всем
-    todo, copies = {}, {}
+    todo, copies, source_of = {}, {}, {}
     for src in sources:
         for item in src["items"]:
             if item.get("lang", src["lang"]) != "ru":
@@ -437,6 +456,7 @@ def attach_translations(sources: list[dict]) -> None:
                 key = text_key(bare)
                 todo[key] = bare
                 copies.setdefault(key, []).append(item)
+                source_of.setdefault(key, src["name"])
 
     cache = load_cache()
     # такие сбои уже могли попасть в кэш до появления проверки — переводим их заново
@@ -453,11 +473,12 @@ def attach_translations(sources: list[dict]) -> None:
     if missing and client:
         batches = [missing[i:i + BATCH_SIZE] for i in range(0, len(missing), BATCH_SIZE)]
         failed = 0
+        rejected = {}  # что отбраковала проверка: причина пойдёт подсказкой в повтор, а если не поможет — в Telegram
         print(f"\nПеревожу {len(missing)} новостей ({len(batches)} пачек)…", file=sys.stderr)
 
         def run(batch, kind="new", strict=True):
             try:
-                return translate_batch(client, batch, kind, strict)
+                return translate_batch(client, batch, kind, strict, rejected)
             except anthropic.AuthenticationError:
                 raise
             except Exception as exc:  # noqa: BLE001 — не переведённое попробуем в следующую сборку
@@ -495,6 +516,14 @@ def attach_translations(sources: list[dict]) -> None:
             f"{tokens_in} + {tokens_out} токенов ≈ ${usd:.3f}",
             file=sys.stderr,
         )
+        # не перевелось и с подсказкой — шлём в Telegram (через worker/, каждую новость один раз):
+        # обычно это название, которое стоит добавить в glossary.json
+        stuck = [{"url": item["url"], "source": source_of[key], "title": item["title"], "summary": item.get("summary", ""),
+                  **rejected[key]} for key, item in missing if key not in cache and key in rejected]
+        for one in stuck:
+            print(f"  не перевелось: {one['title'][:80]} — {one['reason']}", file=sys.stderr)
+        if stuck:
+            reports_api({"items": stuck}, "untranslated")
 
     before = {}  # переводы до жалобы — чтобы понять, изменила ли что-то сильная модель
     if review and client:
