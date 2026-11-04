@@ -438,8 +438,9 @@ def collect(source: dict, section: dict, previous: dict, skip: set[str]) -> dict
         if prev:
             result["items"] = prev.get("items", [])
             result["fetched"] = prev.get("fetched")
-            if "unmatched" in prev:
-                result["unmatched"] = prev["unmatched"]
+            for key in ("unmatched", "excluded"):
+                if key in prev:
+                    result[key] = prev[key]
         return result
     try:
         data = fetch(source["feed"])
@@ -492,6 +493,9 @@ def collect(source: dict, section: dict, previous: dict, skip: set[str]) -> dict
             # Чего не нашли на всех страницах (unmatched), не ищем снова — так и останется ссылкой Google News
             found = {title_key(i["title"]): i["url"] for i in (prev or {}).get("items", []) if "news.google.com" not in i["url"]}
             tried = set((prev or {}).get("unmatched", []))
+            # выкинутые по «exclude» уже после поиска (у ссылки Google News раздела не видно) — заново не ищем
+            dropped = {title_key(i["title"]) for i in result["items"]} & set((prev or {}).get("excluded", []))
+            result["items"] = [i for i in result["items"] if title_key(i["title"]) not in dropped]
             for item in result["items"]:
                 item["url"] = found.get(title_key(item["title"]), item["url"])
             searched = True
@@ -509,6 +513,9 @@ def collect(source: dict, section: dict, previous: dict, skip: set[str]) -> dict
                     item["url"] = real.get(title_key(item["title"]), item["url"])
             result["unmatched"] = [title_key(i["title"]) for i in result["items"] if "news.google.com" in i["url"]
                                    and (searched or title_key(i["title"]) in tried)]
+            dropped |= {title_key(i["title"]) for i in result["items"] if any(part in i["url"] for part in exclude)}
+            result["items"] = [i for i in result["items"] if title_key(i["title"]) not in dropped]
+            result["excluded"] = sorted(dropped)
         result["fetched"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     except Exception as exc:  # noqa: BLE001 — одна сломанная лента не должна ронять всю сборку
         result["error"] = f"{type(exc).__name__}: {exc}"[:200]
@@ -516,8 +523,9 @@ def collect(source: dict, section: dict, previous: dict, skip: set[str]) -> dict
             result["items"] = prev.get("items", [])
             result["fetched"] = prev.get("fetched")
             result["stale"] = True
-            if "unmatched" in prev:
-                result["unmatched"] = prev["unmatched"]
+            for key in ("unmatched", "excluded"):
+                if key in prev:
+                    result[key] = prev[key]
     return result
 
 
