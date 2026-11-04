@@ -434,6 +434,8 @@ def collect(source: dict, section: dict, previous: dict, skip: set[str]) -> dict
         if prev:
             result["items"] = prev.get("items", [])
             result["fetched"] = prev.get("fetched")
+            if "unmatched" in prev:
+                result["unmatched"] = prev["unmatched"]
         return result
     try:
         data = fetch(source["feed"])
@@ -472,21 +474,26 @@ def collect(source: dict, section: dict, previous: dict, skip: set[str]) -> dict
         if source.get("links"):
             # адреса, найденные прошлой сборкой, берём из её данных, а новые новости ищем по страницам списка
             # (свежие — на первой), пока не найдём все: обычно хватает одной страницы.
-            # Чего не нашла прошлая сборка, не ищем снова — так и останется ссылкой Google News
-            before = {title_key(i["title"]): i["url"] for i in (prev or {}).get("items", [])}
+            # Чего не нашли на всех страницах (unmatched), не ищем снова — так и останется ссылкой Google News
+            found = {title_key(i["title"]): i["url"] for i in (prev or {}).get("items", []) if "news.google.com" not in i["url"]}
+            tried = set((prev or {}).get("unmatched", []))
             for item in result["items"]:
-                item["url"] = before.get(title_key(item["title"]), item["url"])
+                item["url"] = found.get(title_key(item["title"]), item["url"])
+            searched = True
             for page in source["links"]:
-                left = [i for i in result["items"] if "news.google.com" in i["url"] and title_key(i["title"]) not in before]
+                left = [i for i in result["items"] if "news.google.com" in i["url"] and title_key(i["title"]) not in tried]
                 if not left:
                     break
                 try:
                     real = real_links(page, source["site"])
                 except Exception as exc:  # noqa: BLE001 — без настоящих адресов остаются ссылки Google News
                     print(f"  {source['name']}: страница со ссылками не открылась: {type(exc).__name__}: {exc}"[:200], file=sys.stderr)
+                    searched = False  # не открылась — поищем в следующую сборку
                     break
                 for item in left:
                     item["url"] = real.get(title_key(item["title"]), item["url"])
+            result["unmatched"] = [title_key(i["title"]) for i in result["items"] if "news.google.com" in i["url"]
+                                   and (searched or title_key(i["title"]) in tried)]
         result["fetched"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     except Exception as exc:  # noqa: BLE001 — одна сломанная лента не должна ронять всю сборку
         result["error"] = f"{type(exc).__name__}: {exc}"[:200]
@@ -494,6 +501,8 @@ def collect(source: dict, section: dict, previous: dict, skip: set[str]) -> dict
             result["items"] = prev.get("items", [])
             result["fetched"] = prev.get("fetched")
             result["stale"] = True
+            if "unmatched" in prev:
+                result["unmatched"] = prev["unmatched"]
     return result
 
 
