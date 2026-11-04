@@ -151,7 +151,7 @@
         {"name": "Ozon press", "site": "https://www.ozonpress.net", "feed": "https://www.ozonpress.net/feed", "note": "Čačak i zapadna Srbija", "note_ru": "Чачак и запад Сербии"},
         {"name": "Podrinske", "site": "https://podrinske.com", "feed": "https://podrinske.com/feed", "note": "Šabac", "note_ru": "Шабац"},
         {"name": "Kolubarske", "site": "https://www.kolubarske.rs", "feed": "https://www.kolubarske.rs/rss.xml", "note": "Valjevo", "note_ru": "Валево"},
-        {"name": "Kruševac Grad", "site": "https://www.krusevacgrad.rs", "feed": "https://www.krusevacgrad.rs/feed", "note": "Kruševac", "note_ru": "Крушевац"},
+        {"name": "Kruševac Grad", "site": "https://www.krusevacgrad.rs", "feed": "https://news.google.com/rss/search?hl=sr&gl=RS&ceid=RS:sr&q=site:krusevacgrad.rs+when:3d", "note": "Kruševac", "note_ru": "Крушевац"},
         {"name": "Južne vesti", "site": "https://www.juznevesti.com", "feed": "https://www.juznevesti.com/rss", "note": "Niš", "note_ru": "Ниш"},
         {"name": "Niške vesti", "site": "https://niskevesti.rs", "feed": "https://niskevesti.rs/rss.xml", "note": "Niš", "note_ru": "Ниш"},
         {"name": "JUGpress", "site": "https://jugpress.com", "feed": "https://jugpress.com/feed", "note": "Leskovac", "note_ru": "Лесковац"},
