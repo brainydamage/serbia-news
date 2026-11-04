@@ -17,7 +17,7 @@ import sys
 import urllib.request
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -31,6 +31,10 @@ TEMPLATE = ROOT / "template.html"
 OUT_DIR = ROOT / "site"
 DATA_FILE = OUT_DIR / "data.json"
 STATIC_DIR = ROOT / "static"  # картинка-превью, robots.txt, файлы подтверждения для поисковиков
+# все новости за последние дни — для будущей ежедневной сводки: в data.json у быстрых изданий только последние
+# 30 новостей, это несколько часов. Хранится в кэше GitHub Actions вместе с кэшем переводов, в git не попадает
+ARCHIVE_FILE = ROOT / "cache" / "archive.json"
+ARCHIVE_DAYS = 3
 
 SITE_URL = "https://vestomat.rs"
 CARD_LIMIT = 8  # сколько новостей издания видно сразу — как в template.html
@@ -336,6 +340,29 @@ def load_previous() -> dict:
         return {}
 
 
+def update_archive(results: list[dict]) -> int:
+    """Дописывает новости сборки в архив и убирает старше ARCHIVE_DAYS. Возвращает размер архива.
+    seen — когда сборка впервые увидела новость: у части лент нет дат или они врут, а сводке нужно окно по времени."""
+    try:
+        archive = json.loads(ARCHIVE_FILE.read_text("utf-8"))
+    except (OSError, ValueError):
+        archive = {}
+    now = datetime.now(timezone.utc)
+    for src in results:
+        for item in src["items"]:
+            old = archive.get(item["url"], {})
+            archive[item["url"]] = {
+                "title": item["title"], "summary": item.get("summary", ""), "ru": item.get("ru") or old.get("ru"),
+                "date": item.get("date"), "seen": old.get("seen") or now.isoformat(timespec="seconds"),
+                "source": src["name"], "section": src["section"], "lang": item.get("lang", src["lang"]),
+            }
+    cutoff = (now - timedelta(days=ARCHIVE_DAYS)).isoformat()
+    archive = {url: a for url, a in archive.items() if max(a["seen"], a["date"] or "") >= cutoff}
+    ARCHIVE_FILE.parent.mkdir(exist_ok=True)
+    ARCHIVE_FILE.write_text(json.dumps(archive, ensure_ascii=False), "utf-8")
+    return len(archive)
+
+
 def postponed(jobs: list, previous: dict) -> set[str]:
     """Ленты с ограниченных хостов, которые в эту сборку не качаем (см. FEEDS_PER_BUILD)."""
     skip = set()
@@ -528,6 +555,7 @@ def main() -> int:
         print(f"{len(r['items']):3d}  {r['name']:<24} {status}", file=sys.stderr)
 
     attach_translations(results)
+    print(f"Архив новостей: {update_archive(results)} за {ARCHIVE_DAYS} дня", file=sys.stderr)
 
     data = {
         "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),

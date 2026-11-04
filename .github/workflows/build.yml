@@ -33,13 +33,15 @@ jobs:
       - run: pip install -r requirements.txt
 
       # прошлые данные нужны, чтобы при сбое ленты показать её последние новости,
-      # а кэш переводов — чтобы не платить за перевод одних и тех же новостей
+      # кэш переводов — чтобы не платить за перевод одних и тех же новостей,
+      # архив — все новости за последние дни для ежедневной сводки
       - name: Restore previous data
         uses: actions/cache/restore@v4
         with:
           path: |
             site/data.json
             cache/translations.json
+            cache/archive.json
           key: data-${{ github.run_id }}
           restore-keys: data-
 
@@ -56,6 +58,7 @@ jobs:
           path: |
             site/data.json
             cache/translations.json
+            cache/archive.json
           key: data-${{ github.run_id }}
 
       - uses: actions/upload-pages-artifact@v3
