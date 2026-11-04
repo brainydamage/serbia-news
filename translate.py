@@ -210,11 +210,12 @@ def lost_text(original: dict, translated: dict) -> bool:
             or (bool(original.get("summary", "").strip()) and not translated["summary"].strip()))
 
 
-def looks_translated(original: dict, translated: dict) -> bool:
+def looks_translated(original: dict, translated: dict, strict: bool = True) -> bool:
     """Отсеивает «переводы», которые на деле остались сербским текстом, — например, сербский,
     переписанный кириллицей: «о притисцима на Нову и Радар» вместо «о давлении на Nova и Radar».
     Пороги подобраны на реальных переводах: общие для двух языков слова («после», «против», «видео»)
-    хорошие переводы через них не перешагивают."""
+    хорошие переводы через них не перешагивают. strict=False — без сравнения со словами оригинала:
+    короткий заголовок вроде «Средњи курс динара за евро» по-русски почти дословно тот же."""
     title, summary = translated["title"].strip(), translated["summary"]
     # без букв переводить нечего: запрос Google Trends «2026» так и остаётся «2026»
     if not title or (title == original["title"].strip() and WORDS_RE.search(title)):
@@ -229,8 +230,8 @@ def looks_translated(original: dict, translated: dict) -> bool:
         return False
     if sum(w.lower().translate(SKELETON) in SERBIAN_WORDS for w in WORDS_RE.findall(text)) >= 3:
         return False
-    return (share_of_original(original["title"], title) < 0.7
-            and share_of_original(original.get("summary", ""), summary) < 0.6)
+    return not strict or (share_of_original(original["title"], title) < 0.7
+                          and share_of_original(original.get("summary", ""), summary) < 0.6)
 
 
 CAPS_WORD = re.compile(r"^[^\w]*[A-ZА-ЯЁ]+[^\w]*$")
@@ -317,7 +318,7 @@ def load_cache() -> dict:
         return {}
 
 
-def translate_batch(client, batch: list[tuple[str, dict]], kind: str = "new") -> dict:
+def translate_batch(client, batch: list[tuple[str, dict]], kind: str = "new", strict: bool = True) -> dict:
     model, effort = KINDS[kind]
     # модели даём короткие номера, а не хэши: длинные id она иногда переписывает с ошибкой
     payload = [{"id": str(n), "title": item["title"], "summary": item.get("summary", "")} for n, (_, item) in enumerate(batch)]
@@ -343,7 +344,7 @@ def translate_batch(client, batch: list[tuple[str, dict]], kind: str = "new") ->
     for t in json.loads(text)["items"]:
         key, item = by_number.get(t["id"], (None, None))
         # проверяем до russify: сербские буквы в «переводе» — тоже признак, что модель не перевела
-        if item and looks_translated(item, t):
+        if item and looks_translated(item, t, strict):
             out[key] = {k: fix_caps(russify(fix_abbreviations(t[k]))) for k in ("title", "summary")}
     return out
 
@@ -454,9 +455,9 @@ def attach_translations(sources: list[dict]) -> None:
         failed = 0
         print(f"\nПеревожу {len(missing)} новостей ({len(batches)} пачек)…", file=sys.stderr)
 
-        def run(batch, kind="new"):
+        def run(batch, kind="new", strict=True):
             try:
-                return translate_batch(client, batch, kind)
+                return translate_batch(client, batch, kind, strict)
             except anthropic.AuthenticationError:
                 raise
             except Exception as exc:  # noqa: BLE001 — не переведённое попробуем в следующую сборку
@@ -473,14 +474,15 @@ def attach_translations(sources: list[dict]) -> None:
                     print(f"  пачка {n}/{len(batches)}", file=sys.stderr, flush=True)
 
             # что модель не перевела (или переписала по-сербски кириллицей) — ещё раз, внимательнее
-            # сбои модели случайны («Рейнland»): со второй-третьей попытки текст обычно переводится
+            # сбои модели случайны («Рейнland»): со второй-третьей попытки текст обычно переводится.
+            # если и на последней попытке перевод похож на оригинал, но чист от сербского — значит, так и есть
             for attempt in range(RETRIES):
                 retry = [(key, item) for key, item in missing if key not in cache]
                 if not retry:
                     break
                 print(f"  повтор для {len(retry)} непереведённых, effort={RETRY_EFFORT}", file=sys.stderr, flush=True)
                 for batch in (retry[i:i + RETRY_BATCH] for i in range(0, len(retry), RETRY_BATCH)):
-                    result = run(batch, "retry")
+                    result = run(batch, "retry", strict=attempt < RETRIES - 1)
                     if result:
                         cache.update(result)
         except anthropic.AuthenticationError:
