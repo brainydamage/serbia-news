@@ -319,7 +319,7 @@ footer a { color: var(--text); }
           <button data-v="feed" data-t="feed"></button>
         </div>
         <span class="search-box">
-          <input class="search" id="q" type="search">
+          <input class="search" id="q" type="search" autocomplete="off">
           <button class="search-clear" id="q-clear" type="button" hidden>×</button>
         </span>
       </div>
@@ -1034,6 +1034,9 @@ qInput.addEventListener("input", () => track("search"), { once: true });  // с�
 qClear.addEventListener("click", () => { qInput.value = ""; search(0); qInput.focus(); });
 // Esc тоже очищает поиск
 qInput.addEventListener("keydown", e => { if (e.key === "Escape" && qInput.value) { qInput.value = ""; search(0); } });
+// браузер может вернуть текст в поле при обновлении страницы без события input — тогда крестик скрыт, а фильтр
+// не работает. autocomplete="off" это отключает; если текст всё же вернулся, применяем его как запрос
+if (qInput.value) search(0);
 
 // сколько новостей осталось без перевода (например, сборка шла без ключа)
 const TRANSLATION_GAP = (() => {
