@@ -258,8 +258,12 @@ def rejection(original: dict, translated: dict, strict: bool = True) -> str | No
     title, summary = translated["title"].strip(), translated["summary"]
     if not title:
         return "пустой заголовок"
-    # без букв переводить нечего: запрос Google Trends «2026» так и остаётся «2026»
-    if title == original["title"].strip() and WORDS_RE.search(title):
+    # без букв переводить нечего: запрос Google Trends «2026» так и остаётся «2026».
+    # Короткий кириллический запрос без сербских букв («надзор») по-русски бывает тем же словом —
+    # в последней попытке (strict=False) такой принимаем
+    same_in_russian = (len(title.split()) <= 3 and not re.search("[A-Za-z]", title)
+                       and not SERBIAN_ONLY_LETTERS.search(title))
+    if title == original["title"].strip() and WORDS_RE.search(title) and (strict or not same_in_russian):
         return "заголовок остался как в оригинале"
     if lost_text(original, translated):
         return "в переводе пропала большая часть заголовка или подводки"
