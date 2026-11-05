@@ -63,6 +63,8 @@ PAGES = {
 }
 
 ITEMS_PER_SOURCE = 30
+# самая свежая новость ленты старше, чем в прошлой сборке, на столько — значит, сайт отдал старую ленту из кэша
+STALE_FEED = timedelta(hours=3)
 SUMMARY_CHARS = 420
 # подводка короче — это рубрика вроде «Iza Ekrana 137» у Radar, а не текст
 SUMMARY_MIN = 20
@@ -520,6 +522,13 @@ def collect(source: dict, section: dict, previous: dict, skip: set[str]) -> dict
             dropped |= {title_key(i["title"]) for i in result["items"] if any(part in i["url"] for part in exclude)}
             result["items"] = [i for i in result["items"] if title_key(i["title"]) not in dropped]
             result["excluded"] = sorted(dropped)
+        # лента откатилась назад: Insajder однажды отдал из кэша вчерашнюю — тогда оставляем прошлые новости
+        # (в топах Reddit и Google Trends свежесть скачет сама по себе)
+        newest = max((i["date"] for i in result["items"] if i["date"]), default=None)
+        before = max((i["date"] for i in (prev or {}).get("items", []) if i.get("date")), default=None)
+        if (not source.get("ranked") and newest and before
+                and datetime.fromisoformat(newest) < datetime.fromisoformat(before) - STALE_FEED):
+            raise ValueError(f"лента старее прошлой: самая свежая новость {newest[:16]}, в прошлой сборке {before[:16]}")
         result["fetched"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     except Exception as exc:  # noqa: BLE001 — одна сломанная лента не должна ронять всю сборку
         result["error"] = f"{type(exc).__name__}: {exc}"[:200]
