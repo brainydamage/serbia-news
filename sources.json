@@ -67,7 +67,7 @@
         {"name": "Kurir", "site": "https://www.kurir.rs", "feed": "https://www.kurir.rs/rss/vesti/politika", "note": "rubrika „Politika“", "note_ru": "раздел «Политика»"},
         {"name": "Pink", "site": "https://pink.rs", "feed": "https://pink.rs/rss-feed", "exclude": ["/zadruga/", "/showbiz/", "/pop-kultura/", "/svet/", "/sport/", "/dom-lepota-i-moda/", "/recepti/", "/extra/", "/horoskop/"], "nocache": true},
         {"name": "B92", "site": "https://www.b92.net", "feed": "https://www.b92.net/info/rss/vesti.xml", "exclude": ["/info/svet/"]},
-        {"name": "Espreso", "site": "https://www.espreso.co.rs", "feed": "https://www.espreso.co.rs/rss/vesti"},
+        {"name": "Espreso", "site": "https://www.espreso.co.rs", "feed": "https://www.espreso.co.rs/rss/vesti", "nocache": true},
         {"name": "Srbija Danas", "site": "https://www.srbijadanas.com", "feed": "https://www.srbijadanas.com/rss.xml", "exclude": ["/sport/", "/vip/", "/zena/", "/vesti/svet/", "/ukrajina/"]}
       ]
     },

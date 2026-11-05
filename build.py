@@ -447,7 +447,7 @@ def collect(source: dict, section: dict, previous: dict, skip: set[str]) -> dict
     try:
         url = source["feed"]
         if source.get("nocache"):
-            # Pink, Insajder, Pančevac отдают ленту из кэша на час-два старше; с параметром в адресе — свежую
+            # Pink, Insajder, Pančevac, Espreso отдают ленту из кэша на час-два старше; с параметром в адресе — свежую
             url += ("&" if "?" in url else "?") + f"_={int(datetime.now().timestamp())}"
         data = fetch(url)
         items = parse_trends(data) if "trends.google.com" in source["feed"] else parse_feed(data)
