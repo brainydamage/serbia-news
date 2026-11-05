@@ -14,6 +14,7 @@
         {"name": "Insajder", "site": "https://insajder.net", "feed": "https://insajder.net/feed", "exclude": ["/tv-najava/"], "nocache": true},
         {"name": "Serbian Times", "site": "https://serbiantimes.info", "feed": "https://serbiantimes.info/feed/", "exclude_category": ["sport"]},
         {"name": "NIN", "site": "https://www.nin.rs", "feed": "https://www.nin.rs/rss/najnovije", "exclude": ["/magazin/", "/svet/"], "note": "nedeljnik", "note_ru": "еженедельник"},
+        {"name": "Nedeljnik", "site": "https://www.nedeljnik.rs", "feed": "https://www.nedeljnik.rs/feed/", "note": "nedeljnik", "note_ru": "еженедельник", "exclude_category": ["Svet"]},
         {"name": "Mašina", "site": "https://www.masina.rs", "feed": "https://www.masina.rs/feed/", "note": "rad i društvo", "note_ru": "о труде и обществе"},
         {"name": "Beta", "site": "https://beta.rs", "feed": "https://beta.rs/rss", "note": "nezavisna agencija", "note_ru": "независимое агентство", "exclude_category": ["Sport"]}
       ]
@@ -36,11 +37,14 @@
       "id": "state",
       "title": "Državni",
       "title_ru": "Государственные",
-      "note": "Javni servis, državna agencija i mediji u državnom vlasništvu", "note_ru": "Общественный вещатель, госагентство и СМИ в госсобственности",
+      "note": "Javni servis, državna agencija, Vlada i mediji u državnom vlasništvu", "note_ru": "Общественный вещатель, госагентство, правительство и СМИ в госсобственности",
       "sources": [
         {"name": "RTS", "site": "https://www.rts.rs", "feed": "https://www.rts.rs/page/stories/sr/rss.html", "note": "javni servis", "note_ru": "общественный вещатель", "exclude": ["/vesti/svet/"]},
         {"name": "Tanjug", "site": "https://www.tanjug.rs", "feed": "https://www.tanjug.rs/rss/srbija", "note": "državna agencija", "note_ru": "госагентство"},
-        {"name": "Euronews Srbija", "site": "https://www.euronews.rs", "feed": "https://www.euronews.rs/rss/srbija", "note": "vlasnik Telekom Srbija", "note_ru": "владелец — Telekom Srbija"}
+        {"name": "Euronews Srbija", "site": "https://www.euronews.rs", "feed": "https://www.euronews.rs/rss/srbija", "note": "vlasnik Telekom Srbija", "note_ru": "владелец — Telekom Srbija"},
+        {"name": "Newsmax Balkans", "site": "https://newsmaxbalkans.com", "feed": "https://newsmaxbalkans.com/feed", "note": "vlasnik Telekom Srbija", "note_ru": "владелец — Telekom Srbija", "exclude": ["/svet/", "/magazin/", "/sport/", "/english/"]},
+        {"name": "Mondo", "site": "https://mondo.rs", "feed": "https://mondo.rs/rss/631/Info", "note": "vlasnik Telekom Srbija", "note_ru": "владелец — Telekom Srbija", "exclude": ["/Info/Svet/", "/Info/EX-YU/"]},
+        {"name": "Vlada Srbije", "site": "https://www.srbija.gov.rs", "feed": "https://www.srbija.gov.rs/rss/", "note": "saopštenja Vlade", "note_ru": "сообщения правительства"}
       ]
     },
     {
@@ -62,6 +66,7 @@
       "note": "Tabloidi, TV Pink, portal B92 i Večernje novosti", "note_ru": "Таблоиды, телеканал Pink, портал B92 и «Вечерние новости»",
       "sources": [
         {"name": "Informer", "site": "https://www.informer.rs", "feed": "https://www.informer.rs/rss/politika"},
+        {"name": "Republika", "site": "https://www.republika.rs", "feed": "https://www.republika.rs/rss/vesti/politika", "note": "portal Srpskog telegrafa", "note_ru": "портал «Српского телеграфа»"},
         {"name": "Novosti", "site": "https://www.novosti.rs", "feed": "https://www.novosti.rs/rss/vesti"},
         {"name": "Alo", "site": "https://www.alo.rs", "feed": "https://www.alo.rs/rss.html", "exclude": ["/vip/", "/razonoda/", "/vesti/svet/", "/vesti/ukrajina/", "/sport/"]},
         {"name": "Kurir", "site": "https://www.kurir.rs", "feed": "https://www.kurir.rs/rss/vesti/politika", "note": "rubrika „Politika“", "note_ru": "раздел «Политика»"},
@@ -100,6 +105,7 @@
       "sources": [
         {"name": "Slobodna Evropa", "site": "https://www.slobodnaevropa.org", "feed": "https://www.slobodnaevropa.org/api/", "note": "RFE/RL, SAD", "note_ru": "RFE/RL, США", "exclude_category": ["Iz RSE sveta", "Rat u Ukrajini"]},
         {"name": "BBC na srpskom", "site": "https://www.bbc.com/serbian/lat", "feed": "https://feeds.bbci.co.uk/serbian/lat/rss.xml", "note": "Velika Britanija", "note_ru": "Великобритания"},
+        {"name": "DW na srpskom", "site": "https://www.dw.com/sr", "feed": "https://rss.dw.com/rdf/rss-ser-all", "note": "Nemačka", "note_ru": "Германия"},
         {"name": "Sputnik Srbija", "site": "https://sputnikportal.rs", "feed": "https://sputnikportal.rs/export/rss2/archive/index.xml", "note": "Rusija, državni medij", "note_ru": "Россия, госСМИ", "exclude": ["-sport-", "-fudbal-", "-tenis-", "-kosarka-"]}
       ]
     },
@@ -139,7 +145,7 @@
         {"title": "Kosovo", "title_ru": "Косово", "sources": ["KoSSev", "Kosovo Online"]}
       ],
       "sources": [
-        {"name": "021.rs", "site": "https://www.021.rs", "feed": "https://news.google.com/rss/search?hl=sr&gl=RS&ceid=RS:sr&q=site:021.rs+when:2d", "note": "Novi Sad", "note_ru": "Нови-Сад", "exclude": ["/info/sport/", "/zabava/"], "links": ["https://www.021.rs/najnovije/3", "https://www.021.rs/najnovije/3/20", "https://www.021.rs/najnovije/3/40", "https://www.021.rs/najnovije/3/60", "https://www.021.rs/najnovije/3/80"]},
+        {"name": "021.rs", "site": "https://www.021.rs", "feed": "https://www.021.rs/rss/all", "note": "Novi Sad", "note_ru": "Нови-Сад", "exclude": ["/info/sport/", "/zabava/", "/zivot/"]},
         {"name": "RTV", "site": "https://www.rtv.rs/sr_lat", "feed": "https://news.google.com/rss/search?hl=sr&gl=RS&ceid=RS:sr&q=site:rtv.rs+-site:media.rtv.rs+when:2d", "note": "javni servis Vojvodine", "note_ru": "общественный вещатель Воеводины", "exclude": ["/sport/", "/svet/", "/magazin/"], "links": ["https://www.rtv.rs/sr_lat/sve-vesti", "https://www.rtv.rs/sr_ci/sve-vesti"]},
         {"name": "Autonomija", "site": "https://www.autonomija.info", "feed": "https://www.autonomija.info/feed", "note": "Vojvodina", "note_ru": "Воеводина", "exclude_category": ["Planeta"]},
         {"name": "Subotica.com", "site": "https://www.subotica.com", "feed": "https://www.subotica.com/rss/vesti/najnovije", "exclude": ["/promocija/", "/oni-dolaze/"], "note": "Subotica", "note_ru": "Суботица"},

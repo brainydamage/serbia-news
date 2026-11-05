@@ -103,8 +103,10 @@ def local(tag: str) -> str:
 
 def child_text(el, *names) -> str:
     for child in el:
-        if local(child.tag) in names and child.text and child.text.strip():
-            return child.text.strip()
+        # у Владе в description неэкранированный HTML (<p>…</p>): текст лежит во вложенных элементах
+        text = "".join(child.itertext()).strip()
+        if local(child.tag) in names and text:
+            return text
     return ""
 
 
@@ -482,6 +484,12 @@ def collect(source: dict, section: dict, previous: dict, skip: set[str]) -> dict
             for item in items:
                 if looks_english(item["title"]):
                     item["lang"] = "en"
+        # у Владе в ленте нет дат: ставим время, когда сборка впервые увидела новость.
+        # В первой сборке источника новое от старого не отличить — те остаются без даты
+        prev_dates = {i["url"]: i.get("date") for i in (prev or {}).get("items", [])}
+        for item in items:
+            if not item["date"]:
+                item["date"] = prev_dates.get(item["url"], datetime.now(timezone.utc).isoformat(timespec="seconds") if prev else None)
         # свежие сверху; материалы без даты в конце. «ranked» — лента уже упорядочена по популярности (топ Reddit, Google Trends)
         if not source.get("ranked"):
             items.sort(key=lambda i: i["date"] or "", reverse=True)
