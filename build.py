@@ -297,7 +297,10 @@ def real_links(page: str, site: str) -> dict[str, str]:
             if urlparse(href).netloc == host and href.startswith("https://") and "#" not in href and title_key(text)}
 
 
-SECTION_PAGE_RE = re.compile(r"^(Kategorija|Rubrika|Autor|Tag|Arhiva)\b|\d{1,2}\.\d{1,2}\.\d{4}\.?$|^[\w ]{1,20} vesti$", re.I)
+# Страницы RTV, кроме статей, Google называет по <title> («Srem - JMU Radio-televizija Vojvodine»)
+# или по шапке рубрики («Vojvodina | Novi Sad», «Sport - sve vesti»)
+SECTION_PAGE_RE = re.compile(r"^(Kategorija|Rubrika|Autor|Tag|Arhiva)\b|\d{1,2}\.\d{1,2}\.\d{4}\.?$|^[\w ]{1,20} vesti$"
+                             r"|^[\w ]{1,20} \| [\w ]{1,20}$|\bsve vesti$|Radio-televizija Vojvodine$", re.I)
 
 TRENDS_NS = "{https://trends.google.com/trending/rss}"
 TRAFFIC_RE = re.compile(r"\D")
