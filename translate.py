@@ -66,7 +66,7 @@ SYSTEM_PROMPT = """Ты переводишь новости о Сербии на
 - Власть: Vlada — правительство, premijer (predsednik Vlade) — премьер-министр, predsednik — президент, Narodna skupština — Народная скупщина, poslanik — депутат, MUP — МВД, ministar unutrašnjih poslova — министр внутренних дел.
 
 Оформление:
-- Таблоиды набирают часть заголовка капсом. В переводе капса быть не должно, кроме аббревиатур (СНС, ЕС, РИК), — пиши обычным регистром, а выделенную капсом фразу отделяй точкой: «INSTITUCIJE MORAJU DA RADE Brnabić: Skupštinu ću sazvati» → «Институты должны работать. Брнабич: созову Скупщину»; «VUČIĆ: Ne pada mi na pamet» → «Вучич: мне и в голову не приходит».
+- Таблоиды набирают часть заголовка капсом. В переводе капса быть не должно, кроме аббревиатур (СНС, ЕС, РИК), — пиши обычным регистром, как в русских СМИ: имена, страны и названия с большой буквы, остальное со строчной. Это касается и цитат в кавычках. Выделенную капсом фразу отделяй точкой: «INSTITUCIJE MORAJU DA RADE Brnabić: Skupštinu ću sazvati» → «Институты должны работать. Брнабич: созову Скупщину»; «VUČIĆ: Ne pada mi na pamet» → «Вучич: мне и в голову не приходит»; «"NATO NEĆE NAPASTI SRBIJU" Dačić o Rusiji» → «„НАТО не нападёт на Сербию“. Дачич о России».
 - Имена и названия пиши русской кириллицей, как принято в русских СМИ: Bojana Lazić — Бояна Лазич, Ljubiša — Любиша, Vučić — Вучич, Brnabić — Брнабич, Đorđević — Джорджевич, Novi Sad — Нови-Сад, Skupština — Скупщина, SNS — СНС, Studentska lista — «Студенческий список». Названия СМИ (N1, Nova, Informer) оставляй латиницей. Если ведомство в оригинале названо полностью, пиши его полное русское название, а не аббревиатуру; сербские аббревиатуры (JTOK, VJT, OJT, BIA) оставляй латиницей, только если в оригинале стоит сама аббревиатура. Не придумывай русских аббревиатур из названий («ВСП», «ВЯП»): если название из глоссария, пиши его полностью; привычные сокращения (ЕС, США, ОБСЕ, НАТО, МВД, СНС, РИК) можно.
 - Названия компаний, банков, спортивных клубов, брендов и заведений — это имена: не переводи их по смыслу, а передавай русскими буквами в кавычках: Poštanska štedionica — «Поштанска штедионица» (а не «Почтовая сберегательная касса»), Crvena zvezda — «Црвена звезда», Zvezda — «Звезда» (а не «Красная звезда»), Alta banka — «Алта банка». Английские названия (Financial Times, Alta Pay Group) оставляй латиницей. Государственные органы, учреждения и партии (Narodna banka Srbije — Национальный банк Сербии, Srpska napredna stranka — Сербская прогрессивная партия) переводи, как принято в русских СМИ.
 - Пометки (FOTO), (VIDEO) переводи как (фото), (видео).
@@ -196,6 +196,24 @@ def glossary_for(item: dict) -> list[dict]:
     words = {w.translate(SR_LATIN) for w in WORDS_RE.findall(raw)}
     text = " ".join(skeleton_words(raw))
     return [entry for entry, pattern in GLOSSARY if (entry["sr"] in words if pattern is None else pattern.search(text))]
+
+
+# фамилии на -ić капсом («MILATOVIĆ», «ŽMIRIĆEVA») модель читает плохо: «Миятович», «Нестерович».
+# Переписываем их по правилам и подсказываем, как глоссарий. Окончание «-IĆE» не берём: это чаще будущее время («UNIŠTIĆE»)
+CAPS_SURNAME = re.compile(r"\b([A-ZČĆŽŠĐ]{2,}IĆ)(?:A|U|EM|I|EVA|EVOG|EVE|EVU|EVIH|EVOJ|EVIM)?\b")
+LATIN_TO_SR = [("DŽ", "Џ"), ("LJ", "Љ"), ("NJ", "Њ")] + [(l, c) for c, l in SR_LATIN_UPPER.items() if len(l) == 1]
+
+
+def caps_surnames(item: dict) -> dict[str, str]:
+    """«MILATOVIĆ UPRAVO OTKRIO…» → {"Milatović": "Милатович"}."""
+    out = {}
+    for m in CAPS_SURNAME.finditer(item["title"] + " " + item.get("summary", "")):
+        word = m.group(1)
+        cyr = word
+        for lat, sr in LATIN_TO_SR:
+            cyr = cyr.replace(lat, sr)
+        out[word[0] + word[1:].lower()] = russify(cyr[0] + cyr[1:].lower())
+    return out
 
 
 def share_of_original(original: str, translated: str) -> float:
@@ -365,7 +383,8 @@ def translate_batch(client, batch: list[tuple[str, dict]], kind: str = "new", st
     model, effort = KINDS[kind]
     # модели даём короткие номера, а не хэши: длинные id она иногда переписывает с ошибкой
     payload = [{"id": str(n), "title": item["title"], "summary": item.get("summary", "")} for n, (_, item) in enumerate(batch)]
-    names = {entry["sr"]: entry["ru"] for _, item in batch for entry in glossary_for(item)}
+    names = {sr: ru for _, item in batch for sr, ru in caps_surnames(item).items()}
+    names.update({entry["sr"]: entry["ru"] for _, item in batch for entry in glossary_for(item)})
     content = json.dumps(payload, ensure_ascii=False)
     hints = [f"id {n}: {rejected[key]['reason']}" for n, (key, _) in enumerate(batch) if key in (rejected or {})]
     if hints:
