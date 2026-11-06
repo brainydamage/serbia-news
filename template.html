@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <!--__HEAD__-->
+<!-- favicon.ico — для браузеров, которые не понимают SVG (иначе рисуют букву-заглушку); остальные берут SVG -->
+<link rel="icon" href="/favicon.ico" sizes="32x32">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -76,6 +78,7 @@ header {
 .brand h1 { margin: 0; font-size: 29px; font-weight: 700; line-height: 1.4; white-space: nowrap; }
 .brand .logo { width: 28px; height: 28px; vertical-align: -4px; margin-right: 10px; }
 .updated { color: var(--muted); font-size: 13px; }
+.updated b { font-weight: 800; }  /* название сайта: заголовок описательный, а запомнить надо имя */
 /* вышла новая сборка, а страница открыта давно: плашка сверху и ссылка рядом с «обновлено» */
 .refresh {
   position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 20;
@@ -304,7 +307,7 @@ footer a { color: var(--text); }
 <header>
   <div class="bar">
     <div class="brand">
-      <h1><img class="logo" src="/icon.svg" width="28" height="28" alt=""><span data-t="title">__H1__</span></h1>
+      <h1><img class="logo" src="/icon.svg" width="28" height="28" alt="Vestomat"><span data-t="title">__H1__</span></h1>
       <span class="updated" id="updated"></span>
     </div>
     <div class="controls">
@@ -416,7 +419,6 @@ const UI = {
   aqi4: "veoma loš",
   aqi5: "izuzetno loš",
   searches: "pretraga",
-  outlets: "medija",
   lastPost: "poslednja vest",
   noDate: "bez datuma",
   ago: "pre",
@@ -461,7 +463,6 @@ const UI_RU = {
   aqi4: "очень плохой",
   aqi5: "крайне плохой",
   searches: "запросов",
-  outlets: "изданий",
   lastPost: "последний пост",
   noDate: "нет даты",
   min: "мин",
@@ -1009,9 +1010,12 @@ function render() {
 let newer = false;
 const refreshBtn = document.getElementById("refresh");
 refreshBtn.addEventListener("click", () => location.reload());
+// «72 издания», а не «72 изданий»
+const outletCount = n => `${n} ${ru() ? plural(n, "издание", "издания", "изданий") : tx(plural(n, "medij", "medija", "medija"))}`;
 function renderUpdated() {
   document.getElementById("updated").replaceChildren(
-    `${t("updated")} ${timeFmt.format(new Date(DATA.generated))} · ${DATA.sources.length} ${t("outlets")}`,
+    h("b", {}, "Vestomat"), " · ",
+    `${t("updated")} ${timeFmt.format(new Date(DATA.generated))} · ${outletCount(DATA.sources.length)}`,
     newer ? " · " : "", newer ? h("button", { class: "refresh-link", type: "button", onclick: () => location.reload() }, t("reload")) : "");
   refreshBtn.textContent = `↻ ${t("freshNews")} · ${t("reload")}`;
 }
