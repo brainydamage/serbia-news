@@ -65,7 +65,7 @@ ICONS = {
     "www.srbijadanas.com": "appstore:905741898",
     "novaekonomija.rs": "appstore:1364517600",
     "biznis.rs": "https://biznis.rs/wp-content/uploads/2022/09/cropped-biznisRS-favicon-192x192.png",
-    "balkaninsight.com": "youtube:channel/UCd33KZF7ikDr7dICyNt7LVA",
+    "balkaninsight.com": "https://balkaninsight.com/wp-content/uploads/2018/12/cropped-balkan-insight-favicon-blue-1-192x192.png",  # канал YouTube — общий BIRN
     "www.slobodnaevropa.org": "appstore:475986784",  # приложение RFE/RL, общее для всех служб
     "www.bbc.com": "appstore:364147881",
     "www.dw.com": "youtube:@dwsrpski",  # у иконки приложения DW свои скругления со светлым ободком
