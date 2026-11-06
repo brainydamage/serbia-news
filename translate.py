@@ -82,7 +82,17 @@ SYSTEM_PROMPT = """Ты переводишь новости о Сербии на
 - event — новость о событии: что-то произошло, кто-то что-то сделал, решил, потребовал или заявил (заявление политика или ведомства — тоже event), что-то состоится. Кликбейтный заголовок, за которым событие («Horor u centru Čačka»), — тоже event;
 - opinion — колонка, комментарий, мнение, разбор «что это значит», прогноз аналитика, интервью-рассуждение без новости;
 - service — погода, курс, результаты лото, гороскоп, рецепты, советы, обзор первых полос газет, «как правильно пишется»;
-- feature — история, культура, портреты и воспоминания, «на сегодняшний день», некрологи-очерки, праздники и памятные дни."""
+- feature — история, культура, портреты и воспоминания, «на сегодняшний день», некрологи-очерки, праздники и памятные дни.
+
+Разметка для группировки новостей в события — по-русски, только из того, что есть в заголовке и подводке, ничего не додумывая:
+- what — только для kind=event: одно нейтральное предложение до 20 слов, что произошло — кто что сделал или что где случилось, без оценок, кликбейта и цитат: «Прокуратура Нови-Сада просит взять под стражу краевого секретаря Предрага Вулетича». Если по заголовку и подводке не понять, что произошло, или kind не event — пустая строка;
+- entities — до 5 главных участников: люди (имя и фамилия, если они есть в тексте), организации, партии, компании — в той же русской форме, что в переводе, в именительном падеже: ["Предраг Вулетич", "Высшая прокуратура Нови-Сада"]. Места сюда не пиши; нет участников — пустой массив;
+- place — где произошло: город или край Сербии («Нови-Сад», «Воеводина», «Косово»), для событий за границей — страна; пустая строка, если событие общесербское или место не названо;
+- topic — politics (власть, выборы, партии, протесты, дипломатия Сербии), crime (преступления, полиция, суды, коррупционные дела), economy (деньги, банки, цены, компании, работа), society (образование, здоровье, транспорт, город, экология, права), incident (аварии, пожары, катастрофы, гибель людей), culture, sport, world (события за границей без участия Сербии), other."""
+
+TOPICS = ["politics", "crime", "economy", "society", "incident", "culture", "sport", "world", "other"]
+# разметка для сюжетов (what, entities, place, topic) идёт в архив, а не на сайт — см. build.ARCHIVE_ONLY
+MARKUP = ("kind", "what", "entities", "place", "topic")
 
 SCHEMA = {
     "type": "object",
@@ -97,8 +107,12 @@ SCHEMA = {
                     "summary": {"type": "string"},
                     "lead_ok": {"type": "boolean"},
                     "kind": {"type": "string", "enum": ["event", "opinion", "service", "feature"]},
+                    "what": {"type": "string"},
+                    "entities": {"type": "array", "items": {"type": "string"}},
+                    "place": {"type": "string"},
+                    "topic": {"type": "string", "enum": TOPICS},
                 },
-                "required": ["id", "title", "summary", "lead_ok", "kind"],
+                "required": ["id", "title", "summary", "lead_ok", "kind", "what", "entities", "place", "topic"],
                 "additionalProperties": False,
             },
         }
@@ -434,6 +448,10 @@ def translate_batch(client, batch: list[tuple[str, dict]], kind: str = "new", st
             out[key] = {k: fix_caps(russify(fix_abbreviations(t[k]))) for k in ("title", "summary")}
             out[key]["lead_ok"] = t["lead_ok"]
             out[key]["kind"] = t["kind"]
+            out[key]["what"] = fix_caps(russify(t["what"].strip())) if t["kind"] == "event" else ""
+            out[key]["entities"] = list(dict.fromkeys(russify(e.strip()) for e in t["entities"] if e.strip()))[:5]
+            out[key]["place"] = russify(t["place"].strip())
+            out[key]["topic"] = t["topic"]
         elif rejected is not None:
             rejected[key] = {"reason": reason, "attempt": t["title"], "attempt_summary": t["summary"]}
     return out
@@ -519,7 +537,8 @@ def report_results(reported: set[str], copies: dict, cache: dict, before: dict) 
 
 def attach_translations(sources: list[dict]) -> None:
     """Добавляет к каждой нерусскоязычной новости поле "ru": {"title", "summary"}, а ко всем — "lead" (см. lead_state).
-    "kind" — тип материала по оценке модели: event, opinion, service, feature; у русскоязычных и переведённых до 07.11.2026 его нет."""
+    MARKUP — оценки модели: kind (event, opinion, service, feature), what (что произошло, одной фразой), entities,
+    place, topic; у русскоязычных новостей и переведённых до 07.11.2026 их нет (what, entities, place, topic — с 07.11 вечера)."""
     # один и тот же текст агентства бывает у нескольких изданий: переводим один раз, раздаём всем
     todo, copies, source_of = {}, {}, {}
     for src in sources:
@@ -629,8 +648,8 @@ def attach_translations(sources: list[dict]) -> None:
     for src in sources:
         for item in src["items"]:
             lead = lead_state(item, judged.get(id(item), {}).get("lead_ok"))
-            kind = judged.get(id(item), {}).get("kind")
-            for field, value in (("lead", lead), ("kind", kind)):
+            markup = [(field, judged.get(id(item), {}).get(field)) for field in MARKUP]
+            for field, value in [("lead", lead), *markup]:
                 if value:
                     item[field] = value
                 else:

@@ -38,6 +38,10 @@ REGIONS_FILE = ROOT / "regions.json"  # контуры областей для �
 # 30 новостей, это несколько часов. Хранится в кэше GitHub Actions вместе с кэшем переводов, в git не попадает
 ARCHIVE_FILE = ROOT / "cache" / "archive.json"
 ARCHIVE_DAYS = 3
+# только для архива (сюжеты, разбор): в data.json не кладём — он встроен в страницу, и каждый килобайт читатель качает
+ARCHIVE_ONLY = ("categories", "author", "what", "entities", "place", "topic")
+# пометки срочного в заголовке: HITNO, UŽIVO, BREAKING — в архиве поле «marker», для Live
+MARKER_RE = re.compile(r"(?<!\w)(HITNO|ХИТНО|UŽIVO|UZIVO|УЖИВО|BREAKING)(?!\w)", re.IGNORECASE)
 
 SITE_URL = "https://vestomat.rs"
 CARD_LIMIT = 8  # сколько новостей издания видно сразу — как в template.html
@@ -107,6 +111,15 @@ def fetch(url: str) -> bytes:
 def local(tag: str) -> str:
     """'{namespace}title' -> 'title'"""
     return tag.rsplit("}", 1)[-1].lower()
+
+
+def feed_author(text: str) -> str:
+    """<dc:creator> или <author>: «redakcija@site.rs (Ime Prezime)» → «Ime Prezime», голый адрес почты — пусто."""
+    text = clean_text(text)
+    m = re.search(r"\(([^()]+)\)\s*$", text)
+    if m:
+        text = m.group(1).strip()
+    return "" if "@" in text else text[:100]
 
 
 def child_text(el, *names) -> str:
@@ -226,8 +239,10 @@ def parse_feed(data: bytes) -> list[dict]:
             "url": link,
             "summary": tidy_summary(summary),
             "date": date.isoformat() if date else None,
-            # рубрики ленты — только для «exclude_category», в data.json не попадают
-            "categories": [clean_text(c.text or c.get("term") or "") for c in el if local(c.tag) == "category"],
+            # рубрики и автор — для «exclude_category» и архива (по ним видно колонки и агентские тексты),
+            # в data.json не попадают (см. ARCHIVE_ONLY)
+            "categories": [c for c in (clean_text(c.text or c.get("term") or "") for c in el if local(c.tag) == "category") if c],
+            "author": feed_author(child_text(el, "creator", "author")),
         })
     return items
 
@@ -420,24 +435,43 @@ def load_previous() -> dict:
         return {}
 
 
-def update_archive(results: list[dict]) -> int:
+def update_archive(results: list[dict], fresh: set[str]) -> int:
     """Дописывает новости сборки в архив и убирает старше ARCHIVE_DAYS. Возвращает размер архива.
-    seen — когда сборка впервые увидела новость: у части лент нет дат или они врут, а сводке нужно окно по времени."""
+    seen — когда сборка впервые увидела новость: у части лент нет дат или они врут, а сводке нужно окно по времени.
+    last_seen — когда новость в последний раз была в ленте (fresh — ленты, скачанные в эту сборку): пропала раньше,
+    чем её вытеснили бы новые, — возможно, удалили. titles — прежние заголовки, если издание его меняло:
+    [{"title", "until"}]. Остальное — оценки модели при переводе (см. translate.attach_translations) и поля ленты."""
     try:
         archive = json.loads(ARCHIVE_FILE.read_text("utf-8"))
     except (OSError, ValueError):
         archive = {}
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     for src in results:
         for item in src["items"]:
             old = archive.get(item["url"], {})
-            archive[item["url"]] = {
+            entry = {
                 "title": item["title"], "summary": item.get("summary", ""), "ru": item.get("ru") or old.get("ru"),
                 "lead": item.get("lead") or old.get("lead"), "kind": item.get("kind") or old.get("kind"),
-                "date": item.get("date"), "seen": old.get("seen") or now.isoformat(timespec="seconds"),
+                "date": item.get("date"), "seen": old.get("seen") or now,
+                "last_seen": now if src["feed"] in fresh else old.get("last_seen") or now,
                 "source": src["name"], "section": src["section"], "lang": item.get("lang", src["lang"]),
             }
-    cutoff = (now - timedelta(days=ARCHIVE_DAYS)).isoformat()
+            for field in ARCHIVE_ONLY:
+                if value := item.get(field) or old.get(field):
+                    entry[field] = value
+            # издание снимает «HITNO» через час-другой, а для Live важно, что новость была срочной, — метку не теряем
+            if m := MARKER_RE.search(item["title"]):
+                entry["marker"] = m.group(1).upper().replace("UZIVO", "UŽIVO").replace("ХИТНО", "HITNO").replace("УЖИВО", "UŽIVO")
+            elif old.get("marker"):
+                entry["marker"] = old["marker"]
+            titles = old.get("titles", [])
+            # один адрес бывает в двух лентах с разными заголовками — правкой считаем только смену в той же ленте
+            if old.get("source") == src["name"] and old["title"] != item["title"]:
+                titles = [*titles, {"title": old["title"], "until": now}]
+            if titles:
+                entry["titles"] = titles
+            archive[item["url"]] = entry
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=ARCHIVE_DAYS)).isoformat()
     archive = {url: a for url, a in archive.items() if max(a["seen"], a["date"] or "") >= cutoff}
     ARCHIVE_FILE.parent.mkdir(exist_ok=True)
     ARCHIVE_FILE.write_text(json.dumps(archive, ensure_ascii=False), "utf-8")
@@ -523,8 +557,6 @@ def collect(source: dict, section: dict, previous: dict, skip: set[str]) -> dict
         # «exclude_category» — то же по рубрикам ленты (<category>), у кого рубрики нет в адресе: Beta, Serbian Times
         skip = {c.lower() for c in source.get("exclude_category", [])}
         items = [i for i in items if not skip & {c.lower() for c in i.get("categories", [])}]
-        for i in items:
-            i.pop("categories", None)
         # ссылка из чужой ленты попадает в href: «javascript:…» выполнился бы на нашей странице по клику
         items = [i for i in items if i["url"].startswith(("https://", "http://"))]
         if "news.google.com" in source["feed"]:
@@ -772,7 +804,12 @@ def main() -> int:
         print(f"{len(r['items']):3d}  {r['name']:<24} {status}", file=sys.stderr)
 
     attach_translations(results)
-    print(f"Архив новостей: {update_archive(results)} за {ARCHIVE_DAYS} дня", file=sys.stderr)
+    fresh = {r["feed"] for r in results if not r["error"] and r["feed"] not in skip}
+    print(f"Архив новостей: {update_archive(results, fresh)} за {ARCHIVE_DAYS} дня", file=sys.stderr)
+    for r in results:
+        for item in r["items"]:
+            for field in ARCHIVE_ONLY:
+                item.pop(field, None)
 
     data = {
         "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),

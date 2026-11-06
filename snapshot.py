@@ -49,6 +49,8 @@ def main() -> None:
     print("lead: " + ", ".join(f"{k} {v}" for k, v in leads.most_common()))
     kinds = collections.Counter(a.get("kind") or "без отметки" for a in archive.values())
     print("kind: " + ", ".join(f"{k} {v}" for k, v in kinds.most_common()))
+    topics = collections.Counter(a.get("topic") or "без отметки" for a in archive.values())
+    print("topic: " + ", ".join(f"{k} {v}" for k, v in topics.most_common()))
     print(f"→ {out}")
 
 
