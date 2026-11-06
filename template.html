@@ -895,7 +895,9 @@ function spy() {
 
 function measureSticky() {
   const header = document.querySelector("header"), chips = document.getElementById("chips");
-  const headerH = getComputedStyle(header).position === "sticky" ? header.offsetHeight : 0;
+  // высота дробная (68.6px), а offsetHeight округляет вверх — между шапкой и разделами оставалась щель,
+  // сквозь которую мелькала лента. Округляем вниз: ряд разделов чуть заходит под шапку
+  const headerH = getComputedStyle(header).position === "sticky" ? Math.floor(header.getBoundingClientRect().height) : 0;
   // на телефоне ряд разделов не липнет — тогда и отступ под него не нужен
   const chipsH = chips.hidden || getComputedStyle(chips).position !== "sticky" ? 0 : chips.offsetHeight;
   stickyHeight = headerH + chipsH;
