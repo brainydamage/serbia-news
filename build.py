@@ -37,7 +37,9 @@ REGIONS_FILE = ROOT / "regions.json"  # контуры областей для �
 # все новости за последние дни — для будущей ежедневной сводки: в data.json у быстрых изданий только последние
 # 30 новостей, это несколько часов. Хранится в кэше GitHub Actions вместе с кэшем переводов, в git не попадает
 ARCHIVE_FILE = ROOT / "cache" / "archive.json"
-ARCHIVE_DAYS = 3
+# 4 суток, а не 3: снимок раз в 3 дня (snapshot.py) когда бы ни сняли, захватывает 3 предыдущих календарных дня
+# целиком, а соседние снимки перекрываются на сутки — опоздание запуска не оставляет дыр
+ARCHIVE_DAYS = 4
 # только для архива (сюжеты, разбор): в data.json не кладём — он встроен в страницу, и каждый килобайт читатель качает
 ARCHIVE_ONLY = ("categories", "author", "what", "entities", "place", "topic")
 # пометки срочного в заголовке: HITNO, UŽIVO, BREAKING — в архиве поле «marker», для Live
@@ -805,7 +807,7 @@ def main() -> int:
 
     attach_translations(results)
     fresh = {r["feed"] for r in results if not r["error"] and r["feed"] not in skip}
-    print(f"Архив новостей: {update_archive(results, fresh)} за {ARCHIVE_DAYS} дня", file=sys.stderr)
+    print(f"Архив новостей: {update_archive(results, fresh)} за {ARCHIVE_DAYS} дн.", file=sys.stderr)
     for r in results:
         for item in r["items"]:
             for field in ARCHIVE_ONLY:
