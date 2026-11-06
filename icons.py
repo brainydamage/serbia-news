@@ -39,6 +39,7 @@ ICONS = {
     "beta.rs": "youtube:user/betanewsagency",
     "www.krik.rs": "appstore:1585641404",
     "www.cins.rs": "youtube:user/CINSrbija",
+    "birn.rs": "https://birn.rs/wp-content/uploads/2020/06/cropped-birn-favicon-192x192.png",
     "raskrikavanje.rs": "youtube:@raskrikavanje",
     "www.istinomer.rs": "youtube:user/Istinomer",
     "www.cenzolovka.rs": "https://unavatar.io/x/cenzolovka?fallback=false",  # unavatar быстро упирается в лимит

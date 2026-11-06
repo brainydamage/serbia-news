@@ -27,6 +27,7 @@
       "sources": [
         {"name": "KRIK", "site": "https://www.krik.rs", "feed": "https://www.krik.rs/feed/"},
         {"name": "CINS", "site": "https://www.cins.rs", "feed": "https://www.cins.rs/feed/", "exclude_category": ["Kviz"]},
+        {"name": "BIRN Srbija", "site": "https://birn.rs", "feed": "https://birn.rs/wp-json/wp/v2/posts?per_page=20&_fields=date_gmt,link,title,excerpt"},
         {"name": "Raskrikavanje", "site": "https://raskrikavanje.rs", "feed": "https://raskrikavanje.rs/feed/"},
         {"name": "Istinomer", "site": "https://www.istinomer.rs", "feed": "https://www.istinomer.rs/feed/"},
         {"name": "Cenzolovka", "site": "https://www.cenzolovka.rs", "feed": "https://www.cenzolovka.rs/feed/", "note": "o slobodi medija", "note_ru": "о свободе СМИ"},

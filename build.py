@@ -333,6 +333,25 @@ def parse_trends(data: bytes) -> list[dict]:
     return items
 
 
+def parse_wp_json(data: bytes) -> list[dict]:
+    """Сайт на WordPress с выключенной RSS (BIRN Srbija): те же записи отдаёт его API /wp-json/wp/v2/posts."""
+    items = []
+    for post in json.loads(data):
+        title = clean_text(post.get("title", {}).get("rendered", ""))
+        summary = clean_text(post.get("excerpt", {}).get("rendered", ""))
+        date = parse_date((post.get("date_gmt") or "") + "+00:00") if post.get("date_gmt") else None
+        if not title or not post.get("link"):
+            continue
+        items.append({
+            "title": title,
+            "url": post["link"],
+            "summary": tidy_summary("" if summary == title else summary),
+            "date": date.isoformat() if date else None,
+            "categories": [],
+        })
+    return items
+
+
 # ---------- шапка: курс, погода, воздух ----------
 
 # средний курс Народного банка Сербии (зеркало kurs.resenje.org), погода и качество воздуха — Open-Meteo; всё без ключей.
@@ -459,7 +478,12 @@ def collect(source: dict, section: dict, previous: dict, skip: set[str]) -> dict
             # Pink, Insajder, Pančevac, Espreso отдают ленту из кэша на час-два старше; с параметром в адресе — свежую
             url += ("&" if "?" in url else "?") + f"_={int(datetime.now().timestamp())}"
         data = fetch(url)
-        items = parse_trends(data) if "trends.google.com" in source["feed"] else parse_feed(data)
+        if "trends.google.com" in source["feed"]:
+            items = parse_trends(data)
+        elif "/wp-json/" in source["feed"]:
+            items = parse_wp_json(data)
+        else:
+            items = parse_feed(data)
         # «more_feeds» — ещё ленты того же издания: у Telegraf новости и политика (поддомен politika.) идут разными лентами
         for feed in source.get("more_feeds", []):
             try:
