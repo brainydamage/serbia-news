@@ -24,7 +24,7 @@ from pathlib import Path
 from urllib.parse import urljoin, urlparse
 from zoneinfo import ZoneInfo
 
-from translate import SKELETON, WORDS_RE, attach_translations
+from translate import SKELETON, WORDS_RE, attach_translations, reports_api
 
 ROOT = Path(__file__).parent
 SOURCES = ROOT / "sources.json"
@@ -69,6 +69,10 @@ PAGES = {
 ITEMS_PER_SOURCE = 30
 # самая свежая новость ленты старше, чем в прошлой сборке, на столько — значит, сайт отдал старую ленту из кэша
 STALE_FEED = timedelta(hours=3)
+# сторож лент: лента не открывается или молчит дольше суток — пишем в Telegram (через worker/). Медленным изданиям
+# (CINS, BIRN — раз в несколько дней) сутки тишины — норма: им ждём SILENT_GAPS обычных промежутков между новостями
+SILENT_AFTER = timedelta(days=1)
+SILENT_GAPS = 4
 SUMMARY_CHARS = 420
 # подводка короче — это рубрика вроде «Iza Ekrana 137» у Radar, а не текст
 SUMMARY_MIN = 20
@@ -440,6 +444,29 @@ def update_archive(results: list[dict]) -> int:
     return len(archive)
 
 
+def watch_feeds(jobs: list, results: list[dict]) -> list[dict]:
+    """Сторож лент: какие ленты не открываются (broken) или молчат (silent) дольше SILENT_AFTER."""
+    now = datetime.now(timezone.utc)
+    problems = []
+    for (source, _), r in zip(jobs, results):
+        base = {"name": r["name"], "site": r["site"], "feed": r["feed"]}
+        # пока лента падает, fetched остаётся временем последнего удачного скачивания
+        if r["error"] and r.get("fetched") and now - datetime.fromisoformat(r["fetched"]) > SILENT_AFTER:
+            problems.append({**base, "kind": "broken", "since": r["fetched"], "detail": r["error"]})
+            continue
+        if source.get("ranked"):  # в топе Reddit и Google Trends свежего может не быть и у живой ленты
+            continue
+        dated = sorted((i for i in r["items"] if i.get("date")), key=lambda i: i["date"], reverse=True)
+        if not dated:
+            continue
+        newest = datetime.fromisoformat(dated[0]["date"])
+        gap = (newest - datetime.fromisoformat(dated[-1]["date"])) / max(len(dated) - 1, 1)
+        if now - newest > max(SILENT_AFTER, SILENT_GAPS * gap):
+            problems.append({**base, "kind": "silent", "since": dated[0]["date"], "detail": dated[0]["title"],
+                             "gap_hours": round(gap / timedelta(hours=1), 1)})
+    return problems
+
+
 def postponed(jobs: list, previous: dict) -> set[str]:
     """Ленты с ограниченных хостов, которые в эту сборку не качаем (см. FEEDS_PER_BUILD)."""
     skip = set()
@@ -758,6 +785,13 @@ def main() -> int:
     OUT_DIR.mkdir(exist_ok=True)
     DATA_FILE.write_text(json.dumps(data, ensure_ascii=False), "utf-8")
     write_pages(data)
+
+    problems = watch_feeds(jobs, results)
+    for p in problems:
+        print(f"  сторож лент: {p['name']} — {'не открывается' if p['kind'] == 'broken' else 'молчит'} с {p['since'][:16]}",
+              file=sys.stderr)
+    # шлём каждую сборку, даже пустой список: так worker узнаёт, что лента ожила
+    reports_api({"feeds": [r["feed"] for r in results], "problems": problems}, "feeds")
 
     ok = sum(1 for r in results if not r["error"] and r["feed"] not in skip)
     print(f"\nГотово: {ok}/{len(results) - len(skip)} лент, {OUT_DIR / 'index.html'}", file=sys.stderr)

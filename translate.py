@@ -461,7 +461,8 @@ def connect():
 
 def reports_api(data: dict | None = None, path: str = "reports") -> dict | None:
     """Приёмник жалоб (worker/): без data — список жалоб, ждущих итога, с data — отправка итогов.
-    path="stats" — туда же отправляем расходы сборки, path="untranslated" — новости, которые не перевелись."""
+    path="stats" — туда же отправляем расходы сборки, path="untranslated" — новости, которые не перевелись,
+    path="feeds" — сторож лент: какие ленты не открываются или молчат."""
     url, token = os.environ.get("REPORTS_URL"), os.environ.get("REPORTS_TOKEN")
     if not (url and token):
         return None

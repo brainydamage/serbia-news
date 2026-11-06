@@ -7,6 +7,9 @@
 // POST /untranslated {items: [{url, source, title, summary, reason, attempt, attempt_summary}]} — от сборки: новости, которые модель
 //   не перевела и с подсказкой (обычно мешает название — его стоит добавить в glossary.json). Присылаем в Telegram
 //   одним сообщением, каждую новость один раз: сборка шлёт их снова, пока они в ленте.
+// POST /feeds {feeds: [feed], problems: [{name, site, feed, kind: broken|silent, since, detail, gap_hours}]} — от сборки,
+//   каждую сборку: сторож лент. О ленте, которая не открывается или молчит дольше суток, пишем в Telegram один раз,
+//   а когда она ожила — отвечаем на то сообщение. Кого уже прислали, лежит в ключе KV "feeds".
 // POST /telegram — webhook бота: строки «Air Serbia = Air Serbia» или «удалить Air Serbia» из нашего чата
 //   worker коммитит в glossary.json на GitHub (секрет GITHUB_TOKEN), а коммит запускает сборку.
 //   Webhook worker подключает сам при первой сборке после выкатки (см. ensureWebhook).
@@ -30,6 +33,9 @@ const KINDS = ["new", "retry", "review"];
 const BUILDS_DAYS = 14;
 const UNTRANSLATED_MAX = 10;  // за одну сборку — чтобы сообщение влезло в лимит Telegram
 const UNTRANSLATED_SECONDS = 4 * 24 * 3600;  // дольше, чем новость держится в ленте
+const FEEDS_MAX = 15;  // новых тревог в одном сообщении
+// сторож лент заметно отличается от «Не перевелось»: свой заголовок и значки
+const FEEDS_TITLE = "📡 СТОРОЖ ЛЕНТ";
 const REPO = "brainydamage/serbia-news";
 const GLOSSARY_PATH = "glossary.json";
 // поменять, если изменятся настройки webhook, — worker подключит его заново
@@ -65,7 +71,7 @@ export default {
       if (!authorized(request, env.STATS_KEY)) return json({ error: "unauthorized" }, 401);
       return json((await env.REPORTS.get("stats", "json")) || { days: {}, builds: [] });
     }
-    if (["/reports", "/stats", "/untranslated"].includes(pathname) && !authorized(request, env.REPORTS_TOKEN)) return json({ error: "unauthorized" }, 401);
+    if (["/reports", "/stats", "/untranslated", "/feeds"].includes(pathname) && !authorized(request, env.REPORTS_TOKEN)) return json({ error: "unauthorized" }, 401);
     if (pathname === "/reports" && request.method === "GET") return list(env);
     if (pathname === "/reports" && request.method === "POST") return resolve(request, env);
     if (pathname === "/stats" && request.method === "POST") {
@@ -74,6 +80,7 @@ export default {
       return stats(request, env);
     }
     if (pathname === "/untranslated" && request.method === "POST") return untranslated(request, env);
+    if (pathname === "/feeds" && request.method === "POST") return watchFeeds(request, env);
     return json({ error: "not found" }, 404);
   },
 };
@@ -208,6 +215,61 @@ async function untranslated(request, env) {
     await Promise.all(fresh.map(({ key }) => env.REPORTS.put(key, "1", { expirationTtl: UNTRANSLATED_SECONDS })));
   }
   return json({ ok: true, new: fresh.length, sent: Boolean(message) });
+}
+
+async function watchFeeds(request, env) {
+  const { feeds, problems } = await request.json();
+  const listed = new Set(Array.isArray(feeds) ? feeds : []);
+  const now = (Array.isArray(problems) ? problems : []).filter(p => typeof p?.feed === "string");
+  const known = (await env.REPORTS.get("feeds", "json")) || {};
+  const cut = value => String(value || "").slice(0, 300);
+
+  const fresh = now.filter(p => !(p.feed in known)).slice(0, FEEDS_MAX);
+  if (fresh.length) {
+    const blocks = fresh.map(p => (p.kind === "broken"
+      ? [`🔴 ${cut(p.name)} не открывается ${since(p.since)}`, `Ошибка: ${cut(p.detail)}`, cut(p.feed)]
+      : [`🔇 ${cut(p.name)} молчит ${since(p.since)}`, `Последняя новость: ${cut(p.detail)}`,
+        `Обычно пишет раз в ${hours(p.gap_hours)}`, cut(p.site)]).join("\n"));
+    const message = await notify(env, [FEEDS_TITLE, ...blocks].join("\n\n"));
+    // не дошло до Telegram — не запоминаем: следующая сборка пришлёт эти ленты ещё раз
+    if (message || !env.TELEGRAM_TOKEN) {
+      for (const p of fresh) known[p.feed] = { name: cut(p.name), kind: p.kind, message: message || null };
+    }
+  }
+
+  // ожила — лента больше не в списке проблем. Если её убрали из sources.json, просто забываем
+  const down = new Set(now.map(p => p.feed));
+  for (const [feed, entry] of Object.entries(known)) {
+    if (down.has(feed)) continue;
+    if (listed.has(feed)) {
+      const text = `✅ Сторож лент: ${entry.name} ${entry.kind === "broken" ? "снова открывается" : "снова пишет"}`;
+      const sent = await telegram(env, "sendMessage", {
+        text, ...(entry.message ? { reply_parameters: { message_id: entry.message, allow_sending_without_reply: true } } : {}),
+      });
+      if (!sent && env.TELEGRAM_TOKEN) continue;
+    }
+    delete known[feed];
+  }
+  await env.REPORTS.put("feeds", JSON.stringify(known));
+  return json({ ok: true, new: fresh.length, watching: Object.keys(known).length });
+}
+
+// «с 5 ноября, 16:45 (30 ч)» — время по Белграду
+function since(iso) {
+  const ms = Date.parse(iso);
+  if (!ms) return "";
+  const date = new Date(ms).toLocaleString("ru-RU", { timeZone: "Europe/Belgrade", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
+  return `с ${date} (${hours((Date.now() - ms) / 3600e3)})`;
+}
+
+// 30 → «30 ч», 75 → «3 дня»
+function hours(value) {
+  const h = Number(value) || 0;
+  if (h < 1) return `${Math.max(1, Math.round(h * 60))} мин`;
+  if (h < 48) return `${Math.round(h)} ч`;
+  const d = Math.round(h / 24);
+  const last = d % 10, tens = d % 100;
+  return `${d} ${last === 1 && tens !== 11 ? "день" : last >= 2 && last <= 4 && (tens < 12 || tens > 14) ? "дня" : "дней"}`;
 }
 
 // секретная метка webhook: Telegram ставит её в заголовок каждого запроса, так чужой не притворится Telegram.
