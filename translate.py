@@ -146,6 +146,7 @@ WORDS_RE = re.compile(r"[^\W\d_]+")
 SERBIAN_WORDS = set("se su sa ka kod sta kada gde koji koja koje koju kojih kojima nije nisu nisam jer vec kao "
                     "pre pored izmedju zbog kroz prema tokom bio bila bilo bili biti vise nakon sada zasto koliko "
                     "dok jos uz evo ce cu ovaj ovo ova posto ali da".split())
+HYPHENATED_RE = re.compile(r"[^\W\d_]+(?:-[^\W\d_]+)+")
 
 
 def skeleton_words(text: str, lowercase_only: bool = False) -> list[str]:
@@ -278,7 +279,9 @@ def rejection(original: dict, translated: dict, strict: bool = True) -> str | No
         return "слова из двух алфавитов: " + ", ".join(dict.fromkeys(found))
     if found := [c for c in text if foreign_letter(c)]:
         return "посторонние буквы: " + "".join(dict.fromkeys(found))
-    if len(found := [w for w in words if w.lower().translate(SKELETON) in SERBIAN_WORDS]) >= 3:
+    # слова через дефис — названия: «Нови-Сада» — это Нови-Сад, а не сербское «сада» (сейчас)
+    plain = WORDS_RE.findall(HYPHENATED_RE.sub(" ", text))
+    if len(found := [w for w in plain if w.lower().translate(SKELETON) in SERBIAN_WORDS]) >= 3:
         return "остались сербские служебные слова: " + ", ".join(dict.fromkeys(found))
     if strict and (share_of_original(original["title"], title) >= 0.7
                    or share_of_original(original.get("summary", ""), summary) >= 0.6):
