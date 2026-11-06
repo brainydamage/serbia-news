@@ -148,7 +148,14 @@ main { max-width: 1300px; margin: 0 auto; padding: 0 0 40px; }
   position: relative; width: 32px; height: 32px; border-radius: 6px; flex: none; overflow: hidden;
   display: grid; place-items: center; color: #fff; font-weight: 900; font-size: 16px;
 }
-.avatar img { position: absolute; inset: 0; width: 100%; height: 100%; background: var(--bg); }
+.avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+/* свои иконки — квадраты во всю площадь (icons.py): цвет раздела под ними просвечивал бы ободком по скруглённому краю */
+/* буква — запасная, на случай если картинка не загрузится; у прозрачных (Sputnik, герб Владе) она видна сквозь иконку */
+.avatar:has(img) { background: none !important; color: transparent; }
+.avatar:has(.region-map) { background: none !important; overflow: visible; height: 40px; }
+.region-map { width: 100%; height: 100%; }
+.region-map .country { fill: var(--muted); fill-opacity: .3; }
+.region-map .region { fill: var(--c-regional); }
 .card-name { text-decoration: none; font-weight: 700; font-size: 20.8px; line-height: 1.2; }
 a.card-name:hover { color: var(--hover); }
 .card-meta { color: var(--muted); font-size: 11.2px; margin-top: 2px; }
@@ -336,7 +343,8 @@ footer a { color: var(--text); }
 <footer>
   <p><span data-t="credits1"></span> <a href="https://infomate.club" target="_blank" rel="noopener">infomate.club</a>
     <span data-t="credits2"></span> <a href="https://vas3k.club" target="_blank" rel="noopener">Vas3k.Club</a><span data-t="credits3"></span></p>
-  <p><span data-t="footer"></span> <span data-t="stats"></span> <a href="https://www.goatcounter.com" target="_blank" rel="noopener">GoatCounter</a>.</p>
+  <p><span data-t="footer"></span> <span data-t="stats"></span> <a href="https://www.goatcounter.com" target="_blank" rel="noopener">GoatCounter</a>.
+    <span data-t="maps"></span> <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap</a>.</p>
   <p><span data-t="contact"></span> <a href="mailto:kontakt@vestomat.rs">kontakt@vestomat.rs</a></p>
 </footer>
 
@@ -392,6 +400,7 @@ const UI = {
   credits2: "zajednice",
   credits3: " — hvala autorima na ideji!",
   stats: "Anonimna statistika bez kolačića:",
+  maps: "Granice regiona:",
   updated: "ažurirano",
   freshNews: "Ima novih vesti",
   reload: "osveži",
@@ -436,6 +445,7 @@ const UI_RU = {
   credits2: "сообщества",
   credits3: " — спасибо авторам за идею!",
   stats: "Анонимная статистика без cookies:",
+  maps: "Границы регионов:",
   updated: "обновлено",
   freshNews: "Есть свежие новости",
   reload: "обновить",
@@ -746,7 +756,7 @@ function renderSources() {
       const card = h("article", { class: "card" },
         h("div", { class: "card-head" },
           h("span", { class: "avatar", style: `background:var(--c-${src.section})` }, src.name[0],
-            h("img", { src: favicon(src.site), alt: "", loading: "lazy", onerror: e => e.target.remove() })),
+            h("img", { src: src.icon || favicon(src.site), alt: "", loading: "lazy", onerror: e => e.target.remove() })),
           h("div", {},
             h("a", { class: "card-name", href: src.site, target: "_blank", rel: "noopener" }, src.name),
             h("div", { class: "card-meta" },
@@ -777,6 +787,23 @@ function renderSources() {
 }
 
 // несколько изданий одного региона — одна карточка, новости вперемешку по времени, у каждой подписано издание
+// мини-карта Сербии (с Косово и Метохией) с областью группы вместо буквы; контуры — из regions.json
+function regionMap(sec, group) {
+  if (!sec.map || !group.map) return null;
+  const ns = "http://www.w3.org/2000/svg", svg = document.createElementNS(ns, "svg");
+  const [, , w, hgt] = sec.map.viewBox.split(" ").map(Number);
+  svg.setAttribute("viewBox", `-1 -1 ${w + 2} ${hgt + 2}`);
+  svg.setAttribute("class", "region-map");
+  svg.setAttribute("aria-hidden", "true");
+  for (const [d, cls] of [[sec.map.country, "country"], [group.map, "region"]]) {
+    const path = document.createElementNS(ns, "path");
+    path.setAttribute("d", d);
+    path.setAttribute("class", cls);
+    svg.append(path);
+  }
+  return svg;
+}
+
 function renderGroup(group, sources, sec) {
   const items = sources.flatMap(src => src.items.filter(matches).map(item => [item, src]))
     .sort((a, b) => (b[0].date || "").localeCompare(a[0].date || ""));
@@ -789,7 +816,7 @@ function renderGroup(group, sources, sec) {
       title: [label(src, "note"), src.error ? t(src.stale ? "stale" : "down") : ""].filter(Boolean).join(" · ") }, src.name)]);
   return h("article", { class: "card" },
     h("div", { class: "card-head" },
-      h("span", { class: "avatar", style: `background:var(--c-${sec.id})` }, label(group, "title")[0]),
+      h("span", { class: "avatar", style: `background:var(--c-${sec.id})` }, regionMap(sec, group) || label(group, "title")[0]),
       h("div", {},
         h("span", { class: "card-name" }, label(group, "title")),
         h("div", { class: "card-meta" }, ...outlets, ` · ${t("lastPost")} `, h("span", { "data-ago": last || "" }, ago(last))),

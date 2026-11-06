@@ -32,6 +32,8 @@ TEMPLATE = ROOT / "template.html"
 OUT_DIR = ROOT / "site"
 DATA_FILE = OUT_DIR / "data.json"
 STATIC_DIR = ROOT / "static"  # картинка-превью, robots.txt, файлы подтверждения для поисковиков
+ICONS_DIR = STATIC_DIR / "icons"  # иконки изданий, скачивает icons.py
+REGIONS_FILE = ROOT / "regions.json"  # контуры областей для карточек региональных групп, пишет regions.py
 # все новости за последние дни — для будущей ежедневной сводки: в data.json у быстрых изданий только последние
 # 30 новостей, это несколько часов. Хранится в кэше GitHub Actions вместе с кэшем переводов, в git не попадает
 ARCHIVE_FILE = ROOT / "cache" / "archive.json"
@@ -564,6 +566,11 @@ def section_meta(config: dict) -> list[dict]:
             if unknown:
                 raise ValueError(f"в groups раздела {sec['id']} нет таких изданий: {unknown}")
             entry["groups"] = sec["groups"]
+            # вместо буквы у карточки группы — мини-карта с её областью (regions.json, см. regions.py)
+            if REGIONS_FILE.exists():
+                maps = json.loads(REGIONS_FILE.read_text("utf-8"))
+                entry["map"] = {"viewBox": maps["viewBox"], "country": maps["country"]}
+                entry["groups"] = [{**group, "map": maps["regions"].get(group["title"])} for group in sec["groups"]]
         meta.append(entry)
     return meta
 
@@ -660,6 +667,13 @@ def strip_comments(template: str) -> str:
     return re.sub(r"[ \t]+// .*$", "", template, flags=re.M)  # JS: в конце строки (у адресов перед // нет пробела)
 
 
+def add_icons(data: dict) -> None:
+    """"icon" — своя иконка издания из static/icons; у кого её нет, страница берёт favicon у Google."""
+    for src in data["sources"]:
+        host = urlparse(src["site"]).hostname
+        src["icon"] = next((f"/icons/{p.name}" for p in sorted(ICONS_DIR.glob(f"{host}.*"))), None)
+
+
 def write_pages(data: dict) -> None:
     """index.html и ru/index.html, sitemap.xml и статика."""
     payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
@@ -714,6 +728,7 @@ def main() -> int:
         "info": header_info(),
     }
 
+    add_icons(data)
     OUT_DIR.mkdir(exist_ok=True)
     DATA_FILE.write_text(json.dumps(data, ensure_ascii=False), "utf-8")
     write_pages(data)
@@ -727,6 +742,7 @@ if __name__ == "__main__":
     if "--render-only" in sys.argv:  # пересобрать страницы из site/data.json, без лент и перевода — для правок шаблона
         data = json.loads(DATA_FILE.read_text("utf-8"))
         data["sections"] = section_meta(json.loads(SOURCES.read_text("utf-8")))  # порядок и названия разделов — свежие
+        add_icons(data)
         write_pages(data)
         sys.exit(0)
     sys.exit(main())
