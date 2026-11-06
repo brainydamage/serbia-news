@@ -433,7 +433,7 @@ def update_archive(results: list[dict]) -> int:
             old = archive.get(item["url"], {})
             archive[item["url"]] = {
                 "title": item["title"], "summary": item.get("summary", ""), "ru": item.get("ru") or old.get("ru"),
-                "lead": item.get("lead") or old.get("lead"),
+                "lead": item.get("lead") or old.get("lead"), "kind": item.get("kind") or old.get("kind"),
                 "date": item.get("date"), "seen": old.get("seen") or now.isoformat(timespec="seconds"),
                 "source": src["name"], "section": src["section"], "lang": item.get("lang", src["lang"]),
             }

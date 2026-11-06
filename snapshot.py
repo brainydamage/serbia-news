@@ -47,6 +47,8 @@ def main() -> None:
     leads = collections.Counter(a.get("lead") or "без отметки" for a in archive.values())
     print(f"сборка {run['databaseId']} от {run['createdAt']}: {len(archive)} новостей, seen {seen[0]} — {seen[-1]}")
     print("lead: " + ", ".join(f"{k} {v}" for k, v in leads.most_common()))
+    kinds = collections.Counter(a.get("kind") or "без отметки" for a in archive.values())
+    print("kind: " + ", ".join(f"{k} {v}" for k, v in kinds.most_common()))
     print(f"→ {out}")
 
 

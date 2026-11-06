@@ -76,7 +76,13 @@ SYSTEM_PROMPT = """Ты переводишь новости о Сербии на
 Оценка подводки (поле lead_ok) — по оригиналу, а не по переводу:
 - true — заголовок вместе с подводкой отвечают на вопрос «что произошло»: кто что сделал, решил, заявил, что случилось или что и когда состоится (объявление о событии с датой и местом — тоже true);
 - false — подводка сути не сообщает: зазывает к материалу («смотрите», «читайте», «узнайте»), задаёт вопрос, даёт общую фразу или оценку без факта, говорит о другом, реклама, гороскоп, рецепт;
-- если подводки нет или она повторяет заголовок — оценивай один заголовок, и строже: true, только если по нему одному новость можно пересказать фразой без догадок — кто что сделал или что где случилось («MUP: u Beogradu uhapšene tri osobe zbog razbojništva»). false — если заголовок прячет главное («u gradu u Srbiji», «poznati biznismen», «ovaj uređaj»), зазывает («evo zašto», «otkriva», «pogledajte»), задаёт вопрос, или это мнение, колонка, разбор без нового события."""
+- если подводки нет или она повторяет заголовок — оценивай один заголовок, и строже: true, только если по нему одному новость можно пересказать фразой без догадок — кто что сделал или что где случилось («MUP: u Beogradu uhapšene tri osobe zbog razbojništva»). false — если заголовок прячет главное («u gradu u Srbiji», «poznati biznismen», «ovaj uređaj»), зазывает («evo zašto», «otkriva», «pogledajte»), задаёт вопрос, или это мнение, колонка, разбор без нового события.
+
+Тип материала (поле kind) — по оригиналу, независимо от того, хорош ли заголовок:
+- event — новость о событии: что-то произошло, кто-то что-то сделал, решил, потребовал или заявил (заявление политика или ведомства — тоже event), что-то состоится. Кликбейтный заголовок, за которым событие («Horor u centru Čačka»), — тоже event;
+- opinion — колонка, комментарий, мнение, разбор «что это значит», прогноз аналитика, интервью-рассуждение без новости;
+- service — погода, курс, результаты лото, гороскоп, рецепты, советы, обзор первых полос газет, «как правильно пишется»;
+- feature — история, культура, портреты и воспоминания, «на сегодняшний день», некрологи-очерки, праздники и памятные дни."""
 
 SCHEMA = {
     "type": "object",
@@ -90,8 +96,9 @@ SCHEMA = {
                     "title": {"type": "string"},
                     "summary": {"type": "string"},
                     "lead_ok": {"type": "boolean"},
+                    "kind": {"type": "string", "enum": ["event", "opinion", "service", "feature"]},
                 },
-                "required": ["id", "title", "summary", "lead_ok"],
+                "required": ["id", "title", "summary", "lead_ok", "kind"],
                 "additionalProperties": False,
             },
         }
@@ -426,6 +433,7 @@ def translate_batch(client, batch: list[tuple[str, dict]], kind: str = "new", st
         if reason is None:
             out[key] = {k: fix_caps(russify(fix_abbreviations(t[k]))) for k in ("title", "summary")}
             out[key]["lead_ok"] = t["lead_ok"]
+            out[key]["kind"] = t["kind"]
         elif rejected is not None:
             rejected[key] = {"reason": reason, "attempt": t["title"], "attempt_summary": t["summary"]}
     return out
@@ -510,7 +518,8 @@ def report_results(reported: set[str], copies: dict, cache: dict, before: dict) 
 
 
 def attach_translations(sources: list[dict]) -> None:
-    """Добавляет к каждой нерусскоязычной новости поле "ru": {"title", "summary"}, а ко всем — "lead" (см. lead_state)."""
+    """Добавляет к каждой нерусскоязычной новости поле "ru": {"title", "summary"}, а ко всем — "lead" (см. lead_state).
+    "kind" — тип материала по оценке модели: event, opinion, service, feature; у русскоязычных и переведённых до 07.11.2026 его нет."""
     # один и тот же текст агентства бывает у нескольких изданий: переводим один раз, раздаём всем
     todo, copies, source_of = {}, {}, {}
     for src in sources:
@@ -616,14 +625,16 @@ def attach_translations(sources: list[dict]) -> None:
             else:
                 item.pop("ru", None)  # мог остаться в данных прошлой сборки
 
-    lead_ok = {id(item): cache[key].get("lead_ok") for key, items in copies.items() if key in cache for item in items}
+    judged = {id(item): cache[key] for key, items in copies.items() if key in cache for item in items}
     for src in sources:
         for item in src["items"]:
-            lead = lead_state(item, lead_ok.get(id(item)))
-            if lead:
-                item["lead"] = lead
-            else:
-                item.pop("lead", None)
+            lead = lead_state(item, judged.get(id(item), {}).get("lead_ok"))
+            kind = judged.get(id(item), {}).get("kind")
+            for field, value in (("lead", lead), ("kind", kind)):
+                if value:
+                    item[field] = value
+                else:
+                    item.pop(field, None)
 
     # в кэше держим только то, что сейчас на странице, чтобы файл не рос бесконечно
     CACHE_FILE.parent.mkdir(exist_ok=True)
