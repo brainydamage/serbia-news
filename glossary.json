@@ -90,6 +90,7 @@
     {"sr": "Zelenski", "ru": "Зеленский"},
     {"sr": "Šumadija", "ru": "Шумадия"},
     {"sr": "Vranje", "ru": "Вранье"},
-    {"sr": "Valjevo", "ru": "Вальево"}
+    {"sr": "Valjevo", "ru": "Вальево"},
+    {"sr": "od A do Š", "ru": "от А до Я"}
   ]
 }
