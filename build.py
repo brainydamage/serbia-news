@@ -51,6 +51,7 @@ PAGES = {
         "title": "Srbija: vesti iz svih medija — Vestomat",
         "description": "Vesti iz Srbije na jednom mestu: mediji kritični prema SNS-u i bliski SNS-u, državni i regionalni "
                        "mediji, strani mediji o Srbiji. Naslovi svih izvora, ažurirano tokom celog dana.",
+        "og_image": "og.png",  # картинки-превью рисует og.py
     },
     "ru": {
         "path": "ru/",
@@ -61,6 +62,7 @@ PAGES = {
         "description": "Новости Сербии на русском языке в одном месте: СМИ, критичные к SNS и близкие к нему, "
                        "государственные и региональные медиа, зарубежная пресса о Сербии. Заголовки переводит ИИ, "
                        "лента обновляется в течение всего дня.",
+        "og_image": "og-ru.png",
     },
 }
 
@@ -609,7 +611,7 @@ def head_tags(lang: str) -> str:
         f'<meta property="og:description" content="{e(page["description"])}">',
         f'<meta property="og:url" content="{url}">',
         f'<meta property="og:locale" content="{page["locale"]}">',
-        f'<meta property="og:image" content="{SITE_URL}/og.png">',
+        f'<meta property="og:image" content="{SITE_URL}/{page["og_image"]}">',
         '<meta property="og:image:width" content="1200">',
         '<meta property="og:image:height" content="630">',
         '<meta name="twitter:card" content="summary_large_image">',
