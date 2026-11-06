@@ -93,7 +93,7 @@
       "title_ru": "Мир о Сербии",
       "note": "Tekstovi na engleskom i ruskom", "note_ru": "Публикации на английском и русском",
       "sources": [
-        {"name": "Balkan Insight", "site": "https://balkaninsight.com", "feed": "https://balkaninsight.com/feed/", "lang": "en", "note": "BIRN, ceo region", "note_ru": "BIRN, весь регион"},
+        {"name": "Balkan Insight", "site": "https://balkaninsight.com", "feed": "https://balkaninsight.com/category/serbia/feed/", "lang": "en", "note": "BIRN, na engleskom", "note_ru": "BIRN, по-английски"},
         {"name": "Google News (EN)", "site": "https://news.google.com", "feed": "https://news.google.com/rss/search?q=Serbia+when:3d&hl=en-US&gl=US&ceid=US:en", "lang": "en", "note": "mediji na engleskom", "note_ru": "англоязычные СМИ"},
         {"name": "Google News (RU)", "site": "https://news.google.com", "feed": "https://news.google.com/rss/search?q=%D0%A1%D0%B5%D1%80%D0%B1%D0%B8%D1%8F+when:3d&hl=ru&gl=RU&ceid=RU:ru", "lang": "ru", "note": "mediji na ruskom", "note_ru": "русскоязычные СМИ"}
       ]
