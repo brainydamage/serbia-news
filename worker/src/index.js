@@ -7,9 +7,10 @@
 // POST /untranslated {items: [{url, source, title, summary, reason, attempt, attempt_summary}]} — от сборки: новости, которые модель
 //   не перевела и с подсказкой (обычно мешает название — его стоит добавить в glossary.json). Присылаем в Telegram
 //   одним сообщением, каждую новость один раз: сборка шлёт их снова, пока они в ленте.
-// POST /feeds {feeds: [feed], problems: [{name, site, feed, kind: broken|silent, since, detail, gap_hours}]} — от сборки,
-//   каждую сборку: сторож лент. О ленте, которая не открывается или молчит дольше суток, пишем в Telegram один раз,
-//   а когда она ожила — отвечаем на то сообщение. Кого уже прислали, лежит в ключе KV "feeds".
+// POST /feeds {feeds: [feed], problems: [{name, site, feed, kind: broken|silent, since, detail, gap_hours}],
+//   resting: [feed], newest: {feed: дата}} — от сборки, каждую сборку: сторож лент. О ленте, которая не открывается
+//   или молчит дольше суток, пишем в Telegram один раз, а когда тревога снята — отвечаем на то сообщение: «снова пишет»,
+//   если вышла новость, или «отбой», если у издания выходной (resting). Кого уже прислали, лежит в ключе KV "feeds".
 // POST /telegram — webhook бота: строки «Air Serbia = Air Serbia» или «удалить Air Serbia» из нашего чата
 //   worker коммитит в glossary.json на GitHub (секрет GITHUB_TOKEN), а коммит запускает сборку.
 //   Webhook worker подключает сам при первой сборке после выкатки (см. ensureWebhook).
@@ -218,7 +219,8 @@ async function untranslated(request, env) {
 }
 
 async function watchFeeds(request, env) {
-  const { feeds, problems } = await request.json();
+  const { feeds, problems, resting, newest } = await request.json();
+  const restingSet = new Set(Array.isArray(resting) ? resting : []);
   const listed = new Set(Array.isArray(feeds) ? feeds : []);
   const now = (Array.isArray(problems) ? problems : []).filter(p => typeof p?.feed === "string");
   const known = (await env.REPORTS.get("feeds", "json")) || {};
@@ -233,7 +235,7 @@ async function watchFeeds(request, env) {
     const message = await notify(env, [FEEDS_TITLE, ...blocks].join("\n\n"));
     // не дошло до Telegram — не запоминаем: следующая сборка пришлёт эти ленты ещё раз
     if (message || !env.TELEGRAM_TOKEN) {
-      for (const p of fresh) known[p.feed] = { name: cut(p.name), kind: p.kind, message: message || null };
+      for (const p of fresh) known[p.feed] = { name: cut(p.name), kind: p.kind, since: cut(p.since), message: message || null };
     }
   }
 
@@ -242,7 +244,11 @@ async function watchFeeds(request, env) {
   for (const [feed, entry] of Object.entries(known)) {
     if (down.has(feed)) continue;
     if (listed.has(feed)) {
-      const text = `✅ Сторож лент: ${entry.name} ${entry.kind === "broken" ? "снова открывается" : "снова пишет"}`;
+      const wrote = entry.since && newest?.[feed] && Date.parse(newest[feed]) > Date.parse(entry.since);
+      const text = entry.kind === "broken" ? `✅ Сторож лент: ${entry.name} снова открывается`
+        : wrote ? `✅ Сторож лент: ${entry.name} снова пишет`
+        : restingSet.has(feed) ? `💤 Сторож лент: ${entry.name} — отбой: по выходным и праздникам не пишет, ждём рабочего дня`
+        : `💤 Сторож лент: ${entry.name} — отбой`;
       const sent = await telegram(env, "sendMessage", {
         text, ...(entry.message ? { reply_parameters: { message_id: entry.message, allow_sending_without_reply: true } } : {}),
       });

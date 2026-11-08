@@ -9,6 +9,7 @@
 Запуск: .venv/bin/python build.py  (или python3 build.py — тогда без перевода)
 """
 
+import collections
 import html
 import json
 import re
@@ -17,7 +18,7 @@ import sys
 import urllib.request
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
@@ -79,6 +80,14 @@ STALE_FEED = timedelta(hours=3)
 # (CINS, BIRN — раз в несколько дней) сутки тишины — норма: им ждём SILENT_GAPS обычных промежутков между новостями
 SILENT_AFTER = timedelta(days=1)
 SILENT_GAPS = 4
+# часть изданий (Cenzolovka, Mašina, Istinomer) по выходным и праздникам не пишет. Какие — сторож узнаёт сам:
+# у каждой ленты в data.json копятся дни, когда у неё были новости («days», за DAYS_KEPT дней). Не писала
+# в большинство прошедших выходных — её выходные в тишину не засчитываем
+DAYS_KEPT = 35
+# государственные праздники Сербии (нерабочие дни) с постоянной датой; православная Пасха — в days_off
+HOLIDAYS = {(1, 1), (1, 2), (1, 7), (2, 15), (2, 16), (5, 1), (5, 2), (11, 11)}
+# если такой праздник выпал на воскресенье, выходной переносится на понедельник (кроме Рождества)
+HOLIDAYS_MOVED = HOLIDAYS - {(1, 7)}
 SUMMARY_CHARS = 420
 # подводка короче — это рубрика вроде «Iza Ekrana 137» у Radar, а не текст
 SUMMARY_MIN = 20
@@ -437,8 +446,8 @@ def load_previous() -> dict:
         return {}
 
 
-def update_archive(results: list[dict], fresh: set[str]) -> int:
-    """Дописывает новости сборки в архив и убирает старше ARCHIVE_DAYS. Возвращает размер архива.
+def update_archive(results: list[dict], fresh: set[str]) -> dict:
+    """Дописывает новости сборки в архив и убирает старше ARCHIVE_DAYS. Возвращает архив.
     seen — когда сборка впервые увидела новость: у части лент нет дат или они врут, а сводке нужно окно по времени.
     last_seen — когда новость в последний раз была в ленте (fresh — ленты, скачанные в эту сборку): пропала раньше,
     чем её вытеснили бы новые, — возможно, удалили. titles — прежние заголовки, если издание его меняло:
@@ -477,13 +486,85 @@ def update_archive(results: list[dict], fresh: set[str]) -> int:
     archive = {url: a for url, a in archive.items() if max(a["seen"], a["date"] or "") >= cutoff}
     ARCHIVE_FILE.parent.mkdir(exist_ok=True)
     ARCHIVE_FILE.write_text(json.dumps(archive, ensure_ascii=False), "utf-8")
-    return len(archive)
+    return archive
 
 
-def watch_feeds(jobs: list, results: list[dict]) -> list[dict]:
-    """Сторож лент: какие ленты не открываются (broken) или молчат (silent) дольше SILENT_AFTER."""
+def orthodox_easter(year: int) -> date:
+    """Православная Пасха по григорианскому календарю (алгоритм Меёса для юлианского + 13 дней в 1900–2099)."""
+    a, b, c = year % 4, year % 7, year % 19
+    d = (19 * c + 15) % 30
+    e = (2 * a + 4 * b - d + 34) % 7
+    month, day = divmod(d + e + 114, 31)
+    return date(year, month, day + 1) + timedelta(days=13)
+
+
+def days_off(year: int) -> set[date]:
+    """Нерабочие дни Сербии, кроме суббот и воскресений: праздники с переносом и православная Пасха (пт—пн)."""
+    easter = orthodox_easter(year)
+    off = {date(year, m, d) for m, d in HOLIDAYS} | {easter + timedelta(days=k) for k in (-2, -1, 0, 1)}
+    # праздник в воскресенье — выходным становится ближайший рабочий день после него (1 января в воскресенье:
+    # 2 января и так праздник, выходной — 3-го)
+    for holiday in sorted(off):
+        if holiday.weekday() == 6 and (holiday.month, holiday.day) in HOLIDAYS_MOVED:
+            moved = holiday + timedelta(days=1)
+            while moved in off or moved.weekday() >= 5:
+                moved += timedelta(days=1)
+            off.add(moved)
+    return off
+
+
+def is_day_off(day: date) -> bool:
+    """Суббота, воскресенье или праздник."""
+    return day.weekday() >= 5 or day in days_off(day.year)
+
+
+def track_days(results: list[dict], previous: dict, archive: dict) -> None:
+    """Дни (по Белграду), когда у ленты были новости, — в "days"; "tracked" — с какого дня следим.
+    Берём из архива: в нём все новости за ARCHIVE_DAYS, а в ленте у быстрых изданий только последние часы."""
+    seen = collections.defaultdict(set)
+    first = {}
+    for a in archive.values():
+        day = datetime.fromisoformat(a["seen"]).astimezone(LOCAL_TZ).date().isoformat()
+        first[a["source"]] = min(first.get(a["source"], day), day)
+        seen[a["source"]].add(datetime.fromisoformat(a["date"] or a["seen"]).astimezone(LOCAL_TZ).date().isoformat())
+    cutoff = (datetime.now(LOCAL_TZ).date() - timedelta(days=DAYS_KEPT)).isoformat()
+    for r in results:
+        prev = previous.get(r["feed"], {})
+        r["tracked"] = prev.get("tracked") or first.get(r["name"])
+        if not r["tracked"]:
+            continue
+        r["days"] = sorted(d for d in set(prev.get("days", [])) | seen[r["name"]] if d >= max(cutoff, r["tracked"]))
+
+
+def rests_on_days_off(r: dict, today: date) -> bool:
+    """Издание обычно не пишет в выходные и праздники: в большинство прошедших нерабочих дней новостей не было."""
+    if not r.get("tracked"):
+        return False
+    start = max(date.fromisoformat(r["tracked"]), today - timedelta(days=DAYS_KEPT))
+    off = [start + timedelta(days=k) for k in range((today - start).days) if is_day_off(start + timedelta(days=k))]
+    worked = sum(1 for d in off if d.isoformat() in set(r.get("days", [])))
+    return bool(off) and worked * 2 < len(off)
+
+
+def working_time(start: datetime, end: datetime) -> timedelta:
+    """Сколько прошло от start до end без суббот, воскресений и праздников (по Белграду)."""
+    total = timedelta()
+    t = start.astimezone(LOCAL_TZ)
+    end = end.astimezone(LOCAL_TZ)
+    while t < end:
+        midnight = datetime.combine(t.date() + timedelta(days=1), datetime.min.time(), LOCAL_TZ)
+        if not is_day_off(t.date()):
+            total += min(midnight, end) - t
+        t = midnight
+    return total
+
+
+def watch_feeds(jobs: list, results: list[dict]) -> tuple[list[dict], list[str]]:
+    """Сторож лент: какие ленты не открываются (broken) или молчат (silent) дольше SILENT_AFTER.
+    Второе в ответе — ленты, которые молчат, но у них выходной (rests_on_days_off): worker скажет «отбой», а не «ожила»."""
     now = datetime.now(timezone.utc)
-    problems = []
+    today = now.astimezone(LOCAL_TZ).date()
+    problems, resting = [], []
     for (source, _), r in zip(jobs, results):
         base = {"name": r["name"], "site": r["site"], "feed": r["feed"]}
         # пока лента падает, fetched остаётся временем последнего удачного скачивания
@@ -497,10 +578,15 @@ def watch_feeds(jobs: list, results: list[dict]) -> list[dict]:
             continue
         newest = datetime.fromisoformat(dated[0]["date"])
         gap = (newest - datetime.fromisoformat(dated[-1]["date"])) / max(len(dated) - 1, 1)
-        if now - newest > max(SILENT_AFTER, SILENT_GAPS * gap):
-            problems.append({**base, "kind": "silent", "since": dated[0]["date"], "detail": dated[0]["title"],
-                             "gap_hours": round(gap / timedelta(hours=1), 1)})
-    return problems
+        limit = max(SILENT_AFTER, SILENT_GAPS * gap)
+        if now - newest <= limit:
+            continue
+        if rests_on_days_off(r, today) and working_time(newest, now) <= limit:
+            resting.append(r["feed"])
+            continue
+        problems.append({**base, "kind": "silent", "since": dated[0]["date"], "detail": dated[0]["title"],
+                         "gap_hours": round(gap / timedelta(hours=1), 1)})
+    return problems, resting
 
 
 def postponed(jobs: list, previous: dict) -> set[str]:
@@ -763,7 +849,9 @@ def add_icons(data: dict) -> None:
 
 def write_pages(data: dict) -> None:
     """index.html и ru/index.html, sitemap.xml и статика."""
-    payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
+    # дни ленты (track_days) нужны только сторожу: в страницу их не встраиваем
+    page = {**data, "sources": [{k: v for k, v in s.items() if k not in ("days", "tracked")} for s in data["sources"]]}
+    payload = json.dumps(page, ensure_ascii=False).replace("</", "<\\/")
     template = strip_comments(TEMPLATE.read_text("utf-8"))
     # по нему открытая страница узнаёт о новой сборке, не скачивая весь data.json
     (OUT_DIR / "version.json").write_text(json.dumps({"generated": data["generated"]}), "utf-8")
@@ -807,7 +895,9 @@ def main() -> int:
 
     attach_translations(results)
     fresh = {r["feed"] for r in results if not r["error"] and r["feed"] not in skip}
-    print(f"Архив новостей: {update_archive(results, fresh)} за {ARCHIVE_DAYS} дн.", file=sys.stderr)
+    archive = update_archive(results, fresh)
+    print(f"Архив новостей: {len(archive)} за {ARCHIVE_DAYS} дн.", file=sys.stderr)
+    track_days(results, previous, archive)
     for r in results:
         for item in r["items"]:
             for field in ARCHIVE_ONLY:
@@ -825,12 +915,14 @@ def main() -> int:
     DATA_FILE.write_text(json.dumps(data, ensure_ascii=False), "utf-8")
     write_pages(data)
 
-    problems = watch_feeds(jobs, results)
+    problems, resting = watch_feeds(jobs, results)
     for p in problems:
         print(f"  сторож лент: {p['name']} — {'не открывается' if p['kind'] == 'broken' else 'молчит'} с {p['since'][:16]}",
               file=sys.stderr)
-    # шлём каждую сборку, даже пустой список: так worker узнаёт, что лента ожила
-    reports_api({"feeds": [r["feed"] for r in results], "problems": problems}, "feeds")
+    # шлём каждую сборку, даже пустой список: так worker узнаёт, что лента ожила. newest — самая свежая новость
+    # каждой ленты: по ней worker отличает «снова пишет» от «отбой, у издания выходной»
+    newest = {r["feed"]: max((i["date"] for i in r["items"] if i.get("date")), default=None) for r in results}
+    reports_api({"feeds": [r["feed"] for r in results], "problems": problems, "resting": resting, "newest": newest}, "feeds")
 
     ok = sum(1 for r in results if not r["error"] and r["feed"] not in skip)
     print(f"\nГотово: {ok}/{len(results) - len(skip)} лент, {OUT_DIR / 'index.html'}", file=sys.stderr)
