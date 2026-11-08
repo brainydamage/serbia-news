@@ -12,9 +12,11 @@ permissions:
   pages: write
   id-token: write
 
+# идущую сборку не отменяем: она уже заплатила за перевод, а отменённая не сохранит кэш и не отправит расходы
+# в статистику. Новая ждёт в очереди; GitHub держит в ней одну сборку и заменяет её более свежей
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
