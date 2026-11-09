@@ -171,12 +171,12 @@ SERBIAN_WORDS = set("se su sa ka kod sta kada gde koji koja koje koju kojih koji
 HYPHENATED_RE = re.compile(r"[^\W\d_]+(?:-[^\W\d_]+)+")
 
 
-def skeleton_words(text: str, lowercase_only: bool = False) -> list[str]:
+def skeleton_words(text: str, lowercase_only: bool = False, min_len: int = 3) -> list[str]:
     words = WORDS_RE.findall(text)
     if lowercase_only:
         # имена собственные одинаковы в обоих языках — сравниваем только обычные слова
         words = [w for w in words if w.islower()]
-    return [w.lower().translate(SKELETON) for w in words if len(w) >= 3]
+    return [w.lower().translate(SKELETON) for w in words if len(w) >= min_len]
 
 
 # glossary.json — названия и термины, которые надо всегда переводить одинаково:
@@ -203,8 +203,12 @@ def load_glossary() -> list[dict]:
 def glossary_pattern(name: str) -> re.Pattern:
     # сербские названия склоняются: «Poštanska štedionica», «Poštanskoj štedionici» — сравниваем по началу слов,
     # а окончание — не длиннее падежного, иначе «Novi Beograd» совпадёт с «novembar u Beogradu»
+    # Короткие слова («i», «za», «u») пропускаем и в названии, и в тексте между словами названия
     stems = [w[:max(3, len(w) - 2)] for w in skeleton_words(name)]
-    return re.compile(r"\b" + r"\w{0,4}\W+".join(map(re.escape, stems)) + r"\w{0,4}\b")
+    if not stems:
+        # «od A do Š»: все слова короткие, сравнивать по началу нечего — ищем фразу целиком
+        return re.compile(r"\b" + r"\W+".join(map(re.escape, skeleton_words(name, min_len=1))) + r"\b")
+    return re.compile(r"\b" + r"\w{0,4}\W+(?:\w{1,2}\W+)*".join(map(re.escape, stems)) + r"\w{0,4}\b")
 
 
 def is_abbreviation(name: str) -> bool:
@@ -222,7 +226,7 @@ def glossary_hint(entry: dict) -> str:
 def glossary_for(item: dict) -> list[dict]:
     raw = item["title"] + " " + item.get("summary", "")
     words = {w.translate(SR_LATIN) for w in WORDS_RE.findall(raw)}
-    text = " ".join(skeleton_words(raw))
+    text = " ".join(skeleton_words(raw, min_len=1))
     return [entry for entry, pattern in GLOSSARY if (entry["sr"] in words if pattern is None else pattern.search(text))]
 
 
