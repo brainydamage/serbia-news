@@ -126,7 +126,7 @@ def text_key(item: dict) -> str:
     # ключ по тексту, а не по ссылке: если издание поправило заголовок, он переведётся заново.
     # Записи глоссария, которые встречаются в новости, тоже входят в ключ: поправили глоссарий —
     # заново переведутся только новости с этим названием
-    names = "".join(f"\n{e['sr']}={e['ru']}" for e in glossary_for(item))
+    names = "".join(f"\n{e['sr']}={glossary_hint(e)}" for e in glossary_for(item))
     raw = PROMPT_VERSION + names + "\n" + item["title"] + "\n" + item.get("summary", "")
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
@@ -181,6 +181,7 @@ def skeleton_words(text: str, lowercase_only: bool = False) -> list[str]:
 
 # glossary.json — названия и термины, которые надо всегда переводить одинаково:
 # {"names": [{"sr": "Poštanska štedionica", "ru": "Поштанска штедионица"}, ...]}.
+# Необязательное поле note — пояснение для модели, когда слово многозначное: «Mađar» — и фамилия, и «венгр».
 # Кандидатов ищут audit_names.py (названия, переведённые по смыслу) и audit_terms.py (учреждения, партии, термины).
 GLOSSARY_FILE = Path(__file__).parent / "glossary.json"
 # сербская кириллица → латиница, с диакритикой: чтобы «НИС» совпал с «NIS», а «NIŠ» — нет
@@ -212,6 +213,10 @@ def is_abbreviation(name: str) -> bool:
 
 
 GLOSSARY = [(entry, None if is_abbreviation(entry["sr"]) else glossary_pattern(entry["sr"])) for entry in load_glossary()]
+
+
+def glossary_hint(entry: dict) -> str:
+    return entry["ru"] + (f" ({entry['note']})" if entry.get("note") else "")
 
 
 def glossary_for(item: dict) -> list[dict]:
@@ -416,7 +421,7 @@ def translate_batch(client, batch: list[tuple[str, dict]], kind: str = "new", st
     # модели даём короткие номера, а не хэши: длинные id она иногда переписывает с ошибкой
     payload = [{"id": str(n), "title": item["title"], "summary": item.get("summary", "")} for n, (_, item) in enumerate(batch)]
     names = {sr: ru for _, item in batch for sr, ru in caps_surnames(item).items()}
-    names.update({entry["sr"]: entry["ru"] for _, item in batch for entry in glossary_for(item)})
+    names.update({entry["sr"]: glossary_hint(entry) for _, item in batch for entry in glossary_for(item)})
     content = json.dumps(payload, ensure_ascii=False)
     hints = [f"id {n}: {rejected[key]['reason']}" for n, (key, _) in enumerate(batch) if key in (rejected or {})]
     if hints:
