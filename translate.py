@@ -42,6 +42,8 @@ USAGE_LOCK = threading.Lock()
 # при изменении промпта поменяйте версию — кэш сбросится и всё переведётся заново;
 # мелкую правку можно не версионировать: она применится к новым новостям, а старые за день-два уйдут из ленты
 PROMPT_VERSION = "4"
+# то же для заголовков с таблоидным капсом: поправили fix_caps — смените, и заново переведутся только они
+CAPS_VERSION = "1"
 SYSTEM_PROMPT = """Ты переводишь новости о Сербии на русский язык для русскоязычного читателя. Пиши так, как написал бы редактор русского новостного сайта: естественным русским языком, а не слово в слово.
 
 На вход приходит JSON-массив материалов с полями id, title и summary. Тексты на сербском (латиницей или кириллицей) или на английском. Переводи каждый текст на русский — никогда не переписывай сербский текст русскими буквами: «Ilija Srdanović o pritiscima na Novu i Radar» → «Илия Срданович о давлении на Nova и Radar», а не «Илия Срданович о притисцима на Нову и Радар».
@@ -127,7 +129,8 @@ def text_key(item: dict) -> str:
     # Записи глоссария, которые встречаются в новости, тоже входят в ключ: поправили глоссарий —
     # заново переведутся только новости с этим названием
     names = "".join(f"\n{e['sr']}={glossary_hint(e)}" for e in glossary_for(item))
-    raw = PROMPT_VERSION + names + "\n" + item["title"] + "\n" + item.get("summary", "")
+    caps = "caps" + CAPS_VERSION if has_caps_run(item["title"]) else ""
+    raw = PROMPT_VERSION + caps + names + "\n" + item["title"] + "\n" + item.get("summary", "")
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -326,6 +329,12 @@ ABBREVIATIONS = {"ЕС", "ЕУ", "НАТО", "США", "ООН", "РФ", "СНС
 SENTENCE_START = re.compile(r"(^|[.!?…:]\s*)[«„\"(]*$")
 
 
+def has_caps_run(text: str) -> bool:
+    """Два слова капсом подряд: «PRIZNANJE KOSOVA BIĆE…» — такой заголовок правит fix_caps."""
+    words = [re.sub(r"\W", "", w) for w in text.split()]
+    return any(len(a) >= 2 and len(b) >= 2 and a.isupper() and b.isupper() for a, b in zip(words, words[1:]))
+
+
 def capitalize(word: str) -> str:
     pos = next((n for n, c in enumerate(word) if c.isalpha()), None)
     return word if pos is None else word[:pos] + word[pos].upper() + word[pos + 1:]
@@ -375,9 +384,27 @@ def russify(text: str) -> str:
     return SR_LETTER_RE.sub(repl, text)
 
 
-def fix_caps(text: str) -> str:
+def proper_names(texts: list[str]) -> set[str]:
+    """Слова, которые модель пишет с большой буквы не в начале фразы и нигде — с маленькой, — имена и названия,
+    в нижнем регистре. По ним fix_caps возвращает большую букву: «ПРИЗНАНИЕ КОСОВА» → «Признание Косова», а не «косова».
+    Слова и с маленькой буквы отбрасываем: с большой они бывают в начале цитаты («На …») или в названии («Нови-Сад»)."""
+    out, lower = set(), set()
+    for text in texts:
+        words = text.split(" ")
+        for n, word in enumerate(words):
+            core = re.sub(r"^\W+|\W+$", "", word)
+            if core[:1].islower():
+                lower.add(core)
+            elif (core[:1].isupper() and not CAPS_WORD.match(word)
+                    and n and not SENTENCE_START.search(" ".join(words[:n]) + " ")):
+                out.add(core.lower())
+    return out - lower
+
+
+def fix_caps(text: str, names: set[str] = frozenset()) -> str:
     """Подстраховка к промпту: таблоидный капс из двух и больше слов подряд → обычный регистр.
-    Одиночные слова капсом не трогаем — это обычно аббревиатуры (СНС, РИК, ЕС)."""
+    Одиночные слова капсом не трогаем — это обычно аббревиатуры (СНС, РИК, ЕС).
+    names — имена и названия из proper_names: их пишем с большой буквы."""
     words = text.split(" ")
     i = 0
     while i < len(words):
@@ -389,6 +416,8 @@ def fix_caps(text: str) -> str:
                 if re.sub(r"\W", "", words[k]) in ABBREVIATIONS:
                     continue
                 words[k] = words[k].lower()
+                if re.sub(r"^\W+|\W+$", "", words[k]) in names:
+                    words[k] = capitalize(words[k])
                 if words[k][:1] in "«„\"":  # слово в кавычках — чаще всего название
                     words[k] = capitalize(words[k])
             if i == 0 or SENTENCE_START.search(" ".join(words[:i]) + " "):
@@ -447,17 +476,20 @@ def translate_batch(client, batch: list[tuple[str, dict]], kind: str = "new", st
     text = next(b.text for b in response.content if b.type == "text")
     by_number = {str(n): pair for n, pair in enumerate(batch)}
     out = {}
-    for t in json.loads(text)["items"]:
+    items = json.loads(text)["items"]
+    # имена берём со всей пачки: «Сербии» в капсовом заголовке найдётся в подводке этой или соседней новости
+    names = proper_names([russify(t[k]) for t in items for k in ("title", "summary", "what")])
+    for t in items:
         key, item = by_number.get(t["id"], (None, None))
         if not item:
             continue
         # проверяем до russify: сербские буквы в «переводе» — тоже признак, что модель не перевела
         reason = rejection(item, t, strict)
         if reason is None:
-            out[key] = {k: fix_caps(russify(fix_abbreviations(t[k]))) for k in ("title", "summary")}
+            out[key] = {k: fix_caps(russify(fix_abbreviations(t[k])), names) for k in ("title", "summary")}
             out[key]["lead_ok"] = t["lead_ok"]
             out[key]["kind"] = t["kind"]
-            out[key]["what"] = fix_caps(russify(t["what"].strip())) if t["kind"] == "event" else ""
+            out[key]["what"] = fix_caps(russify(t["what"].strip()), names) if t["kind"] == "event" else ""
             out[key]["entities"] = list(dict.fromkeys(russify(e.strip()) for e in t["entities"] if e.strip()))[:5]
             out[key]["place"] = russify(t["place"].strip())
             out[key]["topic"] = t["topic"]
