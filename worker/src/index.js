@@ -344,12 +344,14 @@ async function editGlossary(env, changes) {
         done.push(`+ ${change.sr} → ${change.ru}`);
       } else if (names[at].ru !== change.ru) {
         done.push(`✎ ${names[at].sr} → ${change.ru} (было: ${names[at].ru})`);
-        names[at] = { sr: names[at].sr, ru: change.ru };
+        names[at] = { ...names[at], ru: change.ru };
       } else done.push(`= ${change.sr} → ${change.ru} уже есть`);
     }
     const changed = done.filter(d => /^[+−✎]/.test(d));
     if (!changed.length) return done.join("\n");
-    const text = `{\n  "names": [\n${names.map(e => `    {"sr": ${JSON.stringify(e.sr)}, "ru": ${JSON.stringify(e.ru)}}`).join(",\n")}\n  ]\n}\n`;
+    // все поля записи, а не только sr и ru: иначе пропадёт пояснение note
+    const entry = e => `{${Object.entries(e).map(([k, v]) => `${JSON.stringify(k)}: ${JSON.stringify(v)}`).join(", ")}}`;
+    const text = `{\n  "names": [\n${names.map(e => `    ${entry(e)}`).join(",\n")}\n  ]\n}\n`;
     const saved = await fetch(api, {
       method: "PUT", headers,
       body: JSON.stringify({ message: `Glossary from Telegram: ${changed.join(", ")}`.slice(0, 200), content: toBase64(text), sha, branch: "main" }),
