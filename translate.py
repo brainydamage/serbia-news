@@ -161,6 +161,20 @@ URL_RE = re.compile(r"\S+://\S+|www\.\S+")
 MIXED_SCRIPT_RE = re.compile(r"[^\W\d_]*(?:[\u0400-\u04ff][A-Za-z\u00c0-\u024f]|[A-Za-z\u00c0-\u024f][\u0400-\u04ff])[^\W\d_]*")
 
 
+# латинские буквы, которые выглядят как русские: «Цацилендe» с латинской «e» на конце — это опечатка, а не непереведённое имя
+HOMOGLYPHS = str.maketrans("aceopxyAEOPCXTHKMB", "асеорхуАЕОРСХТНКМВ")
+
+
+def fix_homoglyphs(text: str) -> str:
+    """«Цацилендe» → «Цациленде»: в кириллическом слове меняем латинские двойники на русские буквы.
+    Слова с другими латинскими буквами («Зарićем») не трогаем — их отбракует rejection."""
+    def repl(m):
+        word = m.group(0)
+        latin = {c for c in word if c.isascii()}
+        return word.translate(HOMOGLYPHS) if latin and latin <= set("aceopxyAEOPCXTHKMB") else word
+    return MIXED_SCRIPT_RE.sub(repl, text)
+
+
 def foreign_letter(char: str) -> bool:
     """Буква не из латиницы и не из кириллицы: модель иногда вставляет японскую кану — «Даスティн Хоффман»."""
     return char.isalpha() and not (char <= "\u024f" or "\u0400" <= char <= "\u04ff")
@@ -483,6 +497,9 @@ def translate_batch(client, batch: list[tuple[str, dict]], kind: str = "new", st
         key, item = by_number.get(t["id"], (None, None))
         if not item:
             continue
+        for k in ("title", "summary", "what", "place"):
+            t[k] = fix_homoglyphs(t[k])
+        t["entities"] = [fix_homoglyphs(e) for e in t["entities"]]
         # проверяем до russify: сербские буквы в «переводе» — тоже признак, что модель не перевела
         reason = rejection(item, t, strict)
         if reason is None:
