@@ -20,10 +20,16 @@ import numpy as np
 
 MODEL = "claude-haiku-5-5"
 EFFORT = "low"
-EMBED_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+# e5-large против MiniLM на эталоне 09–10.11: нужная новость первой среди похожих в 96–97% случаев против 91–93%;
+# на трудных парах (кандидатах для модели) при потере 5% одинаковых отсеивает 75–79% разных против 29–33%.
+# Не хуже reranker bge-reranker-v2-m3 и в разы быстрее. e5 ждёт приставку «query: » перед текстом
+EMBED_MODEL = "intfloat/multilingual-e5-large"
+EMBED_PREFIX = "query: "
 LIVE = timedelta(hours=48)
 CANDIDATES = 8
-CANDIDATE_SIM = 0.5  # ниже — даже не спрашиваем модель
+# пороги — под e5 (у неё сходства сжаты к 0.8–0.95). На эталоне 09–10.11 у 0.855 полнота пар 0.80 при вдвое
+# меньшем числе разных пар выше порога, чем у MiniLM с прежним порогом 0.5 (полнота там была 0.72)
+CANDIDATE_SIM = 0.855  # ниже — даже не спрашиваем модель
 STORY_ITEMS = 30  # с каким числом последних новостей сюжета сравниваем
 SHOWN_ITEMS = 3  # сколько новостей сюжета видит модель: первая и последние
 BATCH = 25
@@ -71,6 +77,33 @@ SCHEMA = {
 }
 
 
+RECHECK_PROMPT = f"""Ты проверяешь, правильно ли новости разложены по сюжетам агрегатора новостей о Сербии. {RULES}
+
+Вход — JSON: stories — сюжеты, id вида S…, у каждого несколько новостей (что произошло); news — новости, id вида N…, каждая уже добавлена в сюжет story.
+Для каждой новости ответь keep: true, если она о том же событии, что сюжет (включая развитие события и прямые реакции на него), и false, если это другое событие — пусть даже на ту же тему или с теми же участниками."""
+
+RECHECK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "news": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"id": {"type": "string"}, "keep": {"type": "boolean"}},
+                "required": ["id", "keep"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["news"],
+    "additionalProperties": False,
+}
+# join со сходством с сюжетом ниже порога Haiku перепроверяет на medium. Офлайн на 09–10.11: из 210 таких добавлений
+# снял 9 из 19 чужих и 6 из 191 своих; Sonnet снимал больше чужих, но и своих столько же, а все добавления подряд —
+# полнота падает сильнее, чем растёт точность
+RECHECK_SIM = 0.9
+RECHECK_EFFORT = "medium"
+
 MERGE_PROMPT = f"""Ты проверяешь сюжеты агрегатора новостей о Сербии на дубли. {RULES}
 
 Вход — JSON: stories — сюжеты, id вида S…, у каждого несколько новостей (что произошло); pairs — пары сюжетов, похожих по словам, id вида P…
@@ -93,14 +126,14 @@ MERGE_SCHEMA = {
     "additionalProperties": False,
 }
 MERGE_EVERY = timedelta(hours=1)
-MERGE_SIM = 0.55  # пары сюжетов с лучшей парой новостей не ниже — к модели
+MERGE_SIM = 0.865  # пары сюжетов с лучшей парой новостей не ниже — к модели (у MiniLM было 0.55)
 MERGE_BATCH = 20  # пар в одном запросе
 # склейку решает Sonnet: Haiku даже на effort medium склеивал однотипные события — два ареста, два суда.
 # Но ошибается Haiku в одну сторону, поэтому он стоит перед Sonnet фильтром: его «разные» до Sonnet не доходят
 MERGE_MODEL = "claude-sonnet-5-5"
 MERGE_EFFORT = "medium"
 MERGE_SHOWN = 5  # сколько новостей каждого сюжета видит модель при склейке
-MERGE_SURE_SIM = 0.7  # пары похожее этого идут к модели и без общих участников
+MERGE_SURE_SIM = 0.9  # пары похожее этого идут к модели и без общих участников (у MiniLM было 0.7)
 MERGE_FILTER_EFFORT = "medium"  # Haiku перед Sonnet: на low он отбраковывал явные дубли, на medium пропускает лишнее — что и нужно
 PRICES = {MODEL: (0.10, 0.50), MERGE_MODEL: (2.0, 10.0)}  # вход / выход за 1M токенов, $
 
@@ -116,13 +149,13 @@ def text_of(item: dict) -> str:
 
 
 def embed(texts: list[str]) -> np.ndarray:
-    """Векторы единичной длины. Модель скачивается при первом вызове (~0,2 ГБ) и дальше берётся из кэша."""
+    """Векторы единичной длины. Модель скачивается при первом вызове (~2 ГБ) и дальше берётся из кэша."""
     from fastembed import TextEmbedding
 
     global _embedder
     if "_embedder" not in globals():
         _embedder = TextEmbedding(EMBED_MODEL)
-    vectors = np.array(list(_embedder.embed(texts, batch_size=64)), dtype=np.float32)
+    vectors = np.array(list(_embedder.embed([EMBED_PREFIX + t for t in texts], batch_size=64)), dtype=np.float32)
     return vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
 
 
@@ -186,16 +219,14 @@ def _decide(state: dict, batch: list[tuple[str, dict]], now: str, vectors: dict,
     """Одна пачка новых новостей: кандидаты, запрос к модели, решения в состояние. Возвращает токены."""
     live_urls, owners = _live(state, now)
     new_vecs = np.stack([vectors[url] for url, _ in batch])
-    candidates = [[] for _ in batch]
+    candidates = [{} for _ in batch]  # {id сюжета: лучшее сходство с его новостями}
     if live_urls:
         sims = new_vecs @ np.stack([vectors[u] for u in live_urls]).T
         for n in range(len(batch)):
-            best = {}
             for k in np.argsort(-sims[n]):
-                if sims[n, k] < CANDIDATE_SIM or len(best) == CANDIDATES:
+                if sims[n, k] < CANDIDATE_SIM or len(candidates[n]) == CANDIDATES:
                     break
-                best.setdefault(owners[k], float(sims[n, k]))
-            candidates[n] = list(best)
+                candidates[n].setdefault(owners[k], float(sims[n, k]))
     # соседи по сборке: если две новые новости похожи, обе идут к модели — вдруг это новое событие
     near = new_vecs @ new_vecs.T
     np.fill_diagonal(near, 0)
@@ -213,7 +244,7 @@ def _decide(state: dict, batch: list[tuple[str, dict]], now: str, vectors: dict,
             aliases.setdefault(sid, f"S{len(aliases)}")
     stories = []
     for sid, alias in aliases.items():
-        stories.append({"id": alias, "news": _shown(state, sid)})
+        stories.append({"id": alias, "news": _shown(state, sid, vectors)})
     news = []
     for n in asked:
         url, item = batch[n]
@@ -226,12 +257,15 @@ def _decide(state: dict, batch: list[tuple[str, dict]], now: str, vectors: dict,
 
     by_alias = {alias: sid for sid, alias in aliases.items()}
     verdicts = {d["id"]: d for d in answer["decisions"]}
+    weak = []  # (n, alias сюжета): join со слабым сходством — на перепроверку
     for n in asked:  # по порядку: «same» ссылается на более раннюю новость, у которой сюжет уже есть
         url, item = batch[n]
         d = verdicts.get(f"N{n}", {"verdict": "new", "target": ""})
         verdict, target = d["verdict"], d["target"]
         if verdict == "join" and target in by_alias:  # можно и чужого кандидата из той же пачки: модель видела его
             sid = by_alias[target]
+            if candidates[n].get(sid, 0) < RECHECK_SIM:
+                weak.append((n, target))
         elif verdict == "same" and target.startswith("N") and target[1:].isdigit() \
                 and batch[int(target[1:])][0] in state["items"] and state["items"][batch[int(target[1:])][0]]["story"]:
             sid = state["items"][batch[int(target[1:])][0]]["story"]
@@ -241,14 +275,43 @@ def _decide(state: dict, batch: list[tuple[str, dict]], now: str, vectors: dict,
             verdict = "new" if verdict in ("join", "same", "new") else verdict
             sid = _start(state, now)
         _add(state, sid, url, item, verdict, now)
+    if weak:
+        usage = {k: usage.get(k, 0) + v for k, v in _recheck(state, batch, weak, stories, now, ask).items()}
     return usage
 
 
-def _shown(state: dict, sid: str, count: int = SHOWN_ITEMS) -> list[str]:
-    """Что модель видит о сюжете: первая новость и последние, без повторов текста."""
-    urls = state["stories"][sid]["urls"]
-    texts = [text_of(state["items"][u]) for u in urls[:1] + urls[1:][-(count - 1):]]
-    return list(dict.fromkeys(texts))
+def _recheck(state: dict, batch: list[tuple[str, dict]], weak: list[tuple[int, str]], stories: list[dict],
+             now: str, ask) -> dict:
+    """Перепроверка join со слабым сходством: сюжет — те же новости, что модель видела при раскладке. Снятая новость
+    уходит в свой сюжет (verdict recheck); новости пачки, легшие к ней через same, остаются где были."""
+    shown = {s["id"]: s for s in stories}
+    content = json.dumps({"stories": [shown[a] for a in dict.fromkeys(a for _, a in weak)],
+                          "news": [{"id": f"N{n}", "story": a, "title": state["items"][batch[n][0]]["title"],
+                                    "what": batch[n][1].get("what", "")} for n, a in weak]}, ensure_ascii=False)
+    answer, usage = ask(RECHECK_PROMPT, content, RECHECK_SCHEMA, RECHECK_EFFORT, MODEL)
+    drop = {d["id"] for d in answer["news"] if not d["keep"]}
+    for n, _ in weak:
+        if f"N{n}" in drop:
+            url, item = batch[n]
+            state["stories"][state["items"][url]["story"]]["urls"].remove(url)
+            _add(state, _start(state, now), url, item, "recheck", now)
+    return usage
+
+
+def _shown(state: dict, sid: str, vectors: dict, count: int = SHOWN_ITEMS) -> list[str]:
+    """Что модель видит о сюжете: первая новость и самые типичные — похожие на остальные новости сюжета больше всех,
+    по порядку появления, без повторов текста. Не последние: с последними одна чужая новость, попав в сюжет,
+    становится его лицом и тянет за собой следующие (10.11 так в сюжет решения REM легли 19 новостей
+    про обыск у Вучичевича)."""
+    urls = state["stories"][sid]["urls"][-STORY_ITEMS:]
+    first = state["stories"][sid]["urls"][0]
+    rest = [u for u in urls if u != first]
+    if len(rest) > count - 1:
+        v = np.stack([vectors[u] for u in urls])
+        typical = (v @ v.T).mean(axis=1)[[urls.index(u) for u in rest]]
+        keep = set(np.argsort(-typical)[:count - 1])
+        rest = [u for n, u in enumerate(rest) if n in keep]
+    return list(dict.fromkeys(text_of(state["items"][u]) for u in [first] + rest))
 
 
 def _keys(entities: list[str]) -> set[str]:
@@ -270,7 +333,8 @@ def _share_entities(state: dict, a: str, b: str) -> bool:
     return not ka or not kb or bool(ka & kb)
 
 
-def _same_pairs(state: dict, pairs: list[tuple[str, str]], model: str, effort: str, ask, total: dict) -> set[int]:
+def _same_pairs(state: dict, pairs: list[tuple[str, str]], vectors: dict, model: str, effort: str, ask,
+                total: dict) -> set[int]:
     """Номера пар, которые модель считает одним событием."""
     same = set()
     for start in range(0, len(pairs), MERGE_BATCH):
@@ -279,7 +343,7 @@ def _same_pairs(state: dict, pairs: list[tuple[str, str]], model: str, effort: s
         for a, b in chunk:
             for s in (a, b):
                 aliases.setdefault(s, f"S{len(aliases)}")
-        content = json.dumps({"stories": [{"id": al, "news": _shown(state, s, MERGE_SHOWN)} for s, al in aliases.items()],
+        content = json.dumps({"stories": [{"id": al, "news": _shown(state, s, vectors, MERGE_SHOWN)} for s, al in aliases.items()],
                               "pairs": [{"id": f"P{n}", "a": aliases[a], "b": aliases[b]}
                                         for n, (a, b) in enumerate(chunk)]}, ensure_ascii=False)
         answer, usage = ask(MERGE_PROMPT, content, MERGE_SCHEMA, effort, model)
@@ -324,8 +388,8 @@ def merge(state: dict, now: str, vectors: dict, ask) -> dict:
         if sim >= MERGE_SURE_SIM or _share_entities(state, a, b):
             todo.append((a, b))
 
-    maybe = [todo[n] for n in sorted(_same_pairs(state, todo, MODEL, MERGE_FILTER_EFFORT, ask, total))]
-    same = _same_pairs(state, maybe, MERGE_MODEL, MERGE_EFFORT, ask, total)
+    maybe = [todo[n] for n in sorted(_same_pairs(state, todo, vectors, MODEL, MERGE_FILTER_EFFORT, ask, total))]
+    same = _same_pairs(state, maybe, vectors, MERGE_MODEL, MERGE_EFFORT, ask, total)
     # за проход сюжет склеивается не больше одного раза: цепочки a ← b ← c на первом прогоне стянули аварию,
     # границу и ДТП в один сюжет на 450 новостей. Остальные пары с ним проверим в следующий раз, уже со склеенным
     used, merges = set(), []

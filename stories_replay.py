@@ -15,6 +15,7 @@ import collections
 import hashlib
 import html
 import json
+import os
 import sys
 from datetime import datetime
 from itertools import combinations
@@ -98,7 +99,8 @@ def run(snapshot: Path, first: str, last: str, tag: str = "") -> Path:
         builds[archive[u]["seen"]].append((u, archive[u]))
     print(f"{len(urls)} новостей, {len(builds)} сборок, {first} — {last}", file=sys.stderr)
 
-    ask, spent, save = cached_ask(snapshot.parent / "replay-cache.json")
+    # REPLAY_CACHE=другой файл — прогон с чистого листа: так меряется разброс ответов модели между прогонами
+    ask, spent, save = cached_ask(snapshot.parent / os.environ.get("REPLAY_CACHE", "replay-cache.json"))
     state = stories.new_state()
     try:
         merges, asked = 0, collections.Counter()
@@ -124,6 +126,7 @@ def run(snapshot: Path, first: str, last: str, tag: str = "") -> Path:
                                                 "MERGE_MODEL", "MERGE_EFFORT", "MERGE_SHOWN", "MERGE_FILTER_EFFORT")}
     params["MERGE_EVERY"] = str(stories.MERGE_EVERY)
     params["MERGE_SURE_SIM"] = stories.MERGE_SURE_SIM
+    params["RECHECK_SIM"], params["RECHECK_EFFORT"] = stories.RECHECK_SIM, stories.RECHECK_EFFORT
     out.write_text(json.dumps({"snapshot": snapshot.name, "first": first, "last": last, "params": params,
                                "spent": {**spent, "usd": round(usd, 4), "full_usd": round(spent["full_usd"], 4),
                                          "merged": merges, "asked": dict(asked)}, "state": state}, ensure_ascii=False), "utf-8")
