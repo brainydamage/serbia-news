@@ -356,7 +356,8 @@ def _same_pairs(state: dict, pairs: list[tuple[str, str]], vectors: dict, model:
 
 def merge(state: dict, now: str, vectors: dict, ask) -> dict:
     """Склейка дублей — сюжетов, на которые распалось одно событие. Пара идёт к модели, только если:
-    оба сюжета видимые (невидимые обрывки читателю не мешают), хотя бы один вырос с прошлой склейки, лучшая пара
+    хотя бы один сюжет видимый (два невидимых обрывка читателю не мешают, а невидимый рядом с видимым — новость,
+    которая должна была лечь в видимый: пришла раньше него или модель ошиблась), хотя бы один вырос с прошлой склейки, лучшая пара
     новостей похожа не меньше MERGE_SIM, у сюжетов есть общий участник (entities; не нужен, если сходство
     не ниже MERGE_SURE_SIM) и пару ещё не признавали разными — или с тех пор один из сюжетов вырос вдвое.
     Дальше каскад: Haiku отсеивает явно разные пары (он ошибается в сторону «одно событие»), Sonnet решает остальное.
@@ -365,8 +366,7 @@ def merge(state: dict, now: str, vectors: dict, ask) -> dict:
     stories, checked = state["stories"], state.setdefault("checked", {})
     last = state.get("merged_at") or ""
     live_urls, owners = _live(state, now)
-    keep_rows = [n for n, sid in enumerate(owners) if visible(state, sid)]
-    live_urls, owners = [live_urls[n] for n in keep_rows], [owners[n] for n in keep_rows]
+    shown = {sid for sid in set(owners) if visible(state, sid)}
     state["merged_at"] = now
     if len(live_urls) < 2:
         return total
@@ -376,7 +376,7 @@ def merge(state: dict, now: str, vectors: dict, ask) -> dict:
     candidates = {}
     for r, c in zip(rows, cols):
         a, b = sorted((owners[r], owners[c]), key=lambda s: int(s[1:]))
-        if a != b:
+        if a != b and (a in shown or b in shown):
             candidates[(a, b)] = max(candidates.get((a, b), 0), sims[r, c])
     todo = []
     for (a, b), sim in sorted(candidates.items()):
@@ -391,17 +391,27 @@ def merge(state: dict, now: str, vectors: dict, ask) -> dict:
     maybe = [todo[n] for n in sorted(_same_pairs(state, todo, vectors, MODEL, MERGE_FILTER_EFFORT, ask, total))]
     same = _same_pairs(state, maybe, vectors, MERGE_MODEL, MERGE_EFFORT, ask, total)
     # за проход сюжет склеивается не больше одного раза: цепочки a ← b ← c на первом прогоне стянули аварию,
-    # границу и ДТП в один сюжет на 450 новостей. Остальные пары с ним проверим в следующий раз, уже со склеенным
+    # границу и ДТП в один сюжет на 450 новостей. Остальные пары с ним проверим в следующий раз, уже со склеенным.
+    # Невидимые обрывки цепочку не строят: видимый сюжет за проход принимает их сколько угодно
     used, merges = set(), []
     for n, (a, b) in enumerate(maybe):
         if n in same and a not in used and b not in used:
-            used.update((a, b))
-            merges.append((a, b))
+            if a in shown and b in shown:
+                used.update((a, b))
+                merges.append((a, b))
+            else:  # обрывок — в видимый, а не наоборот
+                gone = a if a not in shown else b
+                used.add(gone)
+                merges.append((b if gone == a else a, gone))
     for a, b in todo:
         if (a, b) not in merges and a not in used and b not in used:
             checked[f"{a}|{b}"] = [len(stories[a]["urls"]), len(stories[b]["urls"])]
 
+    moved = {}  # склеенный сюжет → куда ушёл: видимый мог принять обрывки и сам уйти в другой видимый
     for keep, gone in merges:
+        while keep in moved:
+            keep = moved[keep]
+        moved[gone] = keep
         for u in stories[gone]["urls"]:
             state["items"][u]["story"] = keep
         stories[keep]["urls"] = sorted(stories[keep]["urls"] + stories[gone]["urls"],
