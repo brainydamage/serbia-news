@@ -96,6 +96,11 @@ def run(archive: dict, sections: dict) -> None:
     """Одна сборка: новые новости архива — в сюжеты, раз в час склейка, потом страница. sections — {id: название}."""
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     state, vectors = load_state()
+    if state["items"] and state.get("version", 0) < 1:
+        # 12.11: склейка стала брать и пары «невидимый + видимый». Обрывки, которые появились раньше, она бы
+        # не проверила — их сюжеты с прошлой склейки не росли. Один раз проверяем все живые пары
+        state["merged_at"] = ""
+    state["version"] = 1
     fresh_start = not state["items"]
     if fresh_start:  # что старше начала, не раскладываем и потом: иначе следующая сборка возьмёт все LIVE часов
         state["started"] = (datetime.fromisoformat(now) - BOOTSTRAP).isoformat()
@@ -213,7 +218,13 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
         target = state["items"][visible_urls[k]]["story"]
         return f' · ближе всего <a href="#{target}">{target}</a>{sim_mark(sim)}'
 
-    lonely = "".join(item_row(u, state["items"][u], f' · {state["items"][u]["story"]}{nearest(u)}') for u in hidden)
+    # verdict: alone — похожих не было, модель не спрашивали; new — модель решила, что это новое событие
+    def verdict(u: str) -> str:  # same и recheck item_row уже пишет
+        v = state["items"][u]["verdict"]
+        return "" if v in ("same", "recheck") else f" · {e(v)}"
+
+    lonely = "".join(item_row(u, state["items"][u], f' · {state["items"][u]["story"]}{verdict(u)}{nearest(u)}')
+                     for u in hidden)
 
     spent = "".join(f"<tr><td>{d}</td><td>{s['calls']}</td><td>${s['usd']:.3f}</td></tr>"
                     for d, s in sorted(state.get("spent", {}).items(), reverse=True))
