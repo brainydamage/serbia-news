@@ -59,7 +59,7 @@ def save_state(state: dict, vectors: dict) -> None:
 
 
 def forget_old(state: dict, vectors: dict, now: str) -> None:
-    """Убирает давно не обновлявшиеся сюжеты; векторы оставляет только у новостей живых сюжетов — других не спросят."""
+    """Убирает давно не обновлявшиеся сюжеты вместе с векторами их новостей."""
     cutoff = (datetime.fromisoformat(now) - FORGET).isoformat()
     for sid in [s for s, story in state["stories"].items() if story["updated"] < cutoff]:
         for u in state["stories"].pop(sid)["urls"]:
@@ -69,8 +69,7 @@ def forget_old(state: dict, vectors: dict, now: str) -> None:
     state["checked"] = {k: v for k, v in state.get("checked", {}).items()
                         if all(s in state["stories"] for s in k.split("|"))}
     state.pop("merged", None)  # кто в кого склеился — только для разбора прогонов
-    live, _ = stories._live(state, now)
-    for u in set(vectors) - set(live):
+    for u in set(vectors) - set(state["items"]):
         del vectors[u]
 
 
@@ -108,8 +107,8 @@ def run(archive: dict, sections: dict) -> None:
     items.sort(key=lambda x: x[1]["seen"])
     print(f"Сюжеты: новых новостей {len(items)}{' (начинаем заново)' if fresh_start else ''}", file=sys.stderr)
 
-    live, _ = stories._live(state, now)
-    need = [u for u, _ in items] + [u for u in live if u not in vectors]
+    # векторы всех новостей в памяти: для раскладки нужны последние новости живых сюжетов, а для страницы — все
+    need = [u for u, _ in items] + [u for u in state["items"] if u not in vectors]
     texts = {u: stories.text_of(archive.get(u) or state["items"][u]) for u in need}
     if need:
         for u, v in zip(need, stories.embed([texts[u] for u in need])):
