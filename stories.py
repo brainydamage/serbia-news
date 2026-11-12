@@ -25,7 +25,8 @@ import numpy as np
 
 # поднять при изменении логики раскладки или склейки (правила, промпты и пороги отслеживаются и так):
 # живая страница (stories_live.py) разложит все свои новости заново
-LAYOUT_VERSION = 2  # 2 — при раскладке модель видит и новость сюжета, самую похожую на новую
+# 2 — при раскладке модель видит и новость сюжета, самую похожую на новую; 3 — участники сравниваются латиницей
+LAYOUT_VERSION = 3
 MODEL = "claude-haiku-5-5"
 EFFORT = "low"
 # e5-large против MiniLM на эталоне 09–10.11: нужная новость первой среди похожих в 96–97% случаев против 91–93%;
@@ -136,6 +137,9 @@ MERGE_SCHEMA = {
 }
 MERGE_EVERY = timedelta(hours=1)
 MERGE_SIM = 0.865  # пары сюжетов с лучшей парой новостей не ниже — к модели (у MiniLM было 0.55)
+# одиночка (сюжет из одного издания) с видимым — с тем же порогом, что при раскладке: новость, пришедшая раньше своего
+# сюжета, проверяется так же, как пришедшая после. 12.11 ремонт JANAF (0.864) остался одиночкой рядом с сюжетом о нём
+MERGE_FRAGMENT_SIM = CANDIDATE_SIM
 MERGE_BATCH = 20  # пар в одном запросе
 # склейку решает Sonnet. Фильтра Haiku перед ним больше нет: с крупными сюжетами (12.11) Haiku стал строже Sonnet —
 # из 139 пар, которые Sonnet склеил из 357 прежних отказов, пропустил бы только 78
@@ -363,11 +367,19 @@ def _shown(state: dict, sid: str, vectors: dict, count: int = SHOWN_ITEMS, detai
     return list(dict.fromkeys(text_of(it) for it in items))
 
 
+# участники приходят и по-русски, и по-сербски, кириллицей и латиницей: сравниваем латиницей без диакритики —
+# «ЯНАФ» и «JANAF», «Шошкич» и «Šoškić» совпадут (12.11 ремонт ЯНАФ не склеился с сюжетом о JANAF)
+TRANSLIT = str.maketrans({**dict(zip("абвгдезиклмнопрстуфхцчшыэ", "abvgdeziklmnoprstufhccsye")),
+                          "ё": "e", "ж": "z", "й": "j", "щ": "s", "ъ": "", "ь": "", "ю": "ju", "я": "ja",
+                          "ђ": "dj", "ј": "j", "љ": "lj", "њ": "nj", "ћ": "c", "џ": "dz",
+                          "č": "c", "ć": "c", "š": "s", "ž": "z", "đ": "dj"})
+
+
 def _keys(entities: list[str]) -> set[str]:
-    """Участники для сравнения: имя целиком и последнее слово («Деян Шошкич» и «Шошкич» совпадут)."""
+    """Участники для сравнения: имя целиком и последнее слово («Деян Шошкич» и «Шошкич» совпадут), латиницей."""
     keys = set()
     for e in entities:
-        e = e.lower().strip()
+        e = e.lower().strip().translate(TRANSLIT)
         keys.add(e)
         last = e.replace("«", " ").replace("»", " ").split()[-1:] if e else []
         if last and len(last[0]) >= 4:
@@ -407,7 +419,7 @@ def merge(state: dict, now: str, vectors: dict, ask) -> dict:
     """Склейка дублей — сюжетов, на которые распалось одно событие. Пара идёт к модели, только если:
     хотя бы один сюжет видимый (два невидимых обрывка читателю не мешают, а невидимый рядом с видимым — новость,
     которая должна была лечь в видимый: пришла раньше него или модель ошиблась), хотя бы один вырос с прошлой склейки, лучшая пара
-    новостей похожа не меньше MERGE_SIM, у сюжетов есть общий участник (entities; не нужен, если сходство
+    новостей похожа не меньше MERGE_SIM (одиночка с видимым — MERGE_FRAGMENT_SIM), у сюжетов есть общий участник (entities; не нужен, если сходство
     не ниже MERGE_SURE_SIM), пару ещё не признавали разными — или с тех пор один из сюжетов вырос вдвое — и её части
     не разделяли руками (split, unmerge). Решает Sonnet. Каждая склейка — в журнал state["merges"] с частями, которые
     принёс склеенный сюжет: по нему unmerge её отменяет.
@@ -423,11 +435,12 @@ def merge(state: dict, now: str, vectors: dict, ask) -> dict:
         return total
     sims = np.stack([vectors[u] for u in live_urls])
     sims = sims @ sims.T
-    rows, cols = np.nonzero(np.triu(sims, 1) >= MERGE_SIM)
+    rows, cols = np.nonzero(np.triu(sims, 1) >= min(MERGE_SIM, MERGE_FRAGMENT_SIM))
     candidates = {}
     for r, c in zip(rows, cols):
         a, b = sorted((owners[r], owners[c]), key=lambda s: int(s[1:]))
-        if a != b and (a in shown or b in shown):
+        both = a in shown and b in shown
+        if a != b and (a in shown or b in shown) and sims[r, c] >= (MERGE_SIM if both else MERGE_FRAGMENT_SIM):
             candidates[(a, b)] = max(candidates.get((a, b), 0), sims[r, c])
     todo = []
     for (a, b), sim in sorted(candidates.items()):
