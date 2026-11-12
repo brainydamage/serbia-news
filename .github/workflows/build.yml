@@ -47,7 +47,7 @@ jobs:
 
       # прошлые данные нужны, чтобы при сбое ленты показать её последние новости,
       # кэш переводов — чтобы не платить за перевод одних и тех же новостей,
-      # архив — все новости за последние дни для ежедневной сводки, сюжеты — их состояние (stories_live.py)
+      # архив — все новости за последние дни для ежедневной сводки
       - name: Restore previous data
         uses: actions/cache/restore@v4
         with:
@@ -55,10 +55,19 @@ jobs:
             site/data.json
             cache/translations.json
             cache/archive.json
-            cache/stories.json
-            cache/story-vectors.npz
           key: data-${{ github.run_id }}
           restore-keys: data-
+
+      # сюжеты (stories_live.py) — отдельным кэшем: версия кэша зависит от списка путей, и добавленный в «data» путь
+      # оставил сборку без старого кэша — без переводов и архива
+      - name: Restore stories
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            cache/stories.json
+            cache/story-vectors.npz
+          key: stories-${{ github.run_id }}
+          restore-keys: stories-
 
       - run: python build.py
         env:
@@ -75,9 +84,16 @@ jobs:
             site/data.json
             cache/translations.json
             cache/archive.json
+          key: data-${{ github.run_id }}
+
+      - name: Save stories
+        if: hashFiles('cache/stories.json') != ''  # сюжеты пропущены — сохранять нечего, а пустой путь роняет шаг
+        uses: actions/cache/save@v4
+        with:
+          path: |
             cache/stories.json
             cache/story-vectors.npz
-          key: data-${{ github.run_id }}
+          key: stories-${{ github.run_id }}
 
       # из кэша Actions архив не скачать, а он нужен локально для экспериментов (сюжеты): снимок сохраняет snapshot.py.
       # В архиве все последние дни (ARCHIVE_DAYS в build.py), поэтому хватает свежего снимка, старые не держим
