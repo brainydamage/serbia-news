@@ -169,7 +169,9 @@ def ask_with_spending(state: dict, day: str):
 
 def fingerprint() -> str:
     """Отпечаток правил: правила, промпты, модели и пороги stories.py (константы), LAYOUT_VERSION — для логики."""
-    rules = {k: repr(v) for k, v in sorted(vars(stories).items()) if k.isupper()}
+    # множество — отсортированным: его repr меняет порядок от запуска к запуску, и каждая вторая сборка раскладывала заново
+    rules = {k: repr(sorted(v) if isinstance(v, (set, frozenset)) else v) for k, v in sorted(vars(stories).items())
+             if k.isupper()}
     return hashlib.sha1(json.dumps(rules, ensure_ascii=False).encode()).hexdigest()[:10]
 
 
@@ -328,8 +330,13 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
     # у каждого видимого сюжета — своя страница /plot/sX/; у сюжетов, которые уже не на главной странице (старше
     # PAGE_WINDOW), тоже: на них ведут ссылки, отправленные раньше
     pages = {sid: story_parts(sid) for sid in state["stories"] if stories.visible(state, sid)}
+
+    def story_link(sid: str, text: str = "") -> str:
+        """Ссылка на страницу сюжета — в новом окне; у сюжета из одного издания страницы нет."""
+        return f'<a href="{sid}/" target="_blank">{e(text or sid)}</a>' if sid in pages else e(text or sid)
+
     cards = [f'<details class="story" id="{sid}" open><summary><b>{e(pages[sid][0])}</b><br><span class="meta">'
-             f'{pages[sid][1]} · <a href="{sid}/">страница сюжета</a></span></summary><ul>{pages[sid][2]}</ul></details>'
+             f'{pages[sid][1]} · {story_link(sid, "страница сюжета")}</span></summary><ul>{pages[sid][2]}</ul></details>'
              for sid in shown]
 
     # новости, которых на странице не видно: сюжет из одного издания. Сверху — самые похожие на видимый сюжет:
@@ -344,7 +351,7 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
             return ""
         sim, k = near[u]
         target = state["items"][visible_urls[k]]["story"]
-        return f' · ближе всего <a href="#{target}">{target}</a>{sim_mark(sim)}'
+        return f' · ближе всего {story_link(target)}{sim_mark(sim)}'
 
     # verdict: alone — похожих не было, модель не спрашивали; new — модель решила, что это новое событие
     def verdict(u: str) -> str:  # same и recheck item_row уже пишет
@@ -376,9 +383,6 @@ td{padding:2px 14px 2px 0}li.part{list-style:none;margin:10px 0 4px -20px;paddin
     last = state.get("last") or {}
     merges = last.get("merges", [])
 
-    def story_link(sid: str) -> str:
-        return f'<a href="#{sid}">{sid}</a>' if sid in shown else f'<a href="{sid}/">{sid}</a>' if sid in pages else sid
-
     # куда легли новости этой сборки: в сюжет, который уже был (join); в новый сюжет — видимый (от двух изданий) или
     # пока одиночный; без сюжета — непонятно, о каком событии речь (unclear)
     fresh = [u for u in last.get("news", []) if u in state["items"]] if isinstance(last.get("news"), list) else []
@@ -395,7 +399,7 @@ td{padding:2px 14px 2px 0}li.part{list-style:none;margin:10px 0 4px -20px;paddin
     done = [f"<b>раскладка заново ({e(last['rebuilt'])})</b>: все новости с {e(local_time(START))} по нынешним правилам"
             if last.get("rebuilt") else "",
             f"новых новостей {len(fresh)}" + (": " + ", ".join(f"{n} — {e(k)}" for k, n in kinds.most_common()) if fresh else ""),
-            f"склеено {len(merges)}" + (": " + ", ".join(f'<a href="#{e(k)}">{e(k)}</a> ← {e(g)}' for k, g in merges[:20])
+            f"склеено {len(merges)}" + (": " + ", ".join(f'{story_link(k)} ← {e(g)}' for k, g in merges[:20])
                                        + (" …" if len(merges) > 20 else "") if merges and not last.get("rebuilt") else ""),
             "команды: " + "; ".join(e(r) for r in last["commands"]) if last.get("commands") else "",
             f"запросы к модели ≈ ${last.get('usd', 0):.3f}"]
