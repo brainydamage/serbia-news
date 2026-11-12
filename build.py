@@ -914,6 +914,13 @@ def main() -> int:
     OUT_DIR.mkdir(exist_ok=True)
     DATA_FILE.write_text(json.dumps(data, ensure_ascii=False), "utf-8")
     write_pages(data)
+    # сюжеты — теневой режим: скрытая страница site/plot/, на главной их пока нет. Ошибка не роняет сборку
+    try:
+        import stories_live
+    except ImportError as exc:
+        print(f"Сюжеты пропущены: {exc}", file=sys.stderr)
+    else:
+        stories_live.safe_run(archive, {s["id"]: s["title_ru"] for s in config["sections"]})
 
     problems, resting = watch_feeds(jobs, results)
     for p in problems:

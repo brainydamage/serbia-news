@@ -1,5 +1,7 @@
 # пускаем всех, включая ботов поисковиков и ИИ-ассистентов
 User-agent: *
 Allow: /
+# теневой режим сюжетов (stories_live.py) — только для проверки
+Disallow: /plot/
 
 Sitemap: https://vestomat.rs/sitemap.xml
