@@ -111,15 +111,20 @@ jobs:
           path: cache/stories.json
           retention-days: 1
 
+      # архив сайта — со своим именем на каждую попытку: при повторном запуске (Re-run) архив прошлой попытки
+      # остаётся, и с одинаковыми именами деплой падает («Multiple artifacts named github-pages», 12.11)
       - uses: actions/upload-pages-artifact@v5
         with:
           path: site
+          name: github-pages-${{ github.run_attempt }}
 
       # бывает, что деплой сразу после загрузки не видит архив («No artifacts named github-pages») — у GitHub
       # он появляется не мгновенно. Тогда ждём и пробуем ещё раз, а не роняем сборку
       - id: deploy
         uses: actions/deploy-pages@v5
         continue-on-error: true
+        with:
+          artifact_name: github-pages-${{ github.run_attempt }}
 
       - if: steps.deploy.outcome == 'failure'
         run: sleep 30
@@ -127,6 +132,8 @@ jobs:
       - id: deploy_retry
         if: steps.deploy.outcome == 'failure'
         uses: actions/deploy-pages@v5
+        with:
+          artifact_name: github-pages-${{ github.run_attempt }}
 
       # IndexNow: сообщаем Bing и Яндексу, что страницы обновились. Ключ публичный по устройству протокола —
       # он лежит в static/<ключ>.txt. При пуше — всегда; запуски от cron-job.org (каждые 15 минут) — раз в 6 часов,
