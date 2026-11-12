@@ -5,6 +5,12 @@
 вместе с архивом. Пропал кэш — начинаем заново с новостей за последние BOOTSTRAP часов, а не со всего архива.
 Расход по дням копится в состоянии и виден на странице.
 
+Править раскладку руками — командами Telegram-боту (worker/): он дописывает их в stories-commands.json, коммит
+запускает сборку, сборка применяет новые команды (apply_commands) и отвечает в Telegram, что вышло:
+    /move 1234 s471   — новость №1234 в сюжет s471 (new — в новый сюжет)
+    /split s191 s298  — части s191 и s298 в отдельный сюжет
+    /unmerge s102     — отменить склейку: части, которые принёс s102, снова сюжет s102
+
     .venv/bin/python stories_live.py [архив.json]   — локально: сборка сюжетов на архиве (по умолчанию
                                                       cache/archive.json) и страница site/plot/
 """
@@ -21,11 +27,14 @@ from zoneinfo import ZoneInfo
 import numpy as np
 
 import stories
+import translate
 
 ROOT = Path(__file__).parent
 STATE_FILE = ROOT / "cache" / "stories.json"
 VECTORS_FILE = ROOT / "cache" / "story-vectors.npz"
 PAGE_DIR = ROOT / "site" / "plot"
+COMMANDS_FILE = ROOT / "stories-commands.json"
+COMMANDS_SHOWN = 30  # последних команд с итогом — на странице
 BOOTSTRAP = timedelta(hours=12)
 # новость без перевода ждёт одну сборку (перевод мог опоздать), потом идёт по оригинальному заголовку
 WAIT_TRANSLATION = timedelta(minutes=20)
@@ -68,9 +77,69 @@ def forget_old(state: dict, vectors: dict, now: str) -> None:
     state["items"] = {u: it for u, it in state["items"].items() if it["story"] or it["seen"] >= cutoff}
     state["checked"] = {k: v for k, v in state.get("checked", {}).items()
                         if all(s in state["stories"] for s in k.split("|"))}
-    state.pop("merged", None)  # кто в кого склеился — только для разбора прогонов
+    state.pop("merged", None)  # кто в кого склеился — только для разбора прогонов; журнал склеек — merges
+    # журнал склеек и ручные разделения — пока живы их части
+    parts = {it["part"] for it in state["items"].values()}
+    state["merges"] = [m for m in state.get("merges", []) if parts & set(m["parts"])]
+    state["apart"] = [pair for pair in state.get("apart", []) if parts & set(pair[0]) and parts & set(pair[1])]
     for u in set(vectors) - set(state["items"]):
         del vectors[u]
+
+
+def apply_commands(state: dict, vectors: dict, now: str) -> list[dict]:
+    """Новые команды из stories-commands.json (id больше state["commands_done"]): правка раскладки без модели.
+    Итог каждой — в result; последние COMMANDS_SHOWN — в state["commands"] для страницы. Возвращает применённые."""
+    try:
+        commands = json.loads(COMMANDS_FILE.read_text("utf-8"))["commands"]
+    except (OSError, ValueError, KeyError):
+        return []
+    fresh = [c for c in commands if c["id"] > state.get("commands_done", 0)]
+    by_n = {it["n"]: u for u, it in state["items"].items() if it.get("story")}
+    for c in fresh:
+        try:
+            c["result"] = "✓ " + _apply(state, vectors, now, c, by_n)
+        except (ValueError, KeyError, StopIteration) as exc:
+            c["result"] = f"✗ {exc}" if str(exc) else f"✗ {type(exc).__name__}"
+        state["commands_done"] = c["id"]
+        print(f"Сюжеты: команда {c['id']} {c['do']}: {c['result']}", file=sys.stderr)
+    state["commands"] = (state.get("commands", []) + [{**c, "applied": now} for c in fresh])[-COMMANDS_SHOWN:]
+    return fresh
+
+
+def _apply(state: dict, vectors: dict, now: str, c: dict, by_n: dict) -> str:
+    """Одна команда; ошибка — ValueError с текстом для ответа в Telegram."""
+    stories_ = state["stories"]
+    if c["do"] == "move":
+        url = by_n.get(c["news"])
+        if not url:
+            raise ValueError(f"новости №{c['news']} нет: забыта или ещё не разложена")
+        old = state["items"][url]["story"]
+        if c["to"] == "new":
+            sid = stories.move(state, url, None, now)
+            if old in stories_:  # новая история: склейка не вернёт её туда, откуда сняли
+                state.setdefault("apart", []).append([[sid], sorted(stories._parts(state, old))])
+            return f"№{c['news']}: {old} → новый сюжет {sid}"
+        if c["to"] not in stories_:
+            raise ValueError(f"сюжета {c['to']} нет")
+        if c["to"] == old:
+            return f"№{c['news']} уже в {old}"
+        part = stories._nearest_part(state, c["to"], vectors[url], vectors) if url in vectors else c["to"]
+        stories.move(state, url, c["to"], now, part=part)
+        return f"№{c['news']}: {old} → {c['to']} (часть {part})"
+    if c["do"] == "split":
+        known = {it["part"] for it in state["items"].values() if it.get("story")}
+        missing = [p for p in c["parts"] if p not in known]
+        if missing:
+            raise ValueError(f"частей {', '.join(missing)} нет")
+        olds = sorted({it["story"] for it in state["items"].values() if it.get("story") and it["part"] in c["parts"]})
+        sid = stories.split(state, c["parts"], now)
+        return f"{', '.join(c['parts'])}: {', '.join(olds)} → свой сюжет {sid}"
+    if c["do"] == "unmerge":
+        if not any(m["gone"] == c["story"] for m in state.get("merges", [])):
+            raise ValueError(f"склейки {c['story']} в журнале нет")
+        sid = stories.unmerge(state, c["story"], now)
+        return f"склейка {c['story']} отменена: снова сюжет {sid}"
+    raise ValueError(f"не знаю команду {c['do']}")
 
 
 def ask_with_spending(state: dict, day: str):
@@ -96,13 +165,19 @@ def run(archive: dict, sections: dict) -> None:
     """Одна сборка: новые новости архива — в сюжеты, раз в час склейка, потом страница. sections — {id: название}."""
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     state, vectors = load_state()
-    if state["items"] and state.get("version", 0) < 2:
-        # 12.11: склейка стала брать и пары «невидимый + видимый» (версия 1), потом — без фильтра Haiku (2). Обрывки,
-        # которые появились раньше или которые Haiku отсеял, она бы не проверила: их сюжеты с прошлой склейки
-        # не росли, а отказы помнит checked. Один раз проверяем все живые пары заново
+    if state["items"] and state.get("version", 0) < 3:
+        # 12.11: склейка стала брать и пары «невидимый + видимый» (версия 1), потом — без фильтра Haiku для них (2),
+        # потом — крупные сюжеты-темы и совсем без фильтра (3). Старые пары она бы не проверила: их сюжеты с прошлой
+        # склейки не росли, а отказы помнит checked. Один раз проверяем все живые пары заново
         state["merged_at"] = ""
         state["checked"] = {}
-    state["version"] = 2
+    state["version"] = 3
+    for it in state["items"].values():  # части и история (stories.py) — с 12.11; что разложено раньше — как есть сейчас
+        it.setdefault("part", it["story"])
+        it.setdefault("history", [{"t": it["seen"], "why": it["verdict"], "story": it["story"], "part": it["part"]}])
+    for u in sorted((u for u, it in state["items"].items() if "n" not in it), key=lambda u: state["items"][u]["seen"]):
+        state["items"][u]["n"] = state.get("next_n", 1)
+        state["next_n"] = state["items"][u]["n"] + 1
     fresh_start = not state["items"]
     if fresh_start:  # что старше начала, не раскладываем и потом: иначе следующая сборка возьмёт все LIVE часов
         state["started"] = (datetime.fromisoformat(now) - BOOTSTRAP).isoformat()
@@ -120,6 +195,7 @@ def run(archive: dict, sections: dict) -> None:
     if need:
         for u, v in zip(need, stories.embed([texts[u] for u in need])):
             vectors[u] = v
+    done = apply_commands(state, vectors, now)
 
     day = datetime.fromisoformat(now).astimezone(LOCAL_TZ).date().isoformat()
     ask = ask_with_spending(state, day)
@@ -137,9 +213,20 @@ def run(archive: dict, sections: dict) -> None:
     state["spent"] = {d: s for d, s in sorted(state.get("spent", {}).items())[-SPENT_DAYS:]}
     state["built"] = now
     save_state(state, vectors)
+    if done:  # ответы в Telegram — после сохранения: не сохранилось — команды применятся заново в следующей сборке
+        translate.reports_api({"results": [{"message": c.get("message"), "text": c["result"]} for c in done]}, "stories")
     print(f"Сюжеты: решено {decided}, склеено {merged}, сюжетов {len(state['stories'])}, "
           f"за сегодня ≈ ${state['spent'].get(day, {}).get('usd', 0):.3f}", file=sys.stderr)
     write_page(state, vectors, sections)
+
+
+def count(n: int, one: str, few: str, many: str) -> str:
+    """Число со словом: 1 новость, 3 новости, 5 новостей."""
+    word = one if n % 10 == 1 and n % 100 != 11 else few if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else many
+    return f"{n} {word}"
+
+
+NEWS, OUTLETS, PARTS = ("новость", "новости", "новостей"), ("издание", "издания", "изданий"), ("часть", "части", "частей")
 
 
 def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> None:
@@ -183,11 +270,20 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
         level = "low" if sim < stories.CANDIDATE_SIM else "mid" if sim < stories.RECHECK_SIM else "ok"
         return f' · <span class="sim {level}">{sim:.3f}</span>'
 
+    def path(it: dict) -> str:
+        """Путь новости по сюжетам, если её переносили: s472 → s471 (склейка)."""
+        steps = [h for h in it.get("history", []) if h.get("from")]
+        if not steps:
+            return ""
+        names = {"merge": "склейка", "recheck": "перепроверка", "split": "разделение", "unmerge": "отмена склейки"}
+        return " · " + " → ".join([e(steps[0]["from"])] + [f'{e(h["story"] or "—")} ({names.get(h["why"], e(h["why"]))})'
+                                                         for h in steps])
+
     def item_row(u: str, it: dict, extra: str) -> str:
         what = it.get("what", "")
-        return (f'<li><span class="meta">{local_time(it["seen"])} · {e(it["source"])} · '
+        return (f'<li><span class="meta">№{it.get("n", "")} · {local_time(it["seen"])} · {e(it["source"])} · '
                 f'{e(sections.get(it["section"], it["section"]))}'
-                f'{" · " + e(it["verdict"]) if it["verdict"] in ("same", "recheck") else ""}{extra}</span><br>'
+                f'{" · " + e(it["verdict"]) if it["verdict"] in ("same", "recheck") else ""}{extra}{path(it)}</span><br>'
                 f'<a href="{e(u)}" rel="noopener" target="_blank">{e(it["title"])}</a>'
                 f'{f"<br><span class=what>{e(what)}</span>" if what and what != it["title"] else ""}</li>')
 
@@ -198,13 +294,29 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
         items = [state["items"][u] for u in urls]
         camps = Counter(sections.get(it["section"], it["section"]) for it in items)
         near = closest(urls, urls)
-        rows = "".join(item_row(u, it, sim_mark(near.get(u, (None,))[0]))
-                       for u, it in sorted(zip(urls, items), key=lambda pair: pair[1]["seen"], reverse=True))  # свежие сверху
+
+        def rows(part_urls: list[str]) -> str:  # свежие сверху
+            return "".join(item_row(u, state["items"][u], sim_mark(near.get(u, (None,))[0]))
+                           for u in sorted(part_urls, key=lambda u: state["items"][u]["seen"], reverse=True))
+
+        # части — события, из которых склеена тема; свежие сверху. Одна часть — без заголовков
+        parts = {}
+        for u in urls:
+            parts.setdefault(state["items"][u].get("part") or sid, []).append(u)
+        if len(parts) == 1:
+            body = rows(urls)
+        else:
+            order = sorted(parts, key=lambda p: max(state["items"][u]["seen"] for u in parts[p]), reverse=True)
+            body = "".join(
+                f'<li class="part"><b>{e(headline(parts[p]))}</b><br><span class="meta">{count(len(parts[p]), *NEWS)} · '
+                f'{count(len({state["items"][u]["source"] for u in parts[p]}), *OUTLETS)} · часть {p}</span>'
+                f'<ul>{rows(parts[p])}</ul></li>' for p in order)
         cards.append(
-            f'<details id="{sid}"><summary><b>{e(headline(urls))}</b><br><span class="meta">{len(urls)} новостей · '
-            f'{len(sources(sid))} изданий · {e(", ".join(f"{c} {n}" for c, n in camps.most_common()))} · '
+            f'<details id="{sid}"><summary><b>{e(headline(urls))}</b><br><span class="meta">{count(len(urls), *NEWS)} · '
+            f'{count(len(sources(sid)), *OUTLETS)}{" · " + count(len(parts), *PARTS) if len(parts) > 1 else ""} · '
+            f'{e(", ".join(f"{c} {n}" for c, n in camps.most_common()))} · '
             f'{local_time(story["created"])} — {local_time(story["updated"])} · {sid}</span></summary>'
-            f'<ul>{rows}</ul></details>')
+            f'<ul>{body}</ul></details>')
 
     # новости, которых на странице не видно: сюжет из одного издания. Сверху — самые похожие на видимый сюжет:
     # среди них и те, что должны были в него попасть
@@ -228,6 +340,13 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
     lonely = "".join(item_row(u, state["items"][u], f' · {state["items"][u]["story"]}{verdict(u)}{nearest(u)}')
                      for u in hidden)
 
+    def command(c: dict) -> str:
+        args = {"move": lambda: f"{c['news']} {c['to']}", "split": lambda: " ".join(c["parts"]),
+                "unmerge": lambda: c["story"]}.get(c["do"], lambda: "")()
+        return f"<li>{e(local_time(c['applied']))} · /{e(c['do'])} {e(args)} — {e(c['result'])}</li>"
+
+    commands = "".join(command(c) for c in reversed(state.get("commands", [])))
+
     spent = "".join(f"<tr><td>{d}</td><td>{s['calls']}</td><td>${s['usd']:.3f}</td></tr>"
                     for d, s in sorted(state.get("spent", {}).items(), reverse=True))
     total = len(state["stories"])
@@ -237,7 +356,7 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
 <style>body{{font:15px/1.45 system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#222;background:#fff}}
 summary{{cursor:pointer;padding:6px 0}}details{{border-bottom:1px solid #eee}}ul{{margin:4px 0 12px;padding-left:20px}}
 li{{margin:6px 0}}.meta{{color:#888;font-size:13px}}a{{color:#1a5fb4}}table{{border-collapse:collapse;font-size:13px}}
-td{{padding:2px 14px 2px 0}}.what{{color:#777;font-size:13px}}
+td{{padding:2px 14px 2px 0}}li.part{{list-style:none;margin:10px 0 4px -20px;padding-left:10px;border-left:3px solid #ddd}}.what{{color:#777;font-size:13px}}
 .sim.mid{{color:#b7791f}}.sim.low{{color:#c0392b;font-weight:600}}.err{{background:#fde8d8;color:#a33;padding:8px 12px}}
 @media (prefers-color-scheme:dark){{body{{background:#161616;color:#ddd}}details{{border-color:#333}}a{{color:#78aeed}}}}</style>
 </head><body>
@@ -253,6 +372,10 @@ td{{padding:2px 14px 2px 0}}.what{{color:#777;font-size:13px}}
 <h2>Не попали в видимые сюжеты</h2>
 <details><summary>{len(hidden)} новостей за сутки в сюжетах из одного издания — самые похожие на видимый сюжет сверху</summary>
 <ul>{lonely}</ul></details>
+<h2>Правки через бота</h2>
+<p class="meta">Боту в Telegram: /move 1234 s471 — новость №1234 в сюжет s471 (new — в новый), /split s191 — часть
+в отдельный сюжет, /unmerge s102 — отменить склейку.</p>
+{f"<ul>{commands}</ul>" if commands else "<p class=meta>Пока не было.</p>"}
 <h2>Расход</h2><table><tr><td>день</td><td>запросов</td><td>≈ $</td></tr>{spent}</table>
 </body></html>"""
     PAGE_DIR.mkdir(parents=True, exist_ok=True)

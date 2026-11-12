@@ -123,7 +123,7 @@ def run(snapshot: Path, first: str, last: str, tag: str = "") -> Path:
     out = snapshot.parent / f"replay-{last}{'-' + tag if tag else ''}.json"
     params = {k: getattr(stories, k) for k in ("MODEL", "EFFORT", "EMBED_MODEL", "CANDIDATES", "CANDIDATE_SIM",
                                                 "STORY_ITEMS", "SHOWN_ITEMS", "BATCH", "MERGE_SIM", "MERGE_BATCH",
-                                                "MERGE_MODEL", "MERGE_EFFORT", "MERGE_SHOWN", "MERGE_FILTER_EFFORT")}
+                                                "MERGE_MODEL", "MERGE_EFFORT", "MERGE_SHOWN")}
     params["MERGE_EVERY"] = str(stories.MERGE_EVERY)
     params["MERGE_SURE_SIM"] = stories.MERGE_SURE_SIM
     params["RECHECK_SIM"], params["RECHECK_EFFORT"] = stories.RECHECK_SIM, stories.RECHECK_EFFORT

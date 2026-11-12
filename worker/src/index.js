@@ -13,6 +13,9 @@
 //   если вышла новость, или «отбой», если у издания выходной (resting). Кого уже прислали, лежит в ключе KV "feeds".
 // POST /telegram — webhook бота: строки «Air Serbia = Air Serbia» или «удалить Air Serbia» из нашего чата
 //   worker коммитит в glossary.json на GitHub (секрет GITHUB_TOKEN), а коммит запускает сборку.
+//   Команды сюжетам (теневой режим, vestomat.rs/plot/) — «/move 1234 s471», «/split s191», «/unmerge s102» —
+//   так же дописывает в stories-commands.json; сборка их применяет (stories_live.py).
+// POST /stories {results: [{message, text}]} — от сборки: чем кончились команды сюжетам, ответом на сообщение с командой.
 //   Webhook worker подключает сам при первой сборке после выкатки (см. ensureWebhook).
 // GET /costs — страница с этой статистикой, GET /stats — сами данные для неё (с ключом STATS_KEY).
 //   Ключ страница берёт из адреса после # — эта часть не уходит ни на сервер, ни в Referer.
@@ -39,12 +42,18 @@ const FEEDS_MAX = 15;  // новых тревог в одном сообщени
 const FEEDS_TITLE = "📡 СТОРОЖ ЛЕНТ";
 const REPO = "brainydamage/serbia-news";
 const GLOSSARY_PATH = "glossary.json";
+const COMMANDS_PATH = "stories-commands.json";
+const COMMANDS_KEEP = 200;  // последних команд в файле: сборка помнит, до какой дошла
 // поменять, если изменятся настройки webhook, — worker подключит его заново
 const WEBHOOK_VERSION = "1";
 const GLOSSARY_HELP = [
   "Чтобы добавить название в глоссарий, напиши строку «как в оригинале = как по-русски», можно несколько строк:",
   "Air Serbia = Air Serbia", "Republika Srpska = Республика Сербская", "",
   "Убрать: «удалить Air Serbia». Новости с этим названием переведутся заново в ближайшей сборке.",
+  "", "Сюжеты (vestomat.rs/plot/), по команде на строку:",
+  "/move 1234 s471 — новость №1234 в сюжет s471 (new вместо s471 — в новый сюжет)",
+  "/split s191 s298 — части s191 и s298 в отдельный сюжет",
+  "/unmerge s102 — отменить склейку: s102 снова отдельный сюжет",
 ].join("\n");
 
 export default {
@@ -72,7 +81,7 @@ export default {
       if (!authorized(request, env.STATS_KEY)) return json({ error: "unauthorized" }, 401);
       return json((await env.REPORTS.get("stats", "json")) || { days: {}, builds: [] });
     }
-    if (["/reports", "/stats", "/untranslated", "/feeds"].includes(pathname) && !authorized(request, env.REPORTS_TOKEN)) return json({ error: "unauthorized" }, 401);
+    if (["/reports", "/stats", "/untranslated", "/feeds", "/stories"].includes(pathname) && !authorized(request, env.REPORTS_TOKEN)) return json({ error: "unauthorized" }, 401);
     if (pathname === "/reports" && request.method === "GET") return list(env);
     if (pathname === "/reports" && request.method === "POST") return resolve(request, env);
     if (pathname === "/stats" && request.method === "POST") {
@@ -82,6 +91,7 @@ export default {
     }
     if (pathname === "/untranslated" && request.method === "POST") return untranslated(request, env);
     if (pathname === "/feeds" && request.method === "POST") return watchFeeds(request, env);
+    if (pathname === "/stories" && request.method === "POST") return storyResults(request, env);
     return json({ error: "not found" }, 404);
   },
 };
@@ -300,8 +310,23 @@ async function telegramUpdate(request, env) {
   if (!message?.text || String(message.chat?.id) !== String(env.TELEGRAM_CHAT_ID)) return json({ ok: true });
   const reply = text => telegram(env, "sendMessage", { text, reply_parameters: { message_id: message.message_id } });
 
+  const lines = message.text.split("\n").map(l => l.trim()).filter(Boolean);
+  const commands = lines.map(storyCommand);
+  if (commands.some(Boolean)) {
+    if (!commands.every(Boolean)) {
+      await reply(GLOSSARY_HELP);
+      return json({ ok: true });
+    }
+    try {
+      await reply(await addStoryCommands(env, commands, message.message_id));
+    } catch (error) {
+      await reply(`Не получилось: ${error.message}`.slice(0, 1000));
+    }
+    return json({ ok: true });
+  }
+
   const changes = [];
-  for (const line of message.text.split("\n").map(l => l.trim()).filter(Boolean)) {
+  for (const line of lines) {
     const remove = line.match(/^удалить\s+(.+)$/i);
     const pair = line.match(/^(.+?)\s*(?:=|→)\s*(.+)$/);
     if (remove) changes.push({ sr: remove[1].trim() });
@@ -319,14 +344,72 @@ async function telegramUpdate(request, env) {
   return json({ ok: true });
 }
 
+// «/move 1234 s471», «/move №1234 new», «/split s191 s298», «/unmerge s102»; в группе Telegram дописывает к команде
+// @имя_бота — его отбрасываем. Не команда сюжетам — null
+function storyCommand(line) {
+  const [head, ...args] = line.replace(/^(\/\w+)@\w+/, "$1").split(/[\s,]+/);
+  const story = /^s\d+$/;
+  if (head === "/move" && args.length === 2 && /^[№#]?\d+$/.test(args[0]) && (story.test(args[1]) || args[1] === "new")) {
+    return { do: "move", news: Number(args[0].replace(/^[№#]/, "")), to: args[1] };
+  }
+  if (head === "/split" && args.length && args.every(a => story.test(a))) return { do: "split", parts: args };
+  if (head === "/unmerge" && args.length === 1 && story.test(args[0])) return { do: "unmerge", story: args[0] };
+  return head.startsWith("/") && ["/move", "/split", "/unmerge"].includes(head) ? { do: "bad" } : null;
+}
+
+// stories-commands.json — по команде на строку; id растёт, сборка применяет те, что новее последней применённой
+async function addStoryCommands(env, commands, messageId) {
+  const bad = commands.filter(c => c.do === "bad");
+  if (bad.length) return GLOSSARY_HELP;
+  if (!env.GITHUB_TOKEN) throw new Error("у worker нет секрета GITHUB_TOKEN");
+  const api = `${env.GITHUB_API || "https://api.github.com"}/repos/${REPO}/contents/${COMMANDS_PATH}`;
+  const headers = githubHeaders(env);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const file = await fetch(`${api}?ref=main`, { headers });
+    if (!file.ok && file.status !== 404) throw new Error(`GitHub не отдал ${COMMANDS_PATH}: ${file.status}`);
+    const { content, sha } = file.ok ? await file.json() : {};
+    const list = content ? JSON.parse(fromBase64(content)).commands : [];
+    let id = Math.max(0, ...list.map(c => c.id));
+    const t = belgrade(Date.now());
+    for (const c of commands) list.push({ id: ++id, t, message: messageId, ...c });
+    const kept = list.slice(-COMMANDS_KEEP);
+    const text = `{\n  "commands": [\n${kept.map(c => `    ${JSON.stringify(c)}`).join(",\n")}\n  ]\n}\n`;
+    const label = commands.map(c => c.do === "move" ? `move ${c.news} → ${c.to}` : c.do === "split" ? `split ${c.parts.join(" ")}` : `unmerge ${c.story}`);
+    const saved = await fetch(api, {
+      method: "PUT", headers,
+      body: JSON.stringify({ message: `Stories from Telegram: ${label.join(", ")}`.slice(0, 200), content: toBase64(text), sha, branch: "main" }),
+    });
+    if (saved.status === 409) continue;
+    if (!saved.ok) throw new Error(`GitHub не сохранил ${COMMANDS_PATH}: ${saved.status}`);
+    return [...label, "", "Применится в сборке минуты через 3 — отвечу сюда, что вышло."].join("\n");
+  }
+  throw new Error(`${COMMANDS_PATH} всё время меняется, попробуй ещё раз`);
+}
+
+async function storyResults(request, env) {
+  const { results } = await request.json();
+  for (const r of (Array.isArray(results) ? results : []).slice(0, 20)) {
+    const text = String(r?.text || "").slice(0, 1000);
+    if (!text) continue;
+    const payload = { text };
+    if (Number.isInteger(r.message)) payload.reply_parameters = { message_id: r.message, allow_sending_without_reply: true };
+    await telegram(env, "sendMessage", payload);
+  }
+  return json({ ok: true });
+}
+
+function githubHeaders(env) {
+  return {
+    Authorization: `Bearer ${env.GITHUB_TOKEN}`, Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "vestomat-bot", "Content-Type": "application/json",
+  };
+}
+
 // glossary.json — по записи на строку, как его пишем руками; дописываем в конец, существующую — правим на месте
 async function editGlossary(env, changes) {
   if (!env.GITHUB_TOKEN) throw new Error("у worker нет секрета GITHUB_TOKEN");
   const api = `${env.GITHUB_API || "https://api.github.com"}/repos/${REPO}/contents/${GLOSSARY_PATH}`;
-  const headers = {
-    Authorization: `Bearer ${env.GITHUB_TOKEN}`, Accept: "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "vestomat-bot", "Content-Type": "application/json",
-  };
+  const headers = githubHeaders(env);
   // если файл успели поменять между чтением и записью, GitHub ответит 409 — читаем заново
   for (let attempt = 0; attempt < 2; attempt++) {
     const file = await fetch(`${api}?ref=main`, { headers });

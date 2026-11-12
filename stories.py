@@ -6,9 +6,14 @@
    а не с его центром, чтобы сюжет не уплывал. Одиночка — тоже сюжет, просто из одной новости;
 3. новости без кандидатов и без похожих соседей по сборке сразу становятся новыми сюжетами, остальные решает
    модель, пачками по BATCH: join (в сюжет S…), same (то же событие, что новая N…), new, unclear.
-4. раз в MERGE_EVERY — склейка дублей (merge): похожие пары живых сюжетов модель проверяет на «одно событие».
+4. раз в MERGE_EVERY — склейка (merge): похожие пары живых сюжетов модель проверяет на «одну историю» — событие
+   или тему с общим предметом; склеенные сюжеты остаются частями темы.
 Видимый сюжет — от двух изданий. Названий пока нет. Раскладку проверяем прогоном на снимке архива против эталона
 (stories_replay.py, stories_gold.py), в живой сборке она идёт в теневом режиме (stories_live.py).
+
+Три уровня: сюжет (тема) → часть (событие) → новость. Часть — сюжет, каким он был до склейки: у новости story — сюжет,
+part — id сюжета, в котором она появилась; склейка сливает сюжеты, а части сохраняет, чтобы тему потом можно было
+показать по событиям и разделить обратно. Новость, добавленная в сюжет (join), идёт в часть самой похожей новости.
 
 Состояние — один словарь, JSON: stories (id → новости и время), items (адрес → решение и то, что нужно для запроса).
 Векторы хранятся отдельно: {адрес: вектор}.
@@ -36,10 +41,10 @@ BATCH = 25
 SKIP_SECTIONS = {"reddit", "trends"}
 
 # что считать одним сюжетом — общее для раскладки и склейки (и то же, что в промпте эталона stories_gold.py)
-RULES = """Сюжет — одна история: событие, о котором пишут одно или несколько изданий, вместе с его развитием и последствиями. Сюжет шире одной новости, но уже темы.
-- Один сюжет: разные издания пишут об одном и том же событии; развитие и последствия этого события (новые подробности, что нашли при обыске, кто ещё задержан по тому же делу, суд, отставки, решения и меры, принятые из-за него); прямые реакции и заявления по нему; одно заседание, решение или документ с несколькими пунктами (Совет REM на одном заседании наказал несколько телеканалов — один сюжет); одно интервью с заявлениями на разные темы; одни выборы — общие итоги, результаты отдельных списков и советов, реакции на них; подготовка, повестка и сами переговоры.
-- Разные сюжеты: два похожих, но не связанных события (арестовали двух разных чиновников по разным делам — два сюжета); разные выборы (парламентские и выборы в национальные советы меньшинств — два сюжета); общая тема без общего события, когда одно не следует из другого («формирование правительства», «Сербия и ЕС»); заявление того же политика на другую тему; анонс события и само событие, если между ними нет общей новости.
-- Похожие слова ещё не значат одно событие."""
+RULES = """Сюжет — одна история: событие или тема с общим предметом, о которой пишут разные издания, вместе с развитием, последствиями и реакциями. Сюжеты крупные: читателю удобнее один сюжет «крах „Алта банки“», чем пять мелких; лучше тема, чем россыпь сюжетов.
+- Один сюжет: разные издания об одном событии; его развитие и последствия (подробности, обыски, новые задержания по делу, суд, отставки, меры); реакции и заявления по нему; одно событие, рассказанное с разных сторон или с разной подробностью (сводка одной стороны и репортаж другой, в целом по стране и в одном городе); тема с общим предметом — одна компания или банк, одно дело, одно ведомство, один процесс или переговоры, один саммит, один праздник или памятная дата («Алта банка»: выплаты вкладов, деньги общин, запрет владельцу — один сюжет); одно заседание, решение, документ или программа с несколькими пунктами; одно выступление, пресс-конференция или интервью с заявлениями на разные темы; одни выборы — итоги, результаты списков, реакции; подготовка, анонс и само событие.
+- Разные сюжеты: однотипные события без общего предмета (две аварии в разных местах, два ареста по разным делам, отключения воды или света в разных городах); разные выборы (парламентские и выборы в национальные советы меньшинств); выступления одного политика в разные дни по разным поводам — один человек сам по себе ещё не общий предмет.
+- Похожие слова ещё не значат одну историю."""
 
 SYSTEM_PROMPT = f"""Ты раскладываешь свежие новости о Сербии по сюжетам. {RULES}
 Если сомневаешься — new: лишний сюжет потом склеят, а чужая новость в сюжете видна читателю.
@@ -50,7 +55,7 @@ SYSTEM_PROMPT = f"""Ты раскладываешь свежие новости 
 Заголовок бывает кликбейтом — опирайся на смысл.
 
 Для каждой новой новости верни verdict и target:
-- join — о том же событии, что сюжет target, или о его развитии и последствиях (S… из её candidates);
+- join — о той же истории, что сюжет target (S… из её candidates);
 - same — подходящего сюжета нет, но это то же событие, что другая новая новость target (N…);
 - new — новое событие, target пустой;
 - unclear — нельзя понять, о каком событии речь (кликбейт без факта), target пустой."""
@@ -80,7 +85,7 @@ SCHEMA = {
 RECHECK_PROMPT = f"""Ты проверяешь, правильно ли новости разложены по сюжетам агрегатора новостей о Сербии. {RULES}
 
 Вход — JSON: stories — сюжеты, id вида S…, у каждого несколько новостей (что произошло); news — новости, id вида N…, каждая уже добавлена в сюжет story.
-Для каждой новости ответь keep: true, если она о той же истории, что сюжет (включая развитие события, его последствия и прямые реакции на него), и false, если это отдельное событие, не связанное с событием сюжета, — пусть даже на ту же тему или с теми же участниками."""
+Для каждой новости ответь keep: true, если она о той же истории, что сюжет (то же событие, его развитие, последствия и реакции или тема с тем же общим предметом), и false, если у неё с сюжетом нет общего предмета — пусть даже это однотипное событие или те же участники."""
 
 RECHECK_SCHEMA = {
     "type": "object",
@@ -106,8 +111,9 @@ RECHECK_EFFORT = "medium"
 
 MERGE_PROMPT = f"""Ты проверяешь сюжеты агрегатора новостей о Сербии на дубли. {RULES}
 
-Вход — JSON: stories — сюжеты, id вида S…, у каждого несколько новостей (что произошло); pairs — пары сюжетов, похожих по словам, id вида P…
-Для каждой пары ответь same: true, только если оба сюжета — про одну историю: одно и то же событие (те же участники, то же происшествие, заседание, интервью или решение) или событие и его прямое развитие и последствия. Однотипные события — не одно событие: две аварии, два ареста по разным делам, два заявления одного политика по разным поводам — false. Общая тема (выборы, «Алта банка») без общего события, когда один сюжет не следует из другого, — false. Если сомневаешься — false: дубль хуже видно, чем чужую новость в сюжете."""
+Вход — JSON: stories — сюжеты, id вида S…, у каждого несколько новостей (время UTC · издание: что произошло); pairs — пары сюжетов, похожих по словам, id вида P…
+Для каждой пары ответь same: true, если оба сюжета — про одну историю: одно событие, его развитие, последствия и реакции или тема с общим предметом. Заявления, прозвучавшие на одном выступлении, пресс-конференции или в одном интервью, — true, даже если темы разные: смотри на время и участника.
+false — только если общего предмета нет: однотипные, но не связанные события или выступления одного политика в разные дни по разным поводам."""
 
 MERGE_SCHEMA = {
     "type": "object",
@@ -128,13 +134,12 @@ MERGE_SCHEMA = {
 MERGE_EVERY = timedelta(hours=1)
 MERGE_SIM = 0.865  # пары сюжетов с лучшей парой новостей не ниже — к модели (у MiniLM было 0.55)
 MERGE_BATCH = 20  # пар в одном запросе
-# склейку решает Sonnet: Haiku даже на effort medium склеивал однотипные события — два ареста, два суда.
-# Но ошибается Haiku в одну сторону, поэтому он стоит перед Sonnet фильтром: его «разные» до Sonnet не доходят
+# склейку решает Sonnet. Фильтра Haiku перед ним больше нет: с крупными сюжетами (12.11) Haiku стал строже Sonnet —
+# из 139 пар, которые Sonnet склеил из 357 прежних отказов, пропустил бы только 78
 MERGE_MODEL = "claude-sonnet-5-5"
 MERGE_EFFORT = "medium"
 MERGE_SHOWN = 5  # сколько новостей каждого сюжета видит модель при склейке
 MERGE_SURE_SIM = 0.9  # пары похожее этого идут к модели и без общих участников (у MiniLM было 0.7)
-MERGE_FILTER_EFFORT = "medium"  # Haiku перед Sonnet: на low он отбраковывал явные дубли, на medium пропускает лишнее — что и нужно
 PRICES = {MODEL: (0.10, 0.50), MERGE_MODEL: (2.0, 10.0)}  # вход / выход за 1M токенов, $
 
 
@@ -193,11 +198,26 @@ def _start(state: dict, now: str) -> str:
     return sid
 
 
-def _add(state: dict, sid: str, url: str, item: dict, verdict: str, now: str) -> None:
+def _add(state: dict, sid: str, url: str, item: dict, verdict: str, now: str, part: str | None = None,
+         sim: float | None = None) -> None:
+    """part — часть сюжета (событие); по умолчанию — сам сюжет: новость его открыла. sim — сходство с сюжетом (join).
+    Новость уже была (перепроверка сняла её из сюжета) — история сохраняется, шаг пишется с from."""
     ru = item.get("ru") or {}
-    state["items"][url] = {"story": sid, "verdict": verdict, "seen": now, "source": item["source"],
+    prev = state["items"].get(url)
+    n = (prev or {}).get("n")
+    if n is None:  # короткий номер новости — для команд боту (stories_live.py): «/move 1234 s471»
+        n = state.get("next_n", 1)
+        state["next_n"] = n + 1
+    state["items"][url] = {"n": n, "story": sid, "part": part or sid, "verdict": verdict, "seen": now, "source": item["source"],
                            "section": item["section"], "title": ru.get("title") or item["title"],
-                           "what": item.get("what", ""), "entities": item.get("entities") or []}
+                           "what": item.get("what", ""), "entities": item.get("entities") or [],
+                           "history": (prev or {}).get("history", [])}
+    step = {"t": now, "why": verdict, "story": sid, "part": part or sid}
+    if sim is not None:
+        step["sim"] = round(sim, 3)
+    if prev:
+        step["from"] = prev["story"]
+    state["items"][url]["history"].append(step)
     if sid:
         state["stories"][sid]["urls"].append(url)
         state["stories"][sid]["updated"] = now
@@ -262,22 +282,35 @@ def _decide(state: dict, batch: list[tuple[str, dict]], now: str, vectors: dict,
         url, item = batch[n]
         d = verdicts.get(f"N{n}", {"verdict": "new", "target": ""})
         verdict, target = d["verdict"], d["target"]
+        part = sim = None
         if verdict == "join" and target in by_alias:  # можно и чужого кандидата из той же пачки: модель видела его
             sid = by_alias[target]
+            part = _nearest_part(state, sid, vectors[url], vectors)
+            sim = candidates[n].get(sid)
             if candidates[n].get(sid, 0) < RECHECK_SIM:
                 weak.append((n, target))
         elif verdict == "same" and target.startswith("N") and target[1:].isdigit() \
                 and batch[int(target[1:])][0] in state["items"] and state["items"][batch[int(target[1:])][0]]["story"]:
             sid = state["items"][batch[int(target[1:])][0]]["story"]
+            part = state["items"][batch[int(target[1:])][0]]["part"]
         elif verdict == "unclear":
             sid = None
         else:
             verdict = "new" if verdict in ("join", "same", "new") else verdict
             sid = _start(state, now)
-        _add(state, sid, url, item, verdict, now)
+        _add(state, sid, url, item, verdict, now, part, sim)
     if weak:
         usage = {k: usage.get(k, 0) + v for k, v in _recheck(state, batch, weak, stories, now, ask).items()}
     return usage
+
+
+def _nearest_part(state: dict, sid: str, vector: np.ndarray, vectors: dict) -> str:
+    """Часть сюжета, в которой самая похожая на новость новость (среди последних STORY_ITEMS)."""
+    urls = [u for u in state["stories"][sid]["urls"][-STORY_ITEMS:] if u in vectors]
+    if not urls:
+        return sid
+    nearest = state["items"][urls[int((np.stack([vectors[u] for u in urls]) @ vector).argmax())]]
+    return nearest.get("part") or nearest["story"]
 
 
 def _recheck(state: dict, batch: list[tuple[str, dict]], weak: list[tuple[int, str]], stories: list[dict],
@@ -298,11 +331,12 @@ def _recheck(state: dict, batch: list[tuple[str, dict]], weak: list[tuple[int, s
     return usage
 
 
-def _shown(state: dict, sid: str, vectors: dict, count: int = SHOWN_ITEMS) -> list[str]:
+def _shown(state: dict, sid: str, vectors: dict, count: int = SHOWN_ITEMS, detail: bool = False) -> list[str]:
     """Что модель видит о сюжете: первая новость и самые типичные — похожие на остальные новости сюжета больше всех,
     по порядку появления, без повторов текста. Не последние: с последними одна чужая новость, попав в сюжет,
     становится его лицом и тянет за собой следующие (10.11 так в сюжет решения REM легли 19 новостей
-    про обыск у Вучичевича)."""
+    про обыск у Вучичевича). detail — с временем (UTC) и изданием: склейке без времени «удар по Киеву» и «удар
+    по Украине» в ту же ночь казались разными событиями (12.11)."""
     urls = state["stories"][sid]["urls"][-STORY_ITEMS:]
     first = state["stories"][sid]["urls"][0]
     rest = [u for u in urls if u != first]
@@ -311,7 +345,11 @@ def _shown(state: dict, sid: str, vectors: dict, count: int = SHOWN_ITEMS) -> li
         typical = (v @ v.T).mean(axis=1)[[urls.index(u) for u in rest]]
         keep = set(np.argsort(-typical)[:count - 1])
         rest = [u for n, u in enumerate(rest) if n in keep]
-    return list(dict.fromkeys(text_of(state["items"][u]) for u in [first] + rest))
+    items = [state["items"][u] for u in [first] + rest]
+    if detail:
+        return list(dict.fromkeys(f"{it['seen'][8:10]}.{it['seen'][5:7]} {it['seen'][11:16]} · {it['source']}: {text_of(it)}"
+                                  for it in items))
+    return list(dict.fromkeys(text_of(it) for it in items))
 
 
 def _keys(entities: list[str]) -> set[str]:
@@ -343,7 +381,7 @@ def _same_pairs(state: dict, pairs: list[tuple[str, str]], vectors: dict, model:
         for a, b in chunk:
             for s in (a, b):
                 aliases.setdefault(s, f"S{len(aliases)}")
-        content = json.dumps({"stories": [{"id": al, "news": _shown(state, s, vectors, MERGE_SHOWN)} for s, al in aliases.items()],
+        content = json.dumps({"stories": [{"id": al, "news": _shown(state, s, vectors, MERGE_SHOWN, detail=True)} for s, al in aliases.items()],
                               "pairs": [{"id": f"P{n}", "a": aliases[a], "b": aliases[b]}
                                         for n, (a, b) in enumerate(chunk)]}, ensure_ascii=False)
         answer, usage = ask(MERGE_PROMPT, content, MERGE_SCHEMA, effort, model)
@@ -359,10 +397,9 @@ def merge(state: dict, now: str, vectors: dict, ask) -> dict:
     хотя бы один сюжет видимый (два невидимых обрывка читателю не мешают, а невидимый рядом с видимым — новость,
     которая должна была лечь в видимый: пришла раньше него или модель ошиблась), хотя бы один вырос с прошлой склейки, лучшая пара
     новостей похожа не меньше MERGE_SIM, у сюжетов есть общий участник (entities; не нужен, если сходство
-    не ниже MERGE_SURE_SIM) и пару ещё не признавали разными — или с тех пор один из сюжетов вырос вдвое.
-    Дальше каскад: Haiku отсеивает явно разные пары (он ошибается в сторону «одно событие»), Sonnet решает остальное.
-    Пары «невидимый + видимый» идут к Sonnet сразу: Haiku отсеивал и треть тех, что Sonnet склеил бы (12.11, на 62 парах
-    за 12 часов — 3 из 9), а пар таких немного — около $0.04 за 12 часов.
+    не ниже MERGE_SURE_SIM), пару ещё не признавали разными — или с тех пор один из сюжетов вырос вдвое — и её части
+    не разделяли руками (split, unmerge). Решает Sonnet. Каждая склейка — в журнал state["merges"] с частями, которые
+    принёс склеенный сюжет: по нему unmerge её отменяет.
     Возвращает {"in", "out", "usd", "asked": {модель: пар}, "merged"}."""
     total = {"in": 0, "out": 0, "usd": 0.0, "asked": {}, "merged": 0}
     stories, checked = state["stories"], state.setdefault("checked", {})
@@ -382,7 +419,7 @@ def merge(state: dict, now: str, vectors: dict, ask) -> dict:
             candidates[(a, b)] = max(candidates.get((a, b), 0), sims[r, c])
     todo = []
     for (a, b), sim in sorted(candidates.items()):
-        if stories[a]["updated"] < last and stories[b]["updated"] < last:
+        if stories[a]["updated"] < last and stories[b]["updated"] < last or _apart(state, a, b):
             continue
         old = checked.get(f"{a}|{b}")
         if old and len(stories[a]["urls"]) < 2 * old[0] and len(stories[b]["urls"]) < 2 * old[1]:
@@ -390,15 +427,12 @@ def merge(state: dict, now: str, vectors: dict, ask) -> dict:
         if sim >= MERGE_SURE_SIM or _share_entities(state, a, b):
             todo.append((a, b))
 
-    both = [p for p in todo if p[0] in shown and p[1] in shown]
-    maybe = [both[n] for n in sorted(_same_pairs(state, both, vectors, MODEL, MERGE_FILTER_EFFORT, ask, total))]
-    maybe += [p for p in todo if p not in both]
-    same = _same_pairs(state, maybe, vectors, MERGE_MODEL, MERGE_EFFORT, ask, total)
+    same = _same_pairs(state, todo, vectors, MERGE_MODEL, MERGE_EFFORT, ask, total)
     # за проход сюжет склеивается не больше одного раза: цепочки a ← b ← c на первом прогоне стянули аварию,
     # границу и ДТП в один сюжет на 450 новостей. Остальные пары с ним проверим в следующий раз, уже со склеенным.
     # Невидимые обрывки цепочку не строят: видимый сюжет за проход принимает их сколько угодно
     used, merges = set(), []
-    for n, (a, b) in enumerate(maybe):
+    for n, (a, b) in enumerate(todo):
         if n in same and a not in used and b not in used:
             if a in shown and b in shown:
                 used.update((a, b))
@@ -416,8 +450,12 @@ def merge(state: dict, now: str, vectors: dict, ask) -> dict:
         while keep in moved:
             keep = moved[keep]
         moved[gone] = keep
+        state.setdefault("merges", []).append(
+            {"t": now, "keep": keep, "gone": gone, "parts": sorted({state["items"][u]["part"] for u in stories[gone]["urls"]})})
         for u in stories[gone]["urls"]:
-            state["items"][u]["story"] = keep
+            it = state["items"][u]
+            it["story"] = keep
+            it.setdefault("history", []).append({"t": now, "why": "merge", "story": keep, "part": it["part"], "from": gone})
         stories[keep]["urls"] = sorted(stories[keep]["urls"] + stories[gone]["urls"],
                                        key=lambda u: state["items"][u]["seen"])
         stories[keep]["updated"] = max(stories[keep]["updated"], stories[gone]["updated"])
@@ -425,6 +463,63 @@ def merge(state: dict, now: str, vectors: dict, ask) -> dict:
         del stories[gone]
         total["merged"] += 1
     return total
+
+
+def _parts(state: dict, sid: str) -> set[str]:
+    return {state["items"][u]["part"] for u in state["stories"][sid]["urls"]}
+
+
+def _apart(state: dict, a: str, b: str) -> bool:
+    """Разделены ли сюжеты руками: в state["apart"] — пары списков частей, которые склейка не соединяет."""
+    pa, pb = _parts(state, a), _parts(state, b)
+    return any(pa & set(x) and pb & set(y) or pa & set(y) and pb & set(x) for x, y in state.get("apart", []))
+
+
+def move(state: dict, url: str, sid: str | None, now: str, part: str | None = None, why: str = "move") -> str:
+    """Перенос новости без модели: в сюжет sid или в новый (None). Часть part; по умолчанию в новом сюжете — своя
+    (новое событие), в существующем — прежняя (событие новости не меняется). Опустевший сюжет удаляется.
+    Возвращает сюжет."""
+    it, stories = state["items"][url], state["stories"]
+    old = it["story"]
+    if old:
+        stories[old]["urls"].remove(url)
+        if not stories[old]["urls"]:
+            del stories[old]
+    if sid is None:
+        sid = _start(state, it["seen"])
+        part = part or sid
+    elif sid not in stories:
+        stories[sid] = {"created": it["seen"], "updated": it["seen"], "urls": []}
+    story = stories[sid]
+    story["urls"] = sorted(story["urls"] + [url], key=lambda u: state["items"][u]["seen"])
+    story["created"] = min(story["created"], it["seen"])
+    story["updated"] = max(story["updated"], it["seen"])
+    it["story"], it["part"] = sid, part or it["part"]
+    it.setdefault("history", []).append({"t": now, "why": why, "story": sid, "part": it["part"], "from": old})
+    return sid
+
+
+def split(state: dict, parts: list[str], now: str, sid: str | None = None, why: str = "split") -> str:
+    """Части parts — в отдельный сюжет sid (по умолчанию — id первой части, если свободен). Склейка их с тем, откуда
+    они ушли, обратно не соединит (state["apart"]). Возвращает сюжет."""
+    urls = sorted((u for u, it in state["items"].items() if it["story"] and it["part"] in parts),
+                  key=lambda u: state["items"][u]["seen"])
+    if not urls:
+        raise ValueError(f"нет новостей в частях {parts}")
+    left = {state["items"][u]["story"] for u in urls}
+    sid = sid or (parts[0] if parts[0] not in state["stories"] else _start(state, now))  # части не меняются
+    for u in urls:
+        sid = move(state, u, sid, now, why=why)
+    for old in left:
+        if old in state["stories"] and old != sid:
+            state.setdefault("apart", []).append([sorted(set(parts)), sorted(_parts(state, old))])
+    return sid
+
+
+def unmerge(state: dict, gone: str, now: str) -> str:
+    """Отмена склейки: части, которые принёс сюжет gone (последняя запись журнала), — снова сюжет gone."""
+    record = next(m for m in reversed(state.get("merges", [])) if m["gone"] == gone)
+    return split(state, record["parts"], now, gone if gone not in state["stories"] else None, why="unmerge")
 
 
 def merge_due(state: dict, now: str) -> bool:
