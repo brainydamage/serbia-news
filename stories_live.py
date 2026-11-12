@@ -49,6 +49,10 @@ WAIT_TRANSLATION = timedelta(minutes=20)
 FORGET = timedelta(days=5)
 SPENT_DAYS = 14
 PAGE_WINDOW = timedelta(hours=24)  # на странице — видимые сюжеты, обновлявшиеся за это время
+# порядок сюжетов — по горячести: каждое издание даёт сюжету очко за свою последнюю новость в нём, очко вдвое тает
+# за HEAT_HALF_LIFE. Свежий сюжет на 5 изданий выше вчерашнего на 25, одна реплика большой сюжет не поднимает,
+# а новый поворот, о котором пишут многие, — поднимает
+HEAT_HALF_LIFE = timedelta(hours=6)
 LOCAL_TZ = ZoneInfo("Europe/Belgrade")
 # кодовые имена видимых сюжетов — чтобы узнавать сюжет по ссылке, а не по номеру. Имя даётся один раз и не меняется:
 # его ценность в том, что оно постоянно. На раскладку не влияет, поэтому и не в отпечатке правил
@@ -305,7 +309,16 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
     def sources(sid):
         return {state["items"][u]["source"] for u in state["stories"][sid]["urls"]}
 
-    shown.sort(key=lambda sid: (len(sources(sid)), state["stories"][sid]["updated"]), reverse=True)
+    def heat(sid: str) -> float:
+        latest = {}  # издание → время его последней новости в сюжете (публикации, не позже, чем увидели)
+        for u in state["stories"][sid]["urls"]:
+            it = state["items"][u]
+            latest[it["source"]] = max(latest.get(it["source"], ""), it.get("published", it["seen"]))
+        moment = datetime.fromisoformat(now)
+        return sum(0.5 ** ((moment - datetime.fromisoformat(t)) / HEAT_HALF_LIFE) for t in latest.values())
+
+    heats = {sid: heat(sid) for sid in shown}
+    shown.sort(key=lambda sid: (heats[sid], state["stories"][sid]["updated"]), reverse=True)
 
     def local_time(iso: str) -> str:
         return datetime.fromisoformat(iso).astimezone(LOCAL_TZ).strftime("%d.%m %H:%M")
@@ -413,7 +426,8 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
         # части (stories.py) на странице пока не показываем: 12.11 они делили сюжеты случайно, по тому, где новость
         # оказалась первой. Откуда новость пришла склейкой, видно по её пути
         body = rows(urls)
-        about = (f'{count(len(urls), *NEWS)} · {count(len(sources(sid)), *OUTLETS)} · '
+        about = (f'{f"горячесть {heats[sid]:.1f} · " if sid in heats else ""}'
+                 f'{count(len(urls), *NEWS)} · {count(len(sources(sid)), *OUTLETS)} · '
                  f'{e(", ".join(f"{c} {n}" for c, n in camps.most_common()))} · '
                  f'{local_time(story["created"])} — {local_time(story["updated"])} · {sid}'
                  f'{f" «{e(names[sid])}»" if sid in names else ""}')
@@ -535,7 +549,9 @@ td{padding:2px 14px 2px 0}.what{color:#777;font-size:13px}
 {f'<p>В этой сборке: {summary}.</p>' if summary else ""}
 {f'<details><summary>Новости этой сборки — что сделала каждая</summary>{rebuilt_note}<ul>{arrived}</ul></details>' if arrived else ""}
 {f'<p class="err">Сюжеты в этой сборке не обновились: {e(error)}</p>' if error else ""}
-<p class="meta">Цифра у новости — сходство с самой похожей другой новостью сюжета (у одиночных — с новостью видимого сюжета).
+<p class="meta">Сюжеты — по горячести: каждое издание даёт очко за свою последнюю новость в сюжете, очко вдвое тает
+за {int(HEAT_HALF_LIFE.total_seconds() // 3600)} ч (час назад — почти 1, {int(HEAT_HALF_LIFE.total_seconds() // 3600)} ч назад — 0.5, сутки назад — 0.06).
+Цифра у новости — сходство с самой похожей другой новостью сюжета (у одиночных — с новостью видимого сюжета).
 Модель видит новость с сюжетом, только если сходство не ниже {stories.CANDIDATE_SIM}; <span class="sim mid">жёлтые</span> — ниже
 {stories.RECHECK_SIM}, такое добавление перепроверяет Haiku; <span class="sim low">красные</span> — ниже {stories.CANDIDATE_SIM}.
 Серым под заголовком — «что произошло» (what): по нему считается сходство.</p>
