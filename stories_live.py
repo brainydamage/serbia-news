@@ -333,20 +333,43 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
         level = "low" if sim < stories.CANDIDATE_SIM else "mid" if sim < stories.RECHECK_SIM else "ok"
         return f' · <span class="sim {level}">{sim:.3f}</span>'
 
-    def path(it: dict) -> str:
-        """Путь новости по сюжетам, если её переносили: s472 → s471 (склейка)."""
-        steps = [h for h in it.get("history", []) if h.get("from")]
-        if not steps:
-            return ""
-        names = {"merge": "склейка", "recheck": "перепроверка", "split": "разделение", "unmerge": "отмена склейки"}
-        return " · " + " → ".join([e(steps[0]["from"])] + [f'{e(h["story"] or "—")} ({names.get(h["why"], e(h["why"]))})'
-                                                         for h in steps])
+    opened = {}  # (сюжет, время) → номера новостей, открывших его одной сборкой
+    for it in state["items"].values():
+        if it["history"][0]["story"] and it["history"][0]["why"] != "join":
+            opened.setdefault((it["history"][0]["story"], it["history"][0]["t"]), []).append(it["n"])
+
+    def how(u: str, here: str = "", link=None, sim: bool = False) -> str:
+        """Что случилось с новостью — словами: как попала в сюжет и куда её потом переносили. here — сюжет, в котором
+        её показываем («этот сюжет»); link — как писать другой сюжет (ссылкой или текстом)."""
+        it = state["items"][u]
+
+        def where(sid: str) -> str:
+            if sid == here:
+                return "этот сюжет"
+            return link(sid) if link else e(sid + (f' «{names[sid]}»' if sid in names else ""))
+
+        first, *later = it["history"]
+        if not first["story"]:
+            text = "без сюжета: модель не поняла, о чём новость"
+        elif first["why"] == "join":
+            text = f'модель добавила в {where(first["story"])}' + (
+                f' (сходство {first["sim"]:.3f})' if sim and first.get("sim") else "")
+        else:
+            others = sorted(m for m in opened.get((first["story"], first["t"]), []) if m != it["n"])
+            text = (f'открыла {where(first["story"])}' + (" вместе с " + ", ".join(f"№{m}" for m in others) if others else "")
+                    + {"alone": ": похожих сюжетов не было", "new": ": модель сочла событие новым"}.get(first["why"], ""))
+        steps = {"recheck": "перепроверка не согласилась — новость ушла в {}", "merge": "её сюжет {from_} влит в {}",
+                 "move": "перенесена командой /move в {}", "split": "отделена командой /split в {}",
+                 "unmerge": "склейка отменена командой /unmerge — вернулась в {}"}
+        for h in later:
+            text += "; " + steps.get(h["why"], h["why"] + " → {}").format(
+                where(h["story"]) if h["story"] else "без сюжета", from_=e(h.get("from") or "—"))
+        return text
 
     def item_row(u: str, it: dict, extra: str) -> str:
         what = it.get("what", "")
         return (f'<li><span class="meta">№{it.get("n", "")} · {local_time(it.get("published", it["seen"]))} · {e(it["source"])} · '
-                f'{e(sections.get(it["section"], it["section"]))}'
-                f'{" · " + e(it["verdict"]) if it["verdict"] in ("same", "recheck") else ""}{extra}{path(it)}</span><br>'
+                f'{e(sections.get(it["section"], it["section"]))}{extra}</span><br>'
                 f'<a href="{e(u)}" rel="noopener" target="_blank">{e(it["title"])}</a>'
                 f'{f"<br><span class=what>{e(what)}</span>" if what and what != it["title"] else ""}</li>')
 
@@ -358,8 +381,14 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
         camps = Counter(sections.get(it["section"], it["section"]) for it in items)
         near = closest(urls, urls)
 
+        def nearby(u: str) -> str:  # самая похожая новость этого же сюжета
+            if u not in near:
+                return ""
+            sim, k = near[u]
+            return f' · ближе всего к №{state["items"][urls[k]]["n"]}{sim_mark(sim)}'
+
         def rows(part_urls: list[str]) -> str:  # свежие сверху, по времени публикации
-            return "".join(item_row(u, state["items"][u], sim_mark(near.get(u, (None,))[0]))
+            return "".join(item_row(u, state["items"][u], f' · {how(u, sid)}{nearby(u)}')
                            for u in sorted(part_urls, key=lambda u: (state["items"][u].get("published", state["items"][u]["seen"]),
                                                                      state["items"][u]["n"]), reverse=True))
 
@@ -397,15 +426,14 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
             return ""
         sim, k = near[u]
         target = state["items"][visible_urls[k]]["story"]
-        return f' · ближе всего {story_link(target)}{sim_mark(sim)}'
+        return f' · из видимых ближе всего {story_link(target)}{sim_mark(sim)}'
 
-    # verdict: alone — похожих не было, модель не спрашивали; new — модель решила, что это новое событие
-    def verdict(u: str) -> str:  # same и recheck item_row уже пишет
-        v = state["items"][u]["verdict"]
-        return "" if v in ("same", "recheck") else f" · {e(v)}"
+    def company(u: str) -> str:  # другие новости того же сюжета из одного издания
+        sid = state["items"][u]["story"]
+        others = [state["items"][x]["n"] for x in state["stories"][sid]["urls"] if x != u] if sid else []
+        return f' · там же {", ".join(f"№{m}" for m in others)}' if others else ""
 
-    lonely = "".join(item_row(u, state["items"][u], f' · {state["items"][u]["story"]}{verdict(u)}{nearest(u)}')
-                     for u in hidden)
+    lonely = "".join(item_row(u, state["items"][u], f' · {how(u)}{company(u)}{nearest(u)}') for u in hidden)
 
     def command(c: dict) -> str:
         args = {"move": lambda: f"{c['news']} {c['to']}", "split": lambda: " ".join(c["parts"]),
@@ -429,29 +457,14 @@ td{padding:2px 14px 2px 0}.what{color:#777;font-size:13px}
     last = state.get("last") or {}
     merges = last.get("merges", [])
 
-    # что сделала каждая новость этой сборки — по первому шагу её истории: открыла сюжет (первой, сама или вместе
-    # с такой же новостью той же сборки — same), добавлена в сюжет (join), без сюжета — непонятно, о чём (unclear).
-    # Куда её перенесли потом (склейка, перепроверка), item_row пишет путём
+    # что сделала каждая новость этой сборки — словами (how): открыла сюжет, добавлена в сюжет, без сюжета; и куда её
+    # перенесли потом (перепроверка, склейка)
     fresh = [u for u in last.get("news", []) if u in state["items"]] if isinstance(last.get("news"), list) else []
-    first = {u: state["items"][u]["history"][0] for u in fresh}
-    opened = {}  # (сюжет, время) → новости, открывшие его вместе
-    for u in fresh:
-        if first[u]["story"] and first[u]["why"] != "join":
-            opened.setdefault((first[u]["story"], first[u]["t"]), []).append(state["items"][u]["n"])
     kinds, notes = Counter(), {}
     for u in fresh:
-        h, n = first[u], state["items"][u]["n"]
-        if not h["story"]:
-            kinds["без сюжета"] += 1
-            notes[u] = "без сюжета: непонятно, о чём"
-        elif h["why"] == "join":
-            kinds["добавлены в сюжет"] += 1
-            notes[u] = f'добавлена в сюжет {story_link(h["story"])}' + (f' · сходство {h["sim"]:.3f}' if h.get("sim") else "")
-        else:
-            kinds["открыли сюжет"] += 1
-            others = [m for m in opened[(h["story"], h["t"])] if m != n]
-            notes[u] = f'открыла сюжет {story_link(h["story"])}' + (
-                " вместе с " + ", ".join(f"№{m}" for m in sorted(others)) if others else "")
+        h = state["items"][u]["history"][0]
+        kinds["без сюжета" if not h["story"] else "добавлены в сюжет" if h["why"] == "join" else "открыли сюжет"] += 1
+        notes[u] = how(u, link=story_link, sim=True)
     arrived = "".join(item_row(u, state["items"][u], f" · {notes[u]}")
                       for u in sorted(fresh, key=lambda u: (state["items"][u]["seen"], state["items"][u]["n"])))
     done = [f"<b>раскладка заново ({e(last['rebuilt'])})</b>: все новости с {e(local_time(START))} по нынешним правилам"
