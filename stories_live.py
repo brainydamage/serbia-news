@@ -236,7 +236,7 @@ def count(n: int, one: str, few: str, many: str) -> str:
     return f"{n} {word}"
 
 
-NEWS, OUTLETS, PARTS = ("новость", "новости", "новостей"), ("издание", "издания", "изданий"), ("часть", "части", "частей")
+NEWS, OUTLETS = ("новость", "новости", "новостей"), ("издание", "издания", "изданий")
 
 
 def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> None:
@@ -309,20 +309,10 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
             return "".join(item_row(u, state["items"][u], sim_mark(near.get(u, (None,))[0]))
                            for u in sorted(part_urls, key=lambda u: state["items"][u]["seen"], reverse=True))
 
-        # части — события, из которых склеена тема; свежие сверху. Одна часть — без заголовков
-        parts = {}
-        for u in urls:
-            parts.setdefault(state["items"][u].get("part") or sid, []).append(u)
-        if len(parts) == 1:
-            body = rows(urls)
-        else:
-            order = sorted(parts, key=lambda p: max(state["items"][u]["seen"] for u in parts[p]), reverse=True)
-            body = "".join(
-                f'<li class="part"><b>{e(headline(parts[p]))}</b><br><span class="meta">{count(len(parts[p]), *NEWS)} · '
-                f'{count(len({state["items"][u]["source"] for u in parts[p]}), *OUTLETS)} · часть {p}</span>'
-                f'<ul>{rows(parts[p])}</ul></li>' for p in order)
-        about = (f'{count(len(urls), *NEWS)} · {count(len(sources(sid)), *OUTLETS)}'
-                 f'{" · " + count(len(parts), *PARTS) if len(parts) > 1 else ""} · '
+        # части (stories.py) на странице пока не показываем: 12.11 они делили сюжеты случайно, по тому, где новость
+        # оказалась первой. Откуда новость пришла склейкой, видно по её пути
+        body = rows(urls)
+        about = (f'{count(len(urls), *NEWS)} · {count(len(sources(sid)), *OUTLETS)} · '
                  f'{e(", ".join(f"{c} {n}" for c, n in camps.most_common()))} · '
                  f'{local_time(story["created"])} — {local_time(story["updated"])} · {sid}')
         return headline(urls), about, body
@@ -374,7 +364,7 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
     style = """<style>body{font:15px/1.45 system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#222;background:#fff}
 summary{cursor:pointer;padding:6px 0}details{border-bottom:1px solid #eee}ul{margin:4px 0 12px;padding-left:20px}
 li{margin:6px 0}.meta{color:#888;font-size:13px}a{color:#1a5fb4}table{border-collapse:collapse;font-size:13px}
-td{padding:2px 14px 2px 0}li.part{list-style:none;margin:10px 0 4px -20px;padding-left:10px;border-left:3px solid #ddd}.what{color:#777;font-size:13px}
+td{padding:2px 14px 2px 0}.what{color:#777;font-size:13px}
 .sim.mid{color:#b7791f}.sim.low{color:#c0392b;font-weight:600}.err{background:#fde8d8;color:#a33;padding:8px 12px}
 @media (prefers-color-scheme:dark){body{background:#161616;color:#ddd}details{border-color:#333}a{color:#78aeed}}</style>"""
     head = '<!doctype html><html lang="ru"><head><meta charset="utf-8">\n<meta name="viewport" ' \
