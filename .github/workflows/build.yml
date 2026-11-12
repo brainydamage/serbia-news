@@ -103,6 +103,14 @@ jobs:
           path: cache/archive.json
           retention-days: 1
 
+      # состояние сюжетов — для разбора решений раскладки и склейки локально (gh run download --name stories)
+      - uses: actions/upload-artifact@v7
+        if: hashFiles('cache/stories.json') != ''
+        with:
+          name: stories
+          path: cache/stories.json
+          retention-days: 1
+
       - uses: actions/upload-pages-artifact@v5
         with:
           path: site

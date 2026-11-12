@@ -96,11 +96,13 @@ def run(archive: dict, sections: dict) -> None:
     """Одна сборка: новые новости архива — в сюжеты, раз в час склейка, потом страница. sections — {id: название}."""
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     state, vectors = load_state()
-    if state["items"] and state.get("version", 0) < 1:
-        # 12.11: склейка стала брать и пары «невидимый + видимый». Обрывки, которые появились раньше, она бы
-        # не проверила — их сюжеты с прошлой склейки не росли. Один раз проверяем все живые пары
+    if state["items"] and state.get("version", 0) < 2:
+        # 12.11: склейка стала брать и пары «невидимый + видимый» (версия 1), потом — без фильтра Haiku (2). Обрывки,
+        # которые появились раньше или которые Haiku отсеял, она бы не проверила: их сюжеты с прошлой склейки
+        # не росли, а отказы помнит checked. Один раз проверяем все живые пары заново
         state["merged_at"] = ""
-    state["version"] = 1
+        state["checked"] = {}
+    state["version"] = 2
     fresh_start = not state["items"]
     if fresh_start:  # что старше начала, не раскладываем и потом: иначе следующая сборка возьмёт все LIVE часов
         state["started"] = (datetime.fromisoformat(now) - BOOTSTRAP).isoformat()

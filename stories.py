@@ -361,6 +361,8 @@ def merge(state: dict, now: str, vectors: dict, ask) -> dict:
     новостей похожа не меньше MERGE_SIM, у сюжетов есть общий участник (entities; не нужен, если сходство
     не ниже MERGE_SURE_SIM) и пару ещё не признавали разными — или с тех пор один из сюжетов вырос вдвое.
     Дальше каскад: Haiku отсеивает явно разные пары (он ошибается в сторону «одно событие»), Sonnet решает остальное.
+    Пары «невидимый + видимый» идут к Sonnet сразу: Haiku отсеивал и треть тех, что Sonnet склеил бы (12.11, на 62 парах
+    за 12 часов — 3 из 9), а пар таких немного — около $0.04 за 12 часов.
     Возвращает {"in", "out", "usd", "asked": {модель: пар}, "merged"}."""
     total = {"in": 0, "out": 0, "usd": 0.0, "asked": {}, "merged": 0}
     stories, checked = state["stories"], state.setdefault("checked", {})
@@ -388,7 +390,9 @@ def merge(state: dict, now: str, vectors: dict, ask) -> dict:
         if sim >= MERGE_SURE_SIM or _share_entities(state, a, b):
             todo.append((a, b))
 
-    maybe = [todo[n] for n in sorted(_same_pairs(state, todo, vectors, MODEL, MERGE_FILTER_EFFORT, ask, total))]
+    both = [p for p in todo if p[0] in shown and p[1] in shown]
+    maybe = [both[n] for n in sorted(_same_pairs(state, both, vectors, MODEL, MERGE_FILTER_EFFORT, ask, total))]
+    maybe += [p for p in todo if p not in both]
     same = _same_pairs(state, maybe, vectors, MERGE_MODEL, MERGE_EFFORT, ask, total)
     # за проход сюжет склеивается не больше одного раза: цепочки a ← b ← c на первом прогоне стянули аварию,
     # границу и ДТП в один сюжет на 450 новостей. Остальные пары с ним проверим в следующий раз, уже со склеенным.
