@@ -261,6 +261,11 @@ def run(archive: dict, sections: dict) -> None:
         if stories.merge_due(state, seen):
             merged += stories.merge(state, seen, vectors, ask)["merged"]
     name_stories(state, vectors, ask)
+    # время публикации из RSS — для порядка новостей в сюжете. Позже, чем мы её увидели, — неверный часовой пояс у
+    # издания (RTS и др.): тогда время, когда увидели
+    for u, it in state["items"].items():
+        if "published" not in it and u in archive:
+            it["published"] = min(archive[u].get("date") or it["seen"], it["seen"])
     # что сделала эта сборка — сводкой наверху страницы
     state["last"] = {"t": now, "rebuilt": rebuilt, "news": [u for u, _ in items], "commands": [c["result"] for c in done],
                      "merges": [[m["keep"], m["gone"]] for m in state.get("merges", [])[merges:]],
@@ -339,7 +344,7 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
 
     def item_row(u: str, it: dict, extra: str) -> str:
         what = it.get("what", "")
-        return (f'<li><span class="meta">№{it.get("n", "")} · {local_time(it["seen"])} · {e(it["source"])} · '
+        return (f'<li><span class="meta">№{it.get("n", "")} · {local_time(it.get("published", it["seen"]))} · {e(it["source"])} · '
                 f'{e(sections.get(it["section"], it["section"]))}'
                 f'{" · " + e(it["verdict"]) if it["verdict"] in ("same", "recheck") else ""}{extra}{path(it)}</span><br>'
                 f'<a href="{e(u)}" rel="noopener" target="_blank">{e(it["title"])}</a>'
@@ -353,9 +358,10 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
         camps = Counter(sections.get(it["section"], it["section"]) for it in items)
         near = closest(urls, urls)
 
-        def rows(part_urls: list[str]) -> str:  # свежие сверху
+        def rows(part_urls: list[str]) -> str:  # свежие сверху, по времени публикации
             return "".join(item_row(u, state["items"][u], sim_mark(near.get(u, (None,))[0]))
-                           for u in sorted(part_urls, key=lambda u: state["items"][u]["seen"], reverse=True))
+                           for u in sorted(part_urls, key=lambda u: (state["items"][u].get("published", state["items"][u]["seen"]),
+                                                                     state["items"][u]["n"]), reverse=True))
 
         # части (stories.py) на странице пока не показываем: 12.11 они делили сюжеты случайно, по тому, где новость
         # оказалась первой. Откуда новость пришла склейкой, видно по её пути
