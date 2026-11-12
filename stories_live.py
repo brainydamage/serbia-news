@@ -54,7 +54,7 @@ LOCAL_TZ = ZoneInfo("Europe/Belgrade")
 # его ценность в том, что оно постоянно. На раскладку не влияет, поэтому и не в отпечатке правил
 NAME_PROMPT = """Ты даёшь сюжетам агрегатора новостей о Сербии кодовые имена — чтобы редактор узнавал сюжет по ссылке.
 Вход — JSON: stories — сюжеты, id вида S…, у каждого несколько новостей (что произошло).
-Для каждого сюжета верни name — 1–3 слова по-русски: главный участник и предмет, по которым сюжет легко узнать и отличить от соседних. Без кавычек и точки в конце."""
+Для каждого сюжета верни name — не больше трёх слов по-русски: главный участник и предмет, по которым сюжет легко узнать и отличить от соседних. Без кавычек и точки в конце."""
 NAME_SCHEMA = {
     "type": "object",
     "properties": {
@@ -193,6 +193,10 @@ def ask_with_spending(state: dict, day: str):
 def name_stories(state: dict, vectors: dict, ask) -> int:
     """Кодовые имена видимым сюжетам, у которых их ещё нет (Haiku, пачками). Возвращает, скольким дали имя."""
     names = state.setdefault("names", {})
+    if not state.get("names_whole"):  # до 12.11 имена резались по 40 знакам посреди слова — такие назвать заново
+        state["names_whole"] = True
+        for sid in [sid for sid, name in names.items() if len(name) == 40]:
+            del names[sid]
     todo = [sid for sid in state["stories"] if sid not in names and stories.visible(state, sid)]
     for start in range(0, len(todo), NAME_BATCH):
         chunk = todo[start:start + NAME_BATCH]
@@ -202,7 +206,9 @@ def name_stories(state: dict, vectors: dict, ask) -> int:
         for named in answer["names"]:
             n = named["id"][1:]
             if n.isdigit() and int(n) < len(chunk) and named["name"].strip():
-                names[chunk[int(n)]] = named["name"].strip().strip("«»\"'.")[:40]
+                name = named["name"].strip().strip("«»\"'.")
+                # длинное — по словам, не посреди слова
+                names[chunk[int(n)]] = name if len(name) <= 50 else name[:50].rsplit(" ", 1)[0]
     return len(todo)
 
 
