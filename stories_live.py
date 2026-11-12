@@ -214,7 +214,7 @@ def run(archive: dict, sections: dict) -> None:
         if stories.merge_due(state, seen):
             merged += stories.merge(state, seen, vectors, ask)["merged"]
     # что сделала эта сборка — сводкой наверху страницы
-    state["last"] = {"t": now, "rebuilt": rebuilt, "news": len(items), "commands": [c["result"] for c in done],
+    state["last"] = {"t": now, "rebuilt": rebuilt, "news": [u for u, _ in items], "commands": [c["result"] for c in done],
                      "merges": [[m["keep"], m["gone"]] for m in state.get("merges", [])[merges:]],
                      "usd": round(state.get("spent", {}).get(day, {}).get("usd", 0) - usd, 4)}
     forget_old(state, vectors, now)
@@ -295,8 +295,8 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
                 f'<a href="{e(u)}" rel="noopener" target="_blank">{e(it["title"])}</a>'
                 f'{f"<br><span class=what>{e(what)}</span>" if what and what != it["title"] else ""}</li>')
 
-    cards = []
-    for sid in shown:
+    def story_parts(sid: str) -> tuple[str, str, str]:
+        """Сюжет: (заголовок, строка о нём, список новостей по частям)."""
         story = state["stories"][sid]
         urls = story["urls"]
         items = [state["items"][u] for u in urls]
@@ -319,12 +319,18 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
                 f'<li class="part"><b>{e(headline(parts[p]))}</b><br><span class="meta">{count(len(parts[p]), *NEWS)} · '
                 f'{count(len({state["items"][u]["source"] for u in parts[p]}), *OUTLETS)} · часть {p}</span>'
                 f'<ul>{rows(parts[p])}</ul></li>' for p in order)
-        cards.append(
-            f'<details id="{sid}"><summary><b>{e(headline(urls))}</b><br><span class="meta">{count(len(urls), *NEWS)} · '
-            f'{count(len(sources(sid)), *OUTLETS)}{" · " + count(len(parts), *PARTS) if len(parts) > 1 else ""} · '
-            f'{e(", ".join(f"{c} {n}" for c, n in camps.most_common()))} · '
-            f'{local_time(story["created"])} — {local_time(story["updated"])} · {sid}</span></summary>'
-            f'<ul>{body}</ul></details>')
+        about = (f'{count(len(urls), *NEWS)} · {count(len(sources(sid)), *OUTLETS)}'
+                 f'{" · " + count(len(parts), *PARTS) if len(parts) > 1 else ""} · '
+                 f'{e(", ".join(f"{c} {n}" for c, n in camps.most_common()))} · '
+                 f'{local_time(story["created"])} — {local_time(story["updated"])} · {sid}')
+        return headline(urls), about, body
+
+    # у каждого видимого сюжета — своя страница /plot/sX/; у сюжетов, которые уже не на главной странице (старше
+    # PAGE_WINDOW), тоже: на них ведут ссылки, отправленные раньше
+    pages = {sid: story_parts(sid) for sid in state["stories"] if stories.visible(state, sid)}
+    cards = [f'<details class="story" id="{sid}" open><summary><b>{e(pages[sid][0])}</b><br><span class="meta">'
+             f'{pages[sid][1]} · <a href="{sid}/">страница сюжета</a></span></summary><ul>{pages[sid][2]}</ul></details>'
+             for sid in shown]
 
     # новости, которых на странице не видно: сюжет из одного издания. Сверху — самые похожие на видимый сюжет:
     # среди них и те, что должны были в него попасть
@@ -358,25 +364,45 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
     spent = "".join(f"<tr><td>{d}</td><td>{s['calls']}</td><td>${s['usd']:.3f}</td></tr>"
                     for d, s in sorted(state.get("spent", {}).items(), reverse=True))
     total = len(state["stories"])
+    style = """<style>body{font:15px/1.45 system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#222;background:#fff}
+summary{cursor:pointer;padding:6px 0}details{border-bottom:1px solid #eee}ul{margin:4px 0 12px;padding-left:20px}
+li{margin:6px 0}.meta{color:#888;font-size:13px}a{color:#1a5fb4}table{border-collapse:collapse;font-size:13px}
+td{padding:2px 14px 2px 0}li.part{list-style:none;margin:10px 0 4px -20px;padding-left:10px;border-left:3px solid #ddd}.what{color:#777;font-size:13px}
+.sim.mid{color:#b7791f}.sim.low{color:#c0392b;font-weight:600}.err{background:#fde8d8;color:#a33;padding:8px 12px}
+@media (prefers-color-scheme:dark){body{background:#161616;color:#ddd}details{border-color:#333}a{color:#78aeed}}</style>"""
+    head = '<!doctype html><html lang="ru"><head><meta charset="utf-8">\n<meta name="viewport" ' \
+           'content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">'
+    toggle = "document.querySelectorAll('details.story').forEach(d => d.open = %s)"
     last = state.get("last") or {}
     merges = last.get("merges", [])
+
+    def story_link(sid: str) -> str:
+        return f'<a href="#{sid}">{sid}</a>' if sid in shown else f'<a href="{sid}/">{sid}</a>' if sid in pages else sid
+
+    # куда легли новости этой сборки: в сюжет, который уже был (join); в новый сюжет — видимый (от двух изданий) или
+    # пока одиночный; без сюжета — непонятно, о каком событии речь (unclear)
+    fresh = [u for u in last.get("news", []) if u in state["items"]] if isinstance(last.get("news"), list) else []
+    where = {}
+    for u in fresh:
+        it = state["items"][u]
+        where[u] = ("в сюжет, который уже был" if it["verdict"] == "join" else
+                    "без сюжета: непонятно, о чём" if not it["story"] else
+                    "в новый сюжет от двух изданий" if it["story"] in pages else "одиночка: сюжет из одного издания")
+    kinds = Counter(where.values())
+    arrived = "".join(item_row(u, state["items"][u], f' · {e(where[u])}' + (
+        f' {story_link(state["items"][u]["story"])}' if state["items"][u]["story"] else ""))
+        for u in sorted(fresh, key=lambda u: (where[u], state["items"][u]["seen"])))
     done = [f"<b>раскладка заново ({e(last['rebuilt'])})</b>: все новости с {e(local_time(START))} по нынешним правилам"
             if last.get("rebuilt") else "",
-            f"новых новостей {last.get('news', 0)}",
+            f"новых новостей {len(fresh)}" + (": " + ", ".join(f"{n} — {e(k)}" for k, n in kinds.most_common()) if fresh else ""),
             f"склеено {len(merges)}" + (": " + ", ".join(f'<a href="#{e(k)}">{e(k)}</a> ← {e(g)}' for k, g in merges[:20])
                                        + (" …" if len(merges) > 20 else "") if merges and not last.get("rebuilt") else ""),
             "команды: " + "; ".join(e(r) for r in last["commands"]) if last.get("commands") else "",
-            f"≈ ${last.get('usd', 0):.3f}"]
+            f"запросы к модели ≈ ${last.get('usd', 0):.3f}"]
     summary = " · ".join(x for x in done if x)
-    page = f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
+    page = f"""{head}
 <title>Сюжеты — теневой режим</title>
-<style>body{{font:15px/1.45 system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#222;background:#fff}}
-summary{{cursor:pointer;padding:6px 0}}details{{border-bottom:1px solid #eee}}ul{{margin:4px 0 12px;padding-left:20px}}
-li{{margin:6px 0}}.meta{{color:#888;font-size:13px}}a{{color:#1a5fb4}}table{{border-collapse:collapse;font-size:13px}}
-td{{padding:2px 14px 2px 0}}li.part{{list-style:none;margin:10px 0 4px -20px;padding-left:10px;border-left:3px solid #ddd}}.what{{color:#777;font-size:13px}}
-.sim.mid{{color:#b7791f}}.sim.low{{color:#c0392b;font-weight:600}}.err{{background:#fde8d8;color:#a33;padding:8px 12px}}
-@media (prefers-color-scheme:dark){{body{{background:#161616;color:#ddd}}details{{border-color:#333}}a{{color:#78aeed}}}}</style>
+{style}
 </head><body>
 <h1>Сюжеты — теневой режим</h1>
 <p class="meta">Сборка {e(local_time(now))} · видимых сюжетов (от двух изданий) за сутки: {len(shown)} · всего в памяти: {total}.
@@ -384,11 +410,13 @@ td{{padding:2px 14px 2px 0}}li.part{{list-style:none;margin:10px 0 4px -20px;pad
 поменялись правила — страница раскладывается заново целиком. Прежняя страница сюжетов-тем — <a href="/plot1/">/plot1/</a>.
 Страница не индексируется и на сайте нигде не упомянута.</p>
 {f'<p>В этой сборке: {summary}.</p>' if summary else ""}
+{f'<details><summary>Новости этой сборки — куда легли</summary><ul>{arrived}</ul></details>' if arrived else ""}
 {f'<p class="err">Сюжеты в этой сборке не обновились: {e(error)}</p>' if error else ""}
 <p class="meta">Цифра у новости — сходство с самой похожей другой новостью сюжета (у одиночных — с новостью видимого сюжета).
 Модель видит новость с сюжетом, только если сходство не ниже {stories.CANDIDATE_SIM}; <span class="sim mid">жёлтые</span> — ниже
 {stories.RECHECK_SIM}, такое добавление перепроверяет Haiku; <span class="sim low">красные</span> — ниже {stories.CANDIDATE_SIM}.
 Серым под заголовком — «что произошло» (what): по нему считается сходство.</p>
+<p><button onclick="{toggle % 'true'}">Раскрыть все</button> <button onclick="{toggle % 'false'}">Свернуть все</button></p>
 {"".join(cards) or "<p>Пока пусто.</p>"}
 <h2>Не попали в видимые сюжеты</h2>
 <details><summary>{len(hidden)} новостей за сутки в сюжетах из одного издания — самые похожие на видимый сюжет сверху</summary>
@@ -401,6 +429,17 @@ td{{padding:2px 14px 2px 0}}li.part{{list-style:none;margin:10px 0 4px -20px;pad
 </body></html>"""
     PAGE_DIR.mkdir(parents=True, exist_ok=True)
     (PAGE_DIR / "index.html").write_text(page, "utf-8")
+    for sid, (title, about, body) in pages.items():
+        (PAGE_DIR / sid).mkdir(exist_ok=True)
+        (PAGE_DIR / sid / "index.html").write_text(f"""{head}
+<title>{e(title)}</title>
+{style}
+</head><body>
+<p class="meta"><a href="../#{sid}">← все сюжеты</a> · сборка {e(local_time(now))}</p>
+<h1>{e(title)}</h1>
+<p class="meta">{about}</p>
+<ul>{body}</ul>
+</body></html>""", "utf-8")
 
 
 def safe_run(archive: dict, sections: dict) -> None:
