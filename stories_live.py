@@ -50,6 +50,28 @@ FORGET = timedelta(days=5)
 SPENT_DAYS = 14
 PAGE_WINDOW = timedelta(hours=24)  # на странице — видимые сюжеты, обновлявшиеся за это время
 LOCAL_TZ = ZoneInfo("Europe/Belgrade")
+# кодовые имена видимых сюжетов — чтобы узнавать сюжет по ссылке, а не по номеру. Имя даётся один раз и не меняется:
+# его ценность в том, что оно постоянно. На раскладку не влияет, поэтому и не в отпечатке правил
+NAME_PROMPT = """Ты даёшь сюжетам агрегатора новостей о Сербии кодовые имена — чтобы редактор узнавал сюжет по ссылке.
+Вход — JSON: stories — сюжеты, id вида S…, у каждого несколько новостей (что произошло).
+Для каждого сюжета верни name — 1–3 слова по-русски: главный участник и предмет, по которым сюжет легко узнать и отличить от соседних. Без кавычек и точки в конце."""
+NAME_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "names": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"id": {"type": "string"}, "name": {"type": "string"}},
+                "required": ["id", "name"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["names"],
+    "additionalProperties": False,
+}
+NAME_BATCH = 30
 
 
 def load_state() -> tuple[dict, dict]:
@@ -84,6 +106,7 @@ def forget_old(state: dict, vectors: dict, now: str) -> None:
     state["checked"] = {k: v for k, v in state.get("checked", {}).items()
                         if all(s in state["stories"] for s in k.split("|"))}
     state.pop("merged", None)  # кто в кого склеился — только для разбора прогонов; журнал склеек — merges
+    state["names"] = {sid: name for sid, name in state.get("names", {}).items() if sid in state["stories"]}
     # журнал склеек и ручные разделения — пока живы их части
     parts = {it["part"] for it in state["items"].values()}
     state["merges"] = [m for m in state.get("merges", []) if parts & set(m["parts"])]
@@ -167,6 +190,22 @@ def ask_with_spending(state: dict, day: str):
     return ask
 
 
+def name_stories(state: dict, vectors: dict, ask) -> int:
+    """Кодовые имена видимым сюжетам, у которых их ещё нет (Haiku, пачками). Возвращает, скольким дали имя."""
+    names = state.setdefault("names", {})
+    todo = [sid for sid in state["stories"] if sid not in names and stories.visible(state, sid)]
+    for start in range(0, len(todo), NAME_BATCH):
+        chunk = todo[start:start + NAME_BATCH]
+        content = json.dumps({"stories": [{"id": f"S{n}", "news": stories._shown(state, sid, vectors)}
+                                          for n, sid in enumerate(chunk)]}, ensure_ascii=False)
+        answer, _ = ask(NAME_PROMPT, content, NAME_SCHEMA)
+        for named in answer["names"]:
+            n = named["id"][1:]
+            if n.isdigit() and int(n) < len(chunk) and named["name"].strip():
+                names[chunk[int(n)]] = named["name"].strip().strip("«»\"'.")[:40]
+    return len(todo)
+
+
 def fingerprint() -> str:
     """Отпечаток правил: правила, промпты, модели и пороги stories.py (константы), LAYOUT_VERSION — для логики."""
     # множество — отсортированным: его repr меняет порядок от запуска к запуску, и каждая вторая сборка раскладывала заново
@@ -215,6 +254,7 @@ def run(archive: dict, sections: dict) -> None:
         decided += stories.update(state, group, seen, vectors, ask)["decided"]
         if stories.merge_due(state, seen):
             merged += stories.merge(state, seen, vectors, ask)["merged"]
+    name_stories(state, vectors, ask)
     # что сделала эта сборка — сводкой наверху страницы
     state["last"] = {"t": now, "rebuilt": rebuilt, "news": [u for u, _ in items], "commands": [c["result"] for c in done],
                      "merges": [[m["keep"], m["gone"]] for m in state.get("merges", [])[merges:]],
@@ -240,8 +280,10 @@ NEWS, OUTLETS = ("новость", "новости", "новостей"), ("из
 
 
 def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> None:
-    """site/plot/index.html — статичная страница без скриптов: видимые сюжеты за PAGE_WINDOW, крупные сверху."""
+    """site/plot/index.html — статичная страница: видимые сюжеты за PAGE_WINDOW, крупные сверху; у каждого видимого
+    сюжета — своя страница site/plot/sX/."""
     e = html.escape
+    names = state.get("names", {})
     now = state.get("built") or datetime.now(timezone.utc).isoformat(timespec="seconds")
     cutoff = (datetime.fromisoformat(now) - PAGE_WINDOW).isoformat()
     shown = [sid for sid, s in state["stories"].items() if s["updated"] >= cutoff and stories.visible(state, sid)]
@@ -314,7 +356,8 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
         body = rows(urls)
         about = (f'{count(len(urls), *NEWS)} · {count(len(sources(sid)), *OUTLETS)} · '
                  f'{e(", ".join(f"{c} {n}" for c, n in camps.most_common()))} · '
-                 f'{local_time(story["created"])} — {local_time(story["updated"])} · {sid}')
+                 f'{local_time(story["created"])} — {local_time(story["updated"])} · {sid}'
+                 f'{f" «{e(names[sid])}»" if sid in names else ""}')
         return headline(urls), about, body
 
     # у каждого видимого сюжета — своя страница /plot/sX/; у сюжетов, которые уже не на главной странице (старше
@@ -322,8 +365,9 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
     pages = {sid: story_parts(sid) for sid in state["stories"] if stories.visible(state, sid)}
 
     def story_link(sid: str, text: str = "") -> str:
-        """Ссылка на страницу сюжета — в новом окне; у сюжета из одного издания страницы нет."""
-        return f'<a href="{sid}/" target="_blank">{e(text or sid)}</a>' if sid in pages else e(text or sid)
+        """Ссылка на страницу сюжета — в новом окне, с кодовым именем; у сюжета из одного издания страницы нет."""
+        text = text or sid + (f' «{names[sid]}»' if sid in names else "")
+        return f'<a href="{sid}/" target="_blank">{e(text)}</a>' if sid in pages else e(text)
 
     cards = [f'<details class="story" id="{sid}" open><summary><b>{e(pages[sid][0])}</b><br><span class="meta">'
              f'{pages[sid][1]} · {story_link(sid, "страница сюжета")}</span></summary><ul>{pages[sid][2]}</ul></details>'
