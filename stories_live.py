@@ -383,27 +383,42 @@ td{padding:2px 14px 2px 0}li.part{list-style:none;margin:10px 0 4px -20px;paddin
     last = state.get("last") or {}
     merges = last.get("merges", [])
 
-    # куда легли новости этой сборки: в сюжет, который уже был (join); в новый сюжет — видимый (от двух изданий) или
-    # пока одиночный; без сюжета — непонятно, о каком событии речь (unclear)
+    # что сделала каждая новость этой сборки — по первому шагу её истории: открыла сюжет (первой, сама или вместе
+    # с такой же новостью той же сборки — same), добавлена в сюжет (join), без сюжета — непонятно, о чём (unclear).
+    # Куда её перенесли потом (склейка, перепроверка), item_row пишет путём
     fresh = [u for u in last.get("news", []) if u in state["items"]] if isinstance(last.get("news"), list) else []
-    where = {}
+    first = {u: state["items"][u]["history"][0] for u in fresh}
+    opened = {}  # (сюжет, время) → новости, открывшие его вместе
     for u in fresh:
-        it = state["items"][u]
-        where[u] = ("в сюжет, который уже был" if it["verdict"] == "join" else
-                    "без сюжета: непонятно, о чём" if not it["story"] else
-                    "в новый сюжет от двух изданий" if it["story"] in pages else "одиночка: сюжет из одного издания")
-    kinds = Counter(where.values())
-    arrived = "".join(item_row(u, state["items"][u], f' · {e(where[u])}' + (
-        f' {story_link(state["items"][u]["story"])}' if state["items"][u]["story"] else ""))
-        for u in sorted(fresh, key=lambda u: (where[u], state["items"][u]["seen"])))
+        if first[u]["story"] and first[u]["why"] != "join":
+            opened.setdefault((first[u]["story"], first[u]["t"]), []).append(state["items"][u]["n"])
+    kinds, notes = Counter(), {}
+    for u in fresh:
+        h, n = first[u], state["items"][u]["n"]
+        if not h["story"]:
+            kinds["без сюжета"] += 1
+            notes[u] = "без сюжета: непонятно, о чём"
+        elif h["why"] == "join":
+            kinds["добавлены в сюжет"] += 1
+            notes[u] = f'добавлена в сюжет {story_link(h["story"])}' + (f' · сходство {h["sim"]:.3f}' if h.get("sim") else "")
+        else:
+            kinds["открыли сюжет"] += 1
+            others = [m for m in opened[(h["story"], h["t"])] if m != n]
+            notes[u] = f'открыла сюжет {story_link(h["story"])}' + (
+                " вместе с " + ", ".join(f"№{m}" for m in sorted(others)) if others else "")
+    arrived = "".join(item_row(u, state["items"][u], f" · {notes[u]}")
+                      for u in sorted(fresh, key=lambda u: (state["items"][u]["seen"], state["items"][u]["n"])))
     done = [f"<b>раскладка заново ({e(last['rebuilt'])})</b>: все новости с {e(local_time(START))} по нынешним правилам"
             if last.get("rebuilt") else "",
-            f"новых новостей {len(fresh)}" + (": " + ", ".join(f"{n} — {e(k)}" for k, n in kinds.most_common()) if fresh else ""),
+            f"новых новостей {len(fresh)}" + (": " + ", ".join(f"{e(k)} — {n}" for k, n in kinds.most_common()) if fresh else ""),
             f"склеено {len(merges)}" + (": " + ", ".join(f'{story_link(k)} ← {e(g)}' for k, g in merges[:20])
                                        + (" …" if len(merges) > 20 else "") if merges and not last.get("rebuilt") else ""),
             "команды: " + "; ".join(e(r) for r in last["commands"]) if last.get("commands") else "",
             f"запросы к модели ≈ ${last.get('usd', 0):.3f}"]
     summary = " · ".join(x for x in done if x)
+    rebuilt_note = (f'<p class="meta">Раскладка заново: здесь все новости с {e(local_time(START))} по порядку, как они '
+                    f'приходили; «открыла сюжет» — была в нём первой, остальные добавлялись позже.</p>'
+                    if last.get("rebuilt") else "")
     page = f"""{head}
 <title>Сюжеты — теневой режим</title>
 {style}
@@ -414,7 +429,7 @@ td{padding:2px 14px 2px 0}li.part{list-style:none;margin:10px 0 4px -20px;paddin
 поменялись правила — страница раскладывается заново целиком. Прежняя страница сюжетов-тем — <a href="/plot1/">/plot1/</a>.
 Страница не индексируется и на сайте нигде не упомянута.</p>
 {f'<p>В этой сборке: {summary}.</p>' if summary else ""}
-{f'<details><summary>Новости этой сборки — куда легли</summary><ul>{arrived}</ul></details>' if arrived else ""}
+{f'<details><summary>Новости этой сборки — что сделала каждая</summary>{rebuilt_note}<ul>{arrived}</ul></details>' if arrived else ""}
 {f'<p class="err">Сюжеты в этой сборке не обновились: {e(error)}</p>' if error else ""}
 <p class="meta">Цифра у новости — сходство с самой похожей другой новостью сюжета (у одиночных — с новостью видимого сюжета).
 Модель видит новость с сюжетом, только если сходство не ниже {stories.CANDIDATE_SIM}; <span class="sim mid">жёлтые</span> — ниже
