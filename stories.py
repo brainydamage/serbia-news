@@ -25,7 +25,7 @@ import numpy as np
 
 # поднять при изменении логики раскладки или склейки (правила, промпты и пороги отслеживаются и так):
 # живая страница (stories_live.py) разложит все свои новости заново
-LAYOUT_VERSION = 1
+LAYOUT_VERSION = 2  # 2 — при раскладке модель видит и новость сюжета, самую похожую на новую
 MODEL = "claude-haiku-5-5"
 EFFORT = "low"
 # e5-large против MiniLM на эталоне 09–10.11: нужная новость первой среди похожих в 96–97% случаев против 91–93%;
@@ -243,13 +243,16 @@ def _decide(state: dict, batch: list[tuple[str, dict]], now: str, vectors: dict,
     live_urls, owners = _live(state, now)
     new_vecs = np.stack([vectors[url] for url, _ in batch])
     candidates = [{} for _ in batch]  # {id сюжета: лучшее сходство с его новостями}
+    closest = {}  # id сюжета → его новости, самые похожие на новые новости, для которых он кандидат
     if live_urls:
         sims = new_vecs @ np.stack([vectors[u] for u in live_urls]).T
         for n in range(len(batch)):
             for k in np.argsort(-sims[n]):
                 if sims[n, k] < CANDIDATE_SIM or len(candidates[n]) == CANDIDATES:
                     break
-                candidates[n].setdefault(owners[k], float(sims[n, k]))
+                if owners[k] not in candidates[n]:
+                    candidates[n][owners[k]] = float(sims[n, k])
+                    closest.setdefault(owners[k], []).append(live_urls[k])
     # соседи по сборке: если две новые новости похожи, обе идут к модели — вдруг это новое событие
     near = new_vecs @ new_vecs.T
     np.fill_diagonal(near, 0)
@@ -267,7 +270,7 @@ def _decide(state: dict, batch: list[tuple[str, dict]], now: str, vectors: dict,
             aliases.setdefault(sid, f"S{len(aliases)}")
     stories = []
     for sid, alias in aliases.items():
-        stories.append({"id": alias, "news": _shown(state, sid, vectors)})
+        stories.append({"id": alias, "news": _shown(state, sid, vectors, extra=closest.get(sid, []))})
     news = []
     for n in asked:
         url, item = batch[n]
@@ -334,12 +337,15 @@ def _recheck(state: dict, batch: list[tuple[str, dict]], weak: list[tuple[int, s
     return usage
 
 
-def _shown(state: dict, sid: str, vectors: dict, count: int = SHOWN_ITEMS, detail: bool = False) -> list[str]:
+def _shown(state: dict, sid: str, vectors: dict, count: int = SHOWN_ITEMS, detail: bool = False,
+           extra: list[str] = ()) -> list[str]:
     """Что модель видит о сюжете: первая новость и самые типичные — похожие на остальные новости сюжета больше всех,
     по порядку появления, без повторов текста. Не последние: с последними одна чужая новость, попав в сюжет,
     становится его лицом и тянет за собой следующие (10.11 так в сюжет решения REM легли 19 новостей
     про обыск у Вучичевича). detail — с временем (UTC) и изданием: склейке без времени «удар по Киеву» и «удар
-    по Украине» в ту же ночь казались разными событиями (12.11)."""
+    по Украине» в ту же ночь казались разными событиями (12.11). extra — ещё новости сюжета: при раскладке — самые похожие
+    на новую новость. Типичные показывают главную тему, и поворот того же события на неё не похож: 12.11 призыв
+    Брнабич в Дублине быстрее сформировать институты лёг отдельно от сюжета о саммите, хотя такие же новости в нём были."""
     urls = state["stories"][sid]["urls"][-STORY_ITEMS:]
     first = state["stories"][sid]["urls"][0]
     rest = [u for u in urls if u != first]
@@ -348,7 +354,9 @@ def _shown(state: dict, sid: str, vectors: dict, count: int = SHOWN_ITEMS, detai
         typical = (v @ v.T).mean(axis=1)[[urls.index(u) for u in rest]]
         keep = set(np.argsort(-typical)[:count - 1])
         rest = [u for n, u in enumerate(rest) if n in keep]
-    items = [state["items"][u] for u in [first] + rest]
+    order = state["stories"][sid]["urls"]
+    chosen = sorted(set([first] + rest + list(extra)), key=order.index)
+    items = [state["items"][u] for u in chosen]
     if detail:
         return list(dict.fromkeys(f"{it['seen'][8:10]}.{it['seen'][5:7]} {it['seen'][11:16]} · {it['source']}: {text_of(it)}"
                                   for it in items))
