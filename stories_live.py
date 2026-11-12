@@ -160,23 +160,61 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
         v = np.stack([vectors[u] for u in with_what])
         return state["items"][with_what[int((v @ v.T).mean(axis=1).argmax())]]["what"]
 
+    def closest(urls: list[str], among: list[str]) -> dict[str, tuple[float, int]]:
+        """Для каждой новости urls — лучшее сходство с новостями among (кроме неё самой) и номер той новости."""
+        have = [u for u in urls if u in vectors]
+        other = [u for u in among if u in vectors]
+        if not have or not other:
+            return {}
+        sims = np.stack([vectors[u] for u in have]).astype(np.float32) @ np.stack([vectors[u] for u in other]).astype(np.float32).T
+        sims[np.array(have)[:, None] == np.array(other)[None, :]] = -1
+        return {u: (float(sims[n].max()), int(sims[n].argmax())) for n, u in enumerate(have)}
+
+    def sim_mark(sim: float | None) -> str:
+        """Сходство цифрой: ниже RECHECK_SIM — жёлтым, ниже CANDIDATE_SIM — красным."""
+        if sim is None or sim < -0.5:
+            return ""
+        level = "low" if sim < stories.CANDIDATE_SIM else "mid" if sim < stories.RECHECK_SIM else "ok"
+        return f' · <span class="sim {level}">{sim:.3f}</span>'
+
+    def item_row(u: str, it: dict, extra: str) -> str:
+        what = it.get("what", "")
+        return (f'<li><span class="meta">{local_time(it["seen"])} · {e(it["source"])} · '
+                f'{e(sections.get(it["section"], it["section"]))}'
+                f'{" · " + e(it["verdict"]) if it["verdict"] in ("same", "recheck") else ""}{extra}</span><br>'
+                f'<a href="{e(u)}" rel="noopener" target="_blank">{e(it["title"])}</a>'
+                f'{f"<br><span class=what>{e(what)}</span>" if what and what != it["title"] else ""}</li>')
+
     cards = []
     for sid in shown:
         story = state["stories"][sid]
         urls = story["urls"]
         items = [state["items"][u] for u in urls]
         camps = Counter(sections.get(it["section"], it["section"]) for it in items)
-        rows = "".join(
-            f'<li><span class="meta">{local_time(it["seen"])} · {e(it["source"])} · '
-            f'{e(sections.get(it["section"], it["section"]))}'
-            f'{" · " + e(it["verdict"]) if it["verdict"] in ("same", "recheck") else ""}</span><br>'
-            f'<a href="{e(u)}" rel="noopener" target="_blank">{e(it["title"])}</a></li>'
-            for u, it in sorted(zip(urls, items), key=lambda pair: pair[1]["seen"], reverse=True))  # свежие сверху
+        near = closest(urls, urls)
+        rows = "".join(item_row(u, it, sim_mark(near.get(u, (None,))[0]))
+                       for u, it in sorted(zip(urls, items), key=lambda pair: pair[1]["seen"], reverse=True))  # свежие сверху
         cards.append(
-            f'<details><summary><b>{e(headline(urls))}</b><br><span class="meta">{len(urls)} новостей · '
+            f'<details id="{sid}"><summary><b>{e(headline(urls))}</b><br><span class="meta">{len(urls)} новостей · '
             f'{len(sources(sid))} изданий · {e(", ".join(f"{c} {n}" for c, n in camps.most_common()))} · '
             f'{local_time(story["created"])} — {local_time(story["updated"])} · {sid}</span></summary>'
             f'<ul>{rows}</ul></details>')
+
+    # новости, которых на странице не видно: сюжет из одного издания. Сверху — самые похожие на видимый сюжет:
+    # среди них и те, что должны были в него попасть
+    hidden = [u for sid, s in state["stories"].items() if s["updated"] >= cutoff and sid not in shown for u in s["urls"]]
+    visible_urls = [u for sid in shown for u in state["stories"][sid]["urls"]]
+    near = closest(hidden, visible_urls)
+    hidden.sort(key=lambda u: near.get(u, (-1,))[0], reverse=True)
+
+    def nearest(u: str) -> str:
+        if u not in near:
+            return ""
+        sim, k = near[u]
+        target = state["items"][visible_urls[k]]["story"]
+        return f' · ближе всего <a href="#{target}">{target}</a>{sim_mark(sim)}'
+
+    lonely = "".join(item_row(u, state["items"][u], f' · {state["items"][u]["story"]}{nearest(u)}') for u in hidden)
 
     spent = "".join(f"<tr><td>{d}</td><td>{s['calls']}</td><td>${s['usd']:.3f}</td></tr>"
                     for d, s in sorted(state.get("spent", {}).items(), reverse=True))
@@ -187,14 +225,22 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
 <style>body{{font:15px/1.45 system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#222;background:#fff}}
 summary{{cursor:pointer;padding:6px 0}}details{{border-bottom:1px solid #eee}}ul{{margin:4px 0 12px;padding-left:20px}}
 li{{margin:6px 0}}.meta{{color:#888;font-size:13px}}a{{color:#1a5fb4}}table{{border-collapse:collapse;font-size:13px}}
-td{{padding:2px 14px 2px 0}}.err{{background:#fde8d8;color:#a33;padding:8px 12px}}
+td{{padding:2px 14px 2px 0}}.what{{color:#777;font-size:13px}}
+.sim.mid{{color:#b7791f}}.sim.low{{color:#c0392b;font-weight:600}}.err{{background:#fde8d8;color:#a33;padding:8px 12px}}
 @media (prefers-color-scheme:dark){{body{{background:#161616;color:#ddd}}details{{border-color:#333}}a{{color:#78aeed}}}}</style>
 </head><body>
 <h1>Сюжеты — теневой режим</h1>
 <p class="meta">Сборка {e(local_time(now))} · видимых сюжетов (от двух изданий) за сутки: {len(shown)} · всего в памяти: {total}.
 Страница не индексируется и на сайте нигде не упомянута.</p>
 {f'<p class="err">Сюжеты в этой сборке не обновились: {e(error)}</p>' if error else ""}
+<p class="meta">Цифра у новости — сходство с самой похожей другой новостью сюжета (у одиночных — с новостью видимого сюжета).
+Модель видит новость с сюжетом, только если сходство не ниже {stories.CANDIDATE_SIM}; <span class="sim mid">жёлтые</span> — ниже
+{stories.RECHECK_SIM}, такое добавление перепроверяет Haiku; <span class="sim low">красные</span> — ниже {stories.CANDIDATE_SIM}.
+Серым под заголовком — «что произошло» (what): по нему считается сходство.</p>
 {"".join(cards) or "<p>Пока пусто.</p>"}
+<h2>Не попали в видимые сюжеты</h2>
+<details><summary>{len(hidden)} новостей за сутки в сюжетах из одного издания — самые похожие на видимый сюжет сверху</summary>
+<ul>{lonely}</ul></details>
 <h2>Расход</h2><table><tr><td>день</td><td>запросов</td><td>≈ $</td></tr>{spent}</table>
 </body></html>"""
     PAGE_DIR.mkdir(parents=True, exist_ok=True)
