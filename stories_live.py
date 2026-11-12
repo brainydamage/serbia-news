@@ -428,10 +428,30 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
         text = text or sid + (f' «{names[sid]}»' if sid in names else "")
         return f'<a href="{sid}/" target="_blank">{e(text)}</a>' if sid in pages else e(text)
 
+    def label(sid: str) -> str:  # короткая подпись сюжета для оглавления и переходов
+        title = names.get(sid) or pages[sid][0]
+        return title if len(title) <= 60 else title[:60].rsplit(" ", 1)[0] + "…"
+
+    def neighbours(sid: str, href: str) -> str:
+        """Переходы к соседним сюжетам в порядке главной страницы; href — как ссылаться на сюжет."""
+        if sid not in shown:
+            return ""
+        n = shown.index(sid)
+        prev = f'<a href="{href.format(shown[n - 1])}" title="{e(label(shown[n - 1]))}">← пред.</a>' if n else ""
+        after = (f'<a href="{href.format(shown[n + 1])}" title="{e(label(shown[n + 1]))}">след. →</a>'
+                 if n + 1 < len(shown) else "")
+        return " · ".join(x for x in (prev, after) if x)
+
     cards = [f'<details class="story" id="{sid}" open><summary><b>{e(pages[sid][0])}</b><br><span class="meta">'
-             f'{pages[sid][1]} · {story_link(sid, "страница сюжета")}</span></summary>{pages[sid][2]}<ul>{pages[sid][3]}</ul>'
-             '</details>'
+             f'{pages[sid][1]} · {story_link(sid, "страница сюжета")} · '
+             f'{neighbours(sid, "#{}") + " · " if len(shown) > 1 else ""}<a href="#top">↑</a>'
+             f'</span></summary>{pages[sid][2]}<ul>{pages[sid][3]}</ul></details>'
              for sid in shown]
+    toc = ('<nav class="toc"><details id="toc"><summary>Оглавление</summary><ol>'
+           + "".join(f'<li><a href="#{sid}">{e(label(sid))}</a> <span class="meta">{len(state["stories"][sid]["urls"])}</span></li>'
+                     for sid in shown)
+           + '</ol><p><a href="#lonely">Не попали в видимые</a><br><a href="#commands">Правки через бота</a><br>'
+             '<a href="#spent">Расход</a><br><a href="#top">↑ Наверх</a></p></details></nav>')
 
     # новости, которых на странице не видно: сюжет из одного издания. Сверху — самые похожие на видимый сюжет:
     # среди них и те, что должны были в него попасть
@@ -468,6 +488,8 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
 summary{cursor:pointer;padding:6px 0}details{border-bottom:1px solid #eee}ul{margin:4px 0 12px;padding-left:20px}
 li{margin:6px 0}.meta{color:#888;font-size:13px}a{color:#1a5fb4}table{border-collapse:collapse;font-size:13px}
 td{padding:2px 14px 2px 0}.what{color:#777;font-size:13px}
+.toc ol{padding-left:24px;font-size:13px}.toc li{margin:3px 0}
+@media (min-width:1400px){.toc{position:fixed;left:16px;top:16px;width:calc(50vw - 490px);max-height:calc(100vh - 32px);overflow:auto}}
 .lines{background:#fff6d6;border-radius:6px;padding:8px 12px;margin:8px 0}.lines ul{margin:4px 0}
 .sim.mid{color:#b7791f}.sim.low{color:#c0392b;font-weight:600}.err{background:#fde8d8;color:#a33;padding:8px 12px}
 @media (prefers-color-scheme:dark){body{background:#161616;color:#ddd}details{border-color:#333}a{color:#78aeed}}</style>"""
@@ -504,7 +526,8 @@ td{padding:2px 14px 2px 0}.what{color:#777;font-size:13px}
 <title>Сюжеты — теневой режим</title>
 {style}
 </head><body>
-<h1>Сюжеты — теневой режим</h1>
+<h1 id="top">Сюжеты — теневой режим</h1>
+{toc}
 <p class="meta">Сборка {e(local_time(now))} · видимых сюжетов (от двух изданий) за сутки: {len(shown)} · всего в памяти: {total}.
 Новости с {e(local_time(START))}; правила {e(state.get("fingerprint", ""))}, по ним разложено с {e(local_time(state.get("rebuilt", now)))}:
 поменялись правила — страница раскладывается заново целиком. Прежняя страница сюжетов-тем — <a href="/plot1/">/plot1/</a>.
@@ -516,16 +539,29 @@ td{padding:2px 14px 2px 0}.what{color:#777;font-size:13px}
 Модель видит новость с сюжетом, только если сходство не ниже {stories.CANDIDATE_SIM}; <span class="sim mid">жёлтые</span> — ниже
 {stories.RECHECK_SIM}, такое добавление перепроверяет Haiku; <span class="sim low">красные</span> — ниже {stories.CANDIDATE_SIM}.
 Серым под заголовком — «что произошло» (what): по нему считается сходство.</p>
-<p><button onclick="{toggle % 'true'}">Раскрыть все</button> <button onclick="{toggle % 'false'}">Свернуть все</button></p>
+<p><button onclick="{toggle % 'true'}">Раскрыть все</button> <button onclick="{toggle % 'false'}">Свернуть все</button>
+<span class="meta">· клавиши j / k — следующий / предыдущий сюжет</span></p>
 {"".join(cards) or "<p>Пока пусто.</p>"}
-<h2>Не попали в видимые сюжеты</h2>
+<h2 id="lonely">Не попали в видимые сюжеты</h2>
 <details><summary>{len(hidden)} новостей за сутки в сюжетах из одного издания — самые похожие на видимый сюжет сверху</summary>
 <ul>{lonely}</ul></details>
-<h2>Правки через бота</h2>
+<h2 id="commands">Правки через бота</h2>
 <p class="meta">Боту в Telegram: /move 1234 s471 — новость №1234 в сюжет s471 (new — в новый), /split s191 — часть
 в отдельный сюжет, /unmerge s102 — отменить склейку.</p>
 {f"<ul>{commands}</ul>" if commands else "<p class=meta>Пока не было.</p>"}
-<h2>Расход</h2><table><tr><td>день</td><td>запросов</td><td>≈ $</td></tr>{spent}</table>
+<h2 id="spent">Расход</h2><table><tr><td>день</td><td>запросов</td><td>≈ $</td></tr>{spent}</table>
+<script>
+// оглавление сбоку на широком экране открыто, на узком — свёрнуто наверху
+if (matchMedia('(min-width:1400px)').matches) document.getElementById('toc').open = true;
+// j / k — к следующему / предыдущему сюжету: к первому, чей верх ниже (выше) верха окна
+document.addEventListener('keydown', ev => {{
+  if (ev.target.closest('input,textarea') || ev.metaKey || ev.ctrlKey || ev.altKey || !'jk'.includes(ev.key)) return;
+  const cards = [...document.querySelectorAll('details.story')];
+  const next = ev.key === 'j' ? cards.find(c => c.getBoundingClientRect().top > 5)
+                              : cards.reverse().find(c => c.getBoundingClientRect().top < -5);
+  if (next) next.scrollIntoView();
+}});
+</script>
 </body></html>"""
     PAGE_DIR.mkdir(parents=True, exist_ok=True)
     (PAGE_DIR / "index.html").write_text(page, "utf-8")
@@ -535,7 +571,7 @@ td{padding:2px 14px 2px 0}.what{color:#777;font-size:13px}
 <title>{e(title)}</title>
 {style}
 </head><body>
-<p class="meta"><a href="../#{sid}">← все сюжеты</a> · сборка {e(local_time(now))}</p>
+<p class="meta"><a href="../#{sid}">← все сюжеты</a>{" · " + neighbours(sid, "../{}/") if sid in shown else ""} · сборка {e(local_time(now))}</p>
 <h1>{e(title)}</h1>
 <p class="meta">{about}</p>
 {lines}
