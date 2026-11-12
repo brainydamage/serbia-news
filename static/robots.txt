@@ -3,5 +3,6 @@ User-agent: *
 Allow: /
 # теневой режим сюжетов (stories_live.py) — только для проверки
 Disallow: /plot/
+Disallow: /plot1/
 
 Sitemap: https://vestomat.rs/sitemap.xml

@@ -2,8 +2,12 @@
 скрытую страницу site/plot/ (vestomat.rs/plot/) — посмотреть, как это было бы на сайте. На главную страницу сюжеты пока не идут.
 
 Состояние — cache/stories.json, векторы новостей живых сюжетов — cache/story-vectors.npz; оба в кэше GitHub Actions
-вместе с архивом. Пропал кэш — начинаем заново с новостей за последние BOOTSTRAP часов, а не со всего архива.
-Расход по дням копится в состоянии и виден на странице.
+вместе с архивом. Расход по дням копится в состоянии и виден на странице.
+
+Страница — только новости с START, и вся она — по одним правилам: правила раскладки и склейки (константы stories.py)
+изменились — сборка выбрасывает раскладку и раскладывает заново все новости с START (последние stories.LIVE часов),
+по сборкам, в которых они появились, как будто новые правила были с самого начала. Так же — если пропал кэш.
+Прежняя страница сюжетов-тем (до 12.11 18:47) — замороженный снимок static/plot1/.
 
 Править раскладку руками — командами Telegram-боту (worker/): он дописывает их в stories-commands.json, коммит
 запускает сборку, сборка применяет новые команды (apply_commands) и отвечает в Telegram, что вышло:
@@ -14,6 +18,7 @@
     .venv/bin/python stories_live.py [архив.json]   — локально: сборка сюжетов на архиве (по умолчанию
                                                       cache/archive.json) и страница site/plot/
 """
+import hashlib
 import html
 import json
 import os
@@ -35,7 +40,8 @@ VECTORS_FILE = ROOT / "cache" / "story-vectors.npz"
 PAGE_DIR = ROOT / "site" / "plot"
 COMMANDS_FILE = ROOT / "stories-commands.json"
 COMMANDS_SHOWN = 30  # последних команд с итогом — на странице
-BOOTSTRAP = timedelta(hours=12)
+# начало новой страницы: 12.11 17:05 по Белграду — с этой сборки у новостей части, история переносов и номера для бота
+START = "2026-11-12T16:05:00+00:00"
 # новость без перевода ждёт одну сборку (перевод мог опоздать), потом идёт по оригинальному заголовку
 WAIT_TRANSLATION = timedelta(minutes=20)
 # сюжет, который не обновлялся дольше, убираем из состояния вместе с его новостями: архив их уже забыл
@@ -161,33 +167,30 @@ def ask_with_spending(state: dict, day: str):
     return ask
 
 
+def fingerprint() -> str:
+    """Отпечаток правил: правила, промпты, модели и пороги stories.py (константы), LAYOUT_VERSION — для логики."""
+    rules = {k: repr(v) for k, v in sorted(vars(stories).items()) if k.isupper()}
+    return hashlib.sha1(json.dumps(rules, ensure_ascii=False).encode()).hexdigest()[:10]
+
+
 def run(archive: dict, sections: dict) -> None:
     """Одна сборка: новые новости архива — в сюжеты, раз в час склейка, потом страница. sections — {id: название}."""
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     state, vectors = load_state()
-    if state["items"] and state.get("version", 0) < 3:
-        # 12.11: склейка стала брать и пары «невидимый + видимый» (версия 1), потом — без фильтра Haiku для них (2),
-        # потом — крупные сюжеты-темы и совсем без фильтра (3). Старые пары она бы не проверила: их сюжеты с прошлой
-        # склейки не росли, а отказы помнит checked. Один раз проверяем все живые пары заново
-        state["merged_at"] = ""
-        state["checked"] = {}
-    state["version"] = 3
-    for it in state["items"].values():  # части и история (stories.py) — с 12.11; что разложено раньше — как есть сейчас
-        it.setdefault("part", it["story"])
-        it.setdefault("history", [{"t": it["seen"], "why": it["verdict"], "story": it["story"], "part": it["part"]}])
-    for u in sorted((u for u, it in state["items"].items() if "n" not in it), key=lambda u: state["items"][u]["seen"]):
-        state["items"][u]["n"] = state.get("next_n", 1)
-        state["next_n"] = state["items"][u]["n"] + 1
-    fresh_start = not state["items"]
-    if fresh_start:  # что старше начала, не раскладываем и потом: иначе следующая сборка возьмёт все LIVE часов
-        state["started"] = (datetime.fromisoformat(now) - BOOTSTRAP).isoformat()
-    since = max(state.get("started", ""), (datetime.fromisoformat(now) - stories.LIVE).isoformat())
+    rebuilt = ""
+    if state.get("fingerprint") != fingerprint() or state.get("start") != START:
+        rebuilt = "правила изменились" if state.get("start") == START else "новое начало" if state.get("start") else "начало"
+        # номера новостей и сюжетов дальше растут, а не начинаются заново: старый №1234 из Telegram не попадёт в другую
+        # новость. Применённые команды заново не применяем: к новой раскладке они могут не подходить
+        keep = {k: state[k] for k in ("spent", "next_n", "next_id", "commands_done", "commands") if k in state}
+        state = {**stories.new_state(), **keep, "start": START, "fingerprint": fingerprint(), "rebuilt": now}
+    since = max(START, (datetime.fromisoformat(now) - stories.LIVE).isoformat())
     wait = (datetime.fromisoformat(now) - WAIT_TRANSLATION).isoformat()
     items = [(u, a) for u, a in archive.items()
              if u not in state["items"] and stories.eligible(a) and a["seen"] >= since
              and (a.get("ru") or a.get("what") or a["seen"] < wait)]
     items.sort(key=lambda x: x[1]["seen"])
-    print(f"Сюжеты: новых новостей {len(items)}{' (начинаем заново)' if fresh_start else ''}", file=sys.stderr)
+    print(f"Сюжеты: новых новостей {len(items)}{f' (раскладываем заново: {rebuilt})' if rebuilt else ''}", file=sys.stderr)
 
     # векторы всех новостей в памяти: для раскладки нужны последние новости живых сюжетов, а для страницы — все
     need = [u for u, _ in items] + [u for u in state["items"] if u not in vectors]
@@ -199,6 +202,7 @@ def run(archive: dict, sections: dict) -> None:
 
     day = datetime.fromisoformat(now).astimezone(LOCAL_TZ).date().isoformat()
     ask = ask_with_spending(state, day)
+    usd, merges = state.get("spent", {}).get(day, {}).get("usd", 0), len(state.get("merges", []))
     # по сборкам, в которых новости впервые появились (seen), как в прогонах на снимках: при старте с нуля так
     # время сюжетов настоящее, а не время этой сборки. Новость, ждавшая перевода, идёт со временем прошлой сборки
     builds = {}
@@ -209,6 +213,10 @@ def run(archive: dict, sections: dict) -> None:
         decided += stories.update(state, group, seen, vectors, ask)["decided"]
         if stories.merge_due(state, seen):
             merged += stories.merge(state, seen, vectors, ask)["merged"]
+    # что сделала эта сборка — сводкой наверху страницы
+    state["last"] = {"t": now, "rebuilt": rebuilt, "news": len(items), "commands": [c["result"] for c in done],
+                     "merges": [[m["keep"], m["gone"]] for m in state.get("merges", [])[merges:]],
+                     "usd": round(state.get("spent", {}).get(day, {}).get("usd", 0) - usd, 4)}
     forget_old(state, vectors, now)
     state["spent"] = {d: s for d, s in sorted(state.get("spent", {}).items())[-SPENT_DAYS:]}
     state["built"] = now
@@ -350,6 +358,16 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
     spent = "".join(f"<tr><td>{d}</td><td>{s['calls']}</td><td>${s['usd']:.3f}</td></tr>"
                     for d, s in sorted(state.get("spent", {}).items(), reverse=True))
     total = len(state["stories"])
+    last = state.get("last") or {}
+    merges = last.get("merges", [])
+    done = [f"<b>раскладка заново ({e(last['rebuilt'])})</b>: все новости с {e(local_time(START))} по нынешним правилам"
+            if last.get("rebuilt") else "",
+            f"новых новостей {last.get('news', 0)}",
+            f"склеено {len(merges)}" + (": " + ", ".join(f'<a href="#{e(k)}">{e(k)}</a> ← {e(g)}' for k, g in merges[:20])
+                                       + (" …" if len(merges) > 20 else "") if merges and not last.get("rebuilt") else ""),
+            "команды: " + "; ".join(e(r) for r in last["commands"]) if last.get("commands") else "",
+            f"≈ ${last.get('usd', 0):.3f}"]
+    summary = " · ".join(x for x in done if x)
     page = f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
 <title>Сюжеты — теневой режим</title>
@@ -362,7 +380,10 @@ td{{padding:2px 14px 2px 0}}li.part{{list-style:none;margin:10px 0 4px -20px;pad
 </head><body>
 <h1>Сюжеты — теневой режим</h1>
 <p class="meta">Сборка {e(local_time(now))} · видимых сюжетов (от двух изданий) за сутки: {len(shown)} · всего в памяти: {total}.
+Новости с {e(local_time(START))}; правила {e(state.get("fingerprint", ""))}, по ним разложено с {e(local_time(state.get("rebuilt", now)))}:
+поменялись правила — страница раскладывается заново целиком. Прежняя страница сюжетов-тем — <a href="/plot1/">/plot1/</a>.
 Страница не индексируется и на сайте нигде не упомянута.</p>
+{f'<p>В этой сборке: {summary}.</p>' if summary else ""}
 {f'<p class="err">Сюжеты в этой сборке не обновились: {e(error)}</p>' if error else ""}
 <p class="meta">Цифра у новости — сходство с самой похожей другой новостью сюжета (у одиночных — с новостью видимого сюжета).
 Модель видит новость с сюжетом, только если сходство не ниже {stories.CANDIDATE_SIM}; <span class="sim mid">жёлтые</span> — ниже
