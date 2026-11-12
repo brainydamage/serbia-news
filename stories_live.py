@@ -171,7 +171,7 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
             f'{e(sections.get(it["section"], it["section"]))}'
             f'{" · " + e(it["verdict"]) if it["verdict"] in ("same", "recheck") else ""}</span><br>'
             f'<a href="{e(u)}" rel="noopener" target="_blank">{e(it["title"])}</a></li>'
-            for u, it in zip(urls, items))
+            for u, it in sorted(zip(urls, items), key=lambda pair: pair[1]["seen"], reverse=True))  # свежие сверху
         cards.append(
             f'<details><summary><b>{e(headline(urls))}</b><br><span class="meta">{len(urls)} новостей · '
             f'{len(sources(sid))} изданий · {e(", ".join(f"{c} {n}" for c, n in camps.most_common()))} · '
