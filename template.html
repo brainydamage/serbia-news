@@ -214,10 +214,17 @@ a.card-name:hover { color: var(--hover); }
   display: block; margin-top: 10px; border: 0; background: none; padding: 0; cursor: pointer;
   color: inherit; opacity: .65; font: inherit; font-size: 13px; text-decoration: underline;
 }
-.details-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-top: 12px; }
+.details-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; margin-top: 12px; }
 .details-actions .flag-link { margin: 0; }
+/* «Плохой перевод?» и ✕ переносятся вместе: ✕ не остаётся один в ряду и всегда справа */
+.details-more { flex: 1 0 auto; display: flex; align-items: center; gap: 12px; }
+.details-close {
+  /* заходит в поля блока, чтобы на экране шириной 375 влезть в один ряд с кнопками */
+  margin: -2px -6px -2px auto; width: 36px; height: 36px; border: 0; border-radius: 50%; cursor: pointer;
+  background: color-mix(in srgb, var(--tip-text) 14%, transparent); color: inherit; font-size: 17px; line-height: 1;
+}
 .read-link {
-  padding: 8px 14px; border-radius: 999px; background: var(--tip-text); color: var(--tip-bg);
+  padding: 8px 12px; border-radius: 999px; background: var(--tip-text); color: var(--tip-bg);
   font-size: 14px; font-weight: 700; text-decoration: none;
 }
 dialog.report {
@@ -440,6 +447,7 @@ const UI = {
   more: "Još",
   showMore: "Prikaži još",
   readOn: "Pročitaj na",
+  collapse: "Zatvori",
   stale: "feed nije osvežen",
   down: "feed nije dostupan",
 };
@@ -484,6 +492,7 @@ const UI_RU = {
   more: "Ещё",
   showMore: "Показать ещё",
   readOn: "Читать на",
+  collapse: "Свернуть",
   stale: "лента не обновилась",
   down: "лента недоступна",
   aiNote: "Переведены только заголовки и подводки — сами статьи откроются в оригинале. Перевод делает ИИ (Claude), так что возможны ошибки и неточности.",
@@ -682,6 +691,9 @@ function openReport(item) {
   if (HOVER) send.focus();
 }
 
+// где на экране была строка, когда раскрыли подводку: туда её вернёт сворачивание
+let openTop = null;
+
 // showVia — подписать издание у новости (в общей карточке региона)
 function renderItem(item, src, { showSource = false, showVia = false } = {}) {
   const fresh = item.date && now - new Date(item.date) < FRESH_MS;
@@ -695,25 +707,37 @@ function renderItem(item, src, { showSource = false, showVia = false } = {}) {
   const details = () => h("div", { class: "details" }, summary,
     h("div", { class: "details-actions" },
       h("a", { class: "read-link", href: item.url, target: "_blank", rel: "noopener", onclick: opened }, `${t("readOn")} ${via || src.name} ↗`),
-      reportable ? h("button", { class: "flag-link", type: "button", onclick: () => openReport(item) }, t("report")) : null));
-  const toggle = () => {
+      h("div", { class: "details-more" },
+        reportable ? h("button", { class: "flag-link", type: "button", onclick: () => openReport(item) }, t("report")) : null,
+        h("button", { class: "details-close", type: "button", title: t("collapse"), "aria-label": t("collapse"), onclick: toggle }, "✕"))));
+  function toggle(e) {
     const top = li.getBoundingClientRect().top;
     document.querySelector(".details")?.remove();
-    if (state.open === item.url) state.open = null;
-    else {
-      state.open = item.url;
-      markRead(item.url);
-      li.classList.add("read");
-      li.append(details());
+    if (state.open === item.url) {
+      state.open = null;
+      // свернули — страница встаёт, как была до касания
+      scrollBy(0, li.getBoundingClientRect().top - (openTop ?? top));
+      return;
     }
     // свернулась подводка выше — возвращаем строку под палец
     scrollBy(0, li.getBoundingClientRect().top - top);
-  };
+    state.open = item.url;
+    openTop = top;
+    markRead(item.url);
+    li.classList.add("read");
+    const box = details();
+    li.append(box);
+    // палец закрывает всё ниже касания: подтягиваем подводку, чтобы её низ встал на место касания,
+    // но заголовок не уходит за верх экрана. С клавиатуры касания нет — тогда просто показываем блок целиком
+    const y = e.detail ? e.clientY : innerHeight;
+    const shift = Math.min(box.getBoundingClientRect().bottom - y, li.getBoundingClientRect().top - stickyHeight - 8);
+    if (shift > 0) scrollBy({ top: shift, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  }
   const onclick = e => {
     // без мыши наводить нечем: касание раскрывает и сворачивает подводку, статья открывается кнопкой в ней
     if (!HOVER && summary.length) {
       e.preventDefault();
-      toggle();
+      toggle(e);
       return;
     }
     opened();
