@@ -144,7 +144,9 @@ MERGE_SCHEMA = {
     "required": ["pairs"],
     "additionalProperties": False,
 }
-MERGE_EVERY = timedelta(hours=1)
+# склейка раз в 2 часа (до 14.11 — раз в час): читателей пока мало, дубль может подождать, а проход стоит денег.
+# Когда склеивать — не правило раскладки, в отпечаток не входит (stories_live.NOT_RULES)
+MERGE_EVERY = timedelta(hours=2)
 MERGE_SIM = 0.865  # пары сюжетов с лучшей парой новостей не ниже — к модели (у MiniLM было 0.55)
 # одиночка (сюжет из одного издания) с видимым — с тем же порогом, что при раскладке: новость, пришедшая раньше своего
 # сюжета, проверяется так же, как пришедшая после. 12.11 ремонт JANAF (0.864) остался одиночкой рядом с сюжетом о нём
@@ -213,23 +215,28 @@ def new_state() -> dict:
     return {"stories": {}, "items": {}, "next_id": 0}
 
 
+def request(system: str, content: str, schema: dict, effort: str = EFFORT, model: str = MODEL) -> dict:
+    """Параметры запроса к модели — и для обычного, и для пакетного. Системный промпт — в кэше, как у перевода."""
+    return {"model": model, "max_tokens": 16000, "system": translate.cached(system),
+            "output_config": {"effort": effort, "format": {"type": "json_schema", "schema": schema}},
+            "messages": [{"role": "user", "content": content}]}
+
+
+def answer_of(message, price: tuple[float, float]) -> tuple[dict, dict]:
+    """Ответ модели: (ответ по схеме, {"in", "out", "write", "read", "usd"} — токены, из них записанные в кэш
+    и прочитанные из кэша, и оценка в долларах по price — вход / выход за 1M токенов)."""
+    if message.stop_reason in ("max_tokens", "refusal"):
+        raise RuntimeError(f"stop_reason={message.stop_reason}")
+    text = next(b.text for b in message.content if b.type == "text")
+    used = translate.tokens(message.usage)
+    return json.loads(text), {**used, "usd": translate.usd(used, price)}
+
+
 def ask_model(client, system: str, content: str, schema: dict, effort: str = EFFORT,
               model: str = MODEL, price: tuple[float, float] | None = None) -> tuple[dict, dict]:
-    """Запрос к модели: (ответ по схеме, {"in", "out", "write", "read", "usd"} — токены, из них записанные в кэш
-    и прочитанные из кэша, и оценка в долларах). Системный промпт — в кэше, как у перевода. price — цена модели,
-    которой нет в PRICES (вход / выход за 1M токенов)."""
-    response = client.messages.create(
-        model=model,
-        max_tokens=16000,
-        system=translate.cached(system),
-        output_config={"effort": effort, "format": {"type": "json_schema", "schema": schema}},
-        messages=[{"role": "user", "content": content}],
-    )
-    if response.stop_reason in ("max_tokens", "refusal"):
-        raise RuntimeError(f"stop_reason={response.stop_reason}")
-    text = next(b.text for b in response.content if b.type == "text")
-    used = translate.tokens(response.usage)
-    return json.loads(text), {**used, "usd": translate.usd(used, price or PRICES[model])}
+    """Запрос к модели сразу: (ответ по схеме, токены и доллары — answer_of). price — цена модели, которой нет
+    в PRICES (вход / выход за 1M токенов)."""
+    return answer_of(client.messages.create(**request(system, content, schema, effort, model)), price or PRICES[model])
 
 
 def visible(state: dict, sid: str) -> bool:
@@ -434,38 +441,13 @@ def _share_entities(state: dict, a: str, b: str) -> bool:
     return not ka or not kb or bool(ka & kb)
 
 
-def _same_pairs(state: dict, pairs: list[tuple[str, str]], vectors: dict, model: str, effort: str, ask,
-                total: dict) -> dict[int, str]:
-    """Номера пар, которые модель считает одним событием, → общее событие, которое она назвала."""
-    same = {}
-    for start in range(0, len(pairs), MERGE_BATCH):
-        chunk = pairs[start:start + MERGE_BATCH]
-        aliases = {}
-        for a, b in chunk:
-            for s in (a, b):
-                aliases.setdefault(s, f"S{len(aliases)}")
-        content = json.dumps({"stories": [{"id": al, "news": _shown(state, s, vectors, MERGE_SHOWN, detail=True)} for s, al in aliases.items()],
-                              "pairs": [{"id": f"P{n}", "a": aliases[a], "b": aliases[b]}
-                                        for n, (a, b) in enumerate(chunk)]}, ensure_ascii=False)
-        answer, usage = ask(MERGE_PROMPT, content, MERGE_SCHEMA, effort, model)
-        for k in ("in", "out", "usd"):
-            total[k] += usage.get(k, 0)
-        total["asked"][model] = total["asked"].get(model, 0) + len(chunk)
-        same |= {start + int(p["id"][1:]): p["event"].strip() for p in answer["pairs"]
-                 if p["same"] and p["event"].strip() and p["id"][1:].isdigit()}
-    return same
-
-
-def merge(state: dict, now: str, vectors: dict, ask) -> dict:
-    """Склейка дублей — сюжетов, на которые распалось одно событие. Пара идёт к модели, только если:
-    хотя бы один сюжет видимый (два невидимых обрывка читателю не мешают, а невидимый рядом с видимым — новость,
-    которая должна была лечь в видимый: пришла раньше него или модель ошиблась), хотя бы один вырос с прошлой склейки, лучшая пара
-    новостей похожа не меньше MERGE_SIM (одиночка с видимым — MERGE_FRAGMENT_SIM), у сюжетов есть общий участник (entities; не нужен, если сходство
-    не ниже MERGE_SURE_SIM), пару ещё не признавали разными — или с тех пор один из сюжетов вырос вдвое — и её части
-    не разделяли руками (split, unmerge). Решает Sonnet. Каждая склейка — в журнал state["merges"] с частями, которые
-    принёс склеенный сюжет: по нему unmerge её отменяет.
-    Возвращает {"in", "out", "usd", "asked": {модель: пар}, "merged"}."""
-    total = {"in": 0, "out": 0, "usd": 0.0, "asked": {}, "merged": 0}
+def merge_todo(state: dict, now: str, vectors: dict) -> list[tuple[str, str]]:
+    """Пары сюжетов для склейки. Пара идёт к модели, только если: хотя бы один сюжет видимый (два невидимых обрывка
+    читателю не мешают, а невидимый рядом с видимым — новость, которая должна была лечь в видимый: пришла раньше него
+    или модель ошиблась), хотя бы один вырос с прошлой склейки, лучшая пара новостей похожа не меньше MERGE_SIM
+    (одиночка с видимым — MERGE_FRAGMENT_SIM), у сюжетов есть общий участник (entities; не нужен, если сходство не ниже
+    MERGE_SURE_SIM), пару ещё не признавали разными — или с тех пор один из сюжетов вырос вдвое — и её части не
+    разделяли руками (split, unmerge). Отмечает время склейки: следующая — через MERGE_EVERY."""
     stories, checked = state["stories"], state.setdefault("checked", {})
     last = state.get("merged_at") or ""
     again = set(state.pop("merge_again", []))  # склеенные в прошлый проход: их пары с соседями ещё не проверены
@@ -473,7 +455,7 @@ def merge(state: dict, now: str, vectors: dict, ask) -> dict:
     shown = {sid for sid in set(owners) if visible(state, sid)}
     state["merged_at"] = now
     if len(live_urls) < 2:
-        return total
+        return []
     sims = np.stack([vectors[u] for u in live_urls])
     sims = sims @ sims.T
     rows, cols = np.nonzero(np.triu(sims, 1) >= min(MERGE_SIM, MERGE_FRAGMENT_SIM))
@@ -493,23 +475,58 @@ def merge(state: dict, now: str, vectors: dict, ask) -> dict:
             continue
         if sim >= MERGE_SURE_SIM or _share_entities(state, a, b):
             todo.append((a, b))
+    return todo
 
-    same = _same_pairs(state, todo, vectors, MERGE_MODEL, MERGE_EFFORT, ask, total)
+
+def merge_requests(state: dict, todo: list[tuple[str, str]], vectors: dict) -> list[str]:
+    """Запросы склейки: пачки по MERGE_BATCH пар, k-я — пары todo[k * MERGE_BATCH:…]. Системный промпт — MERGE_PROMPT."""
+    contents = []
+    for start in range(0, len(todo), MERGE_BATCH):
+        chunk = todo[start:start + MERGE_BATCH]
+        aliases = {}
+        for a, b in chunk:
+            for s in (a, b):
+                aliases.setdefault(s, f"S{len(aliases)}")
+        contents.append(json.dumps({"stories": [{"id": al, "news": _shown(state, s, vectors, MERGE_SHOWN, detail=True)}
+                                                for s, al in aliases.items()],
+                                    "pairs": [{"id": f"P{n}", "a": aliases[a], "b": aliases[b]}
+                                              for n, (a, b) in enumerate(chunk)]}, ensure_ascii=False))
+    return contents
+
+
+def merge_answer(answer: dict, k: int) -> dict[int, str]:
+    """Ответ на k-ю пачку: номера пар в todo, которые модель считает одной историей, → общее событие, которое она назвала."""
+    return {k * MERGE_BATCH + int(p["id"][1:]): p["event"].strip() for p in answer["pairs"]
+            if p["same"] and p["event"].strip() and p["id"][1:].isdigit()}
+
+
+def merge_apply(state: dict, now: str, todo: list[tuple[str, str]], same: dict[int, str], asked: set[int]) -> int:
+    """Склейка по ответам модели: same — пары todo, признанные одной историей, asked — на какие пары модель ответила.
+    Ответ мог прийти позже (пакетный режим): пары, чьих сюжетов уже нет или которые с тех пор разделили руками, —
+    мимо. Каждая склейка — в журнал state["merges"] с частями, которые принёс склеенный сюжет: по нему unmerge её
+    отменяет. Возвращает, сколько склеено."""
+    stories, checked = state["stories"], state.setdefault("checked", {})
+    todo = [(a, b) if a in stories and b in stories and not _apart(state, a, b) else None for a, b in todo]
+    shown = {s for pair in todo if pair for s in pair if visible(state, s)}
     # за проход сюжет склеивается не больше одного раза: цепочки a ← b ← c на первом прогоне стянули аварию,
     # границу и ДТП в один сюжет на 450 новостей. Остальные пары с ним проверим в следующий раз, уже со склеенным.
     # Невидимые обрывки цепочку не строят: видимый сюжет за проход принимает их сколько угодно
     used, merges = set(), []
-    for n, (a, b) in enumerate(todo):
+    for n, pair in enumerate(todo):
+        if pair is None:
+            continue
+        a, b = pair
         if n in same and a not in used and b not in used:
             if a in shown and b in shown:
                 used.update((a, b))
                 merges.append((a, b, same[n]))
-            else:  # обрывок — в видимый, а не наоборот
+            elif a in shown or b in shown:  # обрывок — в видимый, а не наоборот
                 gone = a if a not in shown else b
                 used.add(gone)
                 merges.append((b if gone == a else a, gone, same[n]))
-    for a, b in todo:
-        if not {(a, b), (b, a)} & {m[:2] for m in merges} and a not in used and b not in used:
+    for n, pair in enumerate(todo):
+        if pair and n in asked and not {pair, pair[::-1]} & {m[:2] for m in merges} and not set(pair) & used:
+            a, b = pair
             checked[f"{a}|{b}"] = [len(stories[a]["urls"]), len(stories[b]["urls"])]
 
     moved = {}  # склеенный сюжет → куда ушёл: видимый мог принять обрывки и сам уйти в другой видимый
@@ -530,7 +547,6 @@ def merge(state: dict, now: str, vectors: dict, ask) -> dict:
         stories[keep]["updated"] = max(stories[keep]["updated"], stories[gone]["updated"])
         state.setdefault("merged", {})[gone] = keep
         del stories[gone]
-        total["merged"] += 1
     # склеенный сюжет вырос, но updated у него — время новостей, а не склейки: без пометки его пары, отложенные
     # из-за «не больше одного раза за проход», ждали бы новой новости
     grown = set()
@@ -538,40 +554,75 @@ def merge(state: dict, now: str, vectors: dict, ask) -> dict:
         while keep in moved:
             keep = moved[keep]
         grown.add(keep)
-    state["merge_again"] = sorted(grown)
+    state["merge_again"] = sorted(set(state.get("merge_again", [])) | grown)
+    return len(merges)
+
+
+def merge(state: dict, now: str, vectors: dict, ask) -> dict:
+    """Склейка дублей — сюжетов, на которые распалось одно событие (merge_todo), сразу: решает Sonnet.
+    Возвращает {"in", "out", "usd", "asked": {модель: пар}, "merged"}."""
+    total = {"in": 0, "out": 0, "usd": 0.0, "asked": {}, "merged": 0}
+    todo = merge_todo(state, now, vectors)
+    same = {}
+    for k, content in enumerate(merge_requests(state, todo, vectors)):
+        answer, usage = ask(MERGE_PROMPT, content, MERGE_SCHEMA, MERGE_EFFORT, MERGE_MODEL)
+        for key in ("in", "out", "usd"):
+            total[key] += usage.get(key, 0)
+        same |= merge_answer(answer, k)
+    total["asked"][MERGE_MODEL] = len(todo)
+    total["merged"] = merge_apply(state, now, todo, same, set(range(len(todo))))
     return total
 
 
-def find_lines(state: dict, now: str, ask) -> dict:
-    """Отдельные события внутри больших видимых сюжетов (Sonnet) — в свои сюжеты (_spin_off); что нашли — в
-    state["lines"][сюжет]: {"size", "t", "found"}. Сюжет проверяем, когда в нём LINES_MIN новостей, и снова — когда
-    в нём прибавилось LINES_STEP. Модели не верим на слово: событие — не меньше LINES_NEWS новостей и LINES_OUTLETS изданий,
-    и в сюжете остаётся не меньше LINES_NEWS. Возвращает {"in", "out", "usd", "checked", "found", "spun": [(сюжет, имя)]}."""
+def lines_todo(state: dict, only: set[str] | None = None) -> list[str]:
+    """Большие видимые сюжеты, которые пора проверить на отдельные события: в сюжете LINES_MIN новостей, а с прошлой
+    проверки прибавилось LINES_STEP. only — проверять только эти (например, топ)."""
+    lines = state.get("lines", {})
+    return [sid for sid, story in state["stories"].items()
+            if (only is None or sid in only) and len(story["urls"]) >= LINES_MIN
+            and len(story["urls"]) >= lines.get(sid, {}).get("size", 0) + LINES_STEP and visible(state, sid)]
+
+
+def lines_request(state: dict, sid: str) -> str:
+    """Запрос проверки сюжета на отдельные события. Системный промпт — LINES_PROMPT."""
+    items = [state["items"][u] for u in state["stories"][sid]["urls"]]
+    return json.dumps({"news": [{"n": it["n"], "t": it["seen"][5:16], "source": it["source"],
+                                 "what": it.get("what") or it["title"]} for it in items]}, ensure_ascii=False)
+
+
+def lines_apply(state: dict, now: str, sid: str, answer: dict, asked: int | None = None) -> list[dict]:
+    """Ответ проверки — отдельные события в свои сюжеты (_spin_off); что нашли — в state["lines"][сюжет]: {"size", "t",
+    "found"}. Модели не верим на слово: событие — не меньше LINES_NEWS новостей и LINES_OUTLETS изданий, и в сюжете
+    остаётся не меньше LINES_NEWS. Ответ мог прийти позже (пакетный режим): номера, которых в сюжете уже нет, — мимо,
+    а size — сколько новостей было в сюжете, когда его отдали модели (asked): пришедшие потом она не видела.
+    Возвращает найденные события: {"name", "why", "news", "to"}."""
+    story = state["stories"][sid]
+    size = len(story["urls"])
+    by_n = {state["items"][u]["n"]: u for u in story["urls"]}
+    items = {n: state["items"][u] for n, u in by_n.items()}
+    found, taken = [], set()
+    for line in answer["lines"]:
+        news = sorted({n for n in line["news"] if n in items} - taken)  # новость — только в одно событие
+        if (len(news) >= LINES_NEWS and len({items[n]["source"] for n in news}) >= LINES_OUTLETS
+                and size - len(taken) - len(news) >= LINES_NEWS and line["name"].strip()):
+            taken |= set(news)
+            found.append({"name": clean_name(line["name"]), "why": line["why"].strip(), "news": news})
+    for line in found:
+        line["to"] = _spin_off(state, sid, [by_n[n] for n in line["news"]], now)
+    state.setdefault("lines", {})[sid] = {"size": asked or len(story["urls"]), "t": now, "found": found}
+    return found
+
+
+def find_lines(state: dict, now: str, ask, only: set[str] | None = None) -> dict:
+    """Отдельные события внутри больших видимых сюжетов (lines_todo) — сразу: решает Sonnet.
+    Возвращает {"in", "out", "usd", "checked", "found", "spun": [(сюжет, имя)]}."""
     total = {"in": 0, "out": 0, "usd": 0.0, "checked": 0, "found": 0, "spun": []}
-    lines = state.setdefault("lines", {})
-    for sid, story in list(state["stories"].items()):  # выделенные сюжеты добавляются по ходу
-        size = len(story["urls"])
-        if size < LINES_MIN or size < lines.get(sid, {}).get("size", 0) + LINES_STEP or not visible(state, sid):
-            continue
-        by_n = {state["items"][u]["n"]: u for u in story["urls"]}
-        items = {n: state["items"][u] for n, u in by_n.items()}
-        content = json.dumps({"news": [{"n": n, "t": it["seen"][5:16], "source": it["source"],
-                                        "what": it.get("what") or it["title"]} for n, it in items.items()]},
-                             ensure_ascii=False)
-        answer, usage = ask(LINES_PROMPT, content, LINES_SCHEMA, LINES_EFFORT, MERGE_MODEL)
+    for sid in lines_todo(state, only):  # выделенные по ходу сюжеты не проверяем: их нет в списке
+        answer, usage = ask(LINES_PROMPT, lines_request(state, sid), LINES_SCHEMA, LINES_EFFORT, MERGE_MODEL)
         for k in ("in", "out", "usd"):
             total[k] += usage.get(k, 0)
-        found, taken = [], set()
-        for line in answer["lines"]:
-            news = sorted({n for n in line["news"] if n in items} - taken)  # новость — только в одно событие
-            if (len(news) >= LINES_NEWS and len({items[n]["source"] for n in news}) >= LINES_OUTLETS
-                    and size - len(taken) - len(news) >= LINES_NEWS and line["name"].strip()):
-                taken |= set(news)
-                found.append({"name": clean_name(line["name"]), "why": line["why"].strip(), "news": news})
-        for line in found:
-            line["to"] = _spin_off(state, sid, [by_n[n] for n in line["news"]], now)
-            total["spun"].append((line["to"], line["name"]))
-        lines[sid] = {"size": len(story["urls"]), "t": now, "found": found}
+        found = lines_apply(state, now, sid, answer)
+        total["spun"] += [(line["to"], line["name"]) for line in found]
         total["checked"] += 1
         total["found"] += len(found)
     return total

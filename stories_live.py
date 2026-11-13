@@ -47,11 +47,12 @@ START = "2026-11-12T16:05:00+00:00"
 # новость без перевода ждёт одну сборку (перевод мог опоздать), потом идёт по оригинальному заголовку
 WAIT_TRANSLATION = timedelta(minutes=20)
 # константы stories.py, которые не меняют раскладку, — не в отпечатке: их правка не раскладывает всё заново
-NOT_RULES = {"LINES_STEP"}
+NOT_RULES = {"LINES_STEP", "MERGE_EVERY"}
 # прежние отпечатки, при которых раскладку не пересобираем — новые правила действуют на следующие новости:
 # 93f151fd03 — до 13.11, когда перепроверку больших сюжетов перевели с роста в 1.5 раза на LINES_STEP;
-# dfadd2988f — до 13.11, когда склейка стала называть общее событие пары (event)
-SAME_RULES = {"93f151fd03", "dfadd2988f"}
+# dfadd2988f — до 13.11, когда склейка стала называть общее событие пары (event);
+# 9e34e14300 — до 14.11, когда склейку перевели с раза в час на раз в два часа (MERGE_EVERY ушло из отпечатка)
+SAME_RULES = {"93f151fd03", "dfadd2988f", "9e34e14300"}
 # сюжет, который не обновлялся дольше, убираем из состояния вместе с его новостями: архив их уже забыл
 # (ARCHIVE_DAYS в build.py — 4 дня), так что заново раскладывать их не придётся
 FORGET = timedelta(days=5)
@@ -64,6 +65,13 @@ HEAT_HALF_LIFE = timedelta(hours=6)
 # заголовок сюжета — из его новостей за столько часов до последней: самая типичная за всё время 13.11 держала
 # анонс «пройдут консультации», когда они давно прошли
 HEADLINE_RECENT = timedelta(hours=6)
+# склейка, деление больших сюжетов и проверка дня — пакетами (Message Batches API): вдвое дешевле, ответ — обычно
+# за минуты, самое позднее за сутки. Пакет отправляет одна сборка, ответы применяет первая сборка после того, как они
+# пришли; пока пакет у модели, нового того же вида не шлём. Раскладка заново — сразу: она идёт по сборкам подряд,
+# и каждой нужны склейки предыдущей
+BATCH_DISCOUNT = 0.5
+BATCH_KINDS = {"merge": "склейка", "lines": "деление", "audit": "проверка дня"}
+BATCH_GIVE_UP = timedelta(days=2)  # пакет, который столько не удаётся проверить, забываем: модель держит его сутки
 PROGRESS_FROM = 200  # с стольких новостей за сборку (раскладка заново) — прогресс в лог
 LOCAL_TZ = ZoneInfo("Europe/Belgrade")
 # кодовые имена видимых сюжетов — чтобы узнавать сюжет по ссылке, а не по номеру. Имя даётся один раз и не меняется:
@@ -203,30 +211,154 @@ def _apply(state: dict, vectors: dict, now: str, c: dict, by_n: dict) -> str:
     raise ValueError(f"не знаю команду {c['do']}")
 
 
-def ask_with_spending(state: dict, day: str):
-    """ask для stories.update и stories.merge: запрос к модели, расход — в state["spent"][день], и по шагам —
-    в state["spent"][день]["steps"]: шаг узнаём по системному промпту."""
+def make_client():
     import anthropic
 
-    client = anthropic.Anthropic(max_retries=translate.API_RETRIES)
-    spent = state.setdefault("spent", {})
-    steps = {stories.SYSTEM_PROMPT: "раскладка", stories.RECHECK_PROMPT: "перепроверка", stories.MERGE_PROMPT: "склейка",
-             stories.LINES_PROMPT: "деление", NAME_PROMPT: "имена", stories_audit.AUDIT_PROMPT: "аудит",
-             stories_audit.ADVICE_PROMPT: "аудит"}
+    return anthropic.Anthropic(max_retries=translate.API_RETRIES)
 
-    def ask(system: str, content: str, schema: dict, effort: str = stories.EFFORT,
-            model: str = stories.MODEL, price: tuple[float, float] | None = None) -> tuple[dict, dict]:
-        answer, usage = stories.ask_model(client, system, content, schema, effort, model, price)
+
+def step_of(system: str) -> str:
+    """Шаг сборки по системному промпту запроса — для расхода по шагам."""
+    return {stories.SYSTEM_PROMPT: "раскладка", stories.RECHECK_PROMPT: "перепроверка", stories.MERGE_PROMPT: "склейка",
+            stories.LINES_PROMPT: "деление", NAME_PROMPT: "имена", stories_audit.AUDIT_PROMPT: "аудит",
+            stories_audit.ADVICE_PROMPT: "аудит"}.get(system, "другое")
+
+
+def spender(state: dict, day: str):
+    """spend(шаг, usage): расход запроса — в state["spent"][день] и по шагам — в state["spent"][день]["steps"]."""
+    spent = state.setdefault("spent", {})
+
+    def spend(step: str, usage: dict) -> None:
         total = spent.setdefault(day, {"calls": 0, "in": 0, "out": 0, "usd": 0.0})
         total["calls"] += 1
         for k in ("in", "out", "usd", "read"):  # read — часть входа из кэша
             total[k] = round(total.get(k, 0) + usage[k], 6)
-        step = total.setdefault("steps", {}).setdefault(steps.get(system, "другое"), {"calls": 0, "usd": 0.0})
+        step = total.setdefault("steps", {}).setdefault(step, {"calls": 0, "usd": 0.0})
         step["calls"] += 1
         step["usd"] = round(step["usd"] + usage["usd"], 6)
+
+    return spend
+
+
+def ask_with_spending(client, spend):
+    """ask для stories.update и stories.merge: запрос к модели сразу, расход — spend."""
+
+    def ask(system: str, content: str, schema: dict, effort: str = stories.EFFORT,
+            model: str = stories.MODEL, price: tuple[float, float] | None = None) -> tuple[dict, dict]:
+        answer, usage = stories.ask_model(client, system, content, schema, effort, model, price)
+        spend(step_of(system), usage)
         return answer, usage
 
     return ask
+
+
+def send(client, state: dict, kind: str, calls: list[tuple], sent: dict, now: str, ask) -> tuple[dict, float] | None:
+    """Запросы calls — [(system, content, schema, effort, model, price)] — пакетом вида kind (BATCH_KINDS); sent —
+    что понадобится, чтобы применить ответы. Ушли пакетом — None: ответы соберёт collect. Пакет не ушёл или
+    спрашивать нечего — ответы сразу: ({номер запроса: ответ}, во что обошлись)."""
+    if calls:
+        try:
+            batch = client.messages.batches.create(requests=[{"custom_id": str(k), "params": stories.request(*call[:5])}
+                                                             for k, call in enumerate(calls)])
+            state.setdefault("batches", {})[kind] = {
+                "id": batch.id, "t": now, "steps": [step_of(c[0]) for c in calls],
+                "prices": [c[5] or stories.PRICES[c[4]] for c in calls], **sent}
+            return None
+        except Exception as exc:  # noqa: BLE001
+            print(f"Сюжеты: пакет «{BATCH_KINDS[kind]}» не ушёл, спрашиваем сразу — {type(exc).__name__}: {exc}"[:300],
+                  file=sys.stderr)
+    answers, usd = {}, 0.0
+    for k, call in enumerate(calls):
+        answers[k], usage = ask(*call)
+        usd += usage["usd"]
+    return answers, usd
+
+
+def collect(client, state: dict, now: str, spend) -> dict[str, tuple[dict, dict, float]]:
+    """Пакеты, на которые модель уже ответила: вид → (что отправили, ответы {номер запроса: ответ}, во что обошлись).
+    Расход — со скидкой BATCH_DISCOUNT. Запрос без ответа (ошибка, обрезан) пропадает: его сюжеты попадут в следующий
+    пакет того же вида, если всё ещё подходят."""
+    done = {}
+    for kind, sent in list(state.get("batches", {}).items()):
+        try:
+            if client.messages.batches.retrieve(sent["id"]).processing_status != "ended":
+                continue
+            results = list(client.messages.batches.results(sent["id"]))
+        except Exception as exc:  # noqa: BLE001
+            print(f"Сюжеты: пакет «{BATCH_KINDS[kind]}» не проверить — {type(exc).__name__}: {exc}"[:300], file=sys.stderr)
+            if datetime.fromisoformat(now) - datetime.fromisoformat(sent["t"]) > BATCH_GIVE_UP:
+                del state["batches"][kind]
+            continue
+        answers, usd = {}, 0.0
+        for r in results:
+            k = int(r.custom_id)
+            if r.result.type != "succeeded":
+                continue
+            try:
+                answer, usage = stories.answer_of(r.result.message, sent["prices"][k])
+            except (RuntimeError, ValueError) as exc:
+                print(f"Сюжеты: пакет «{BATCH_KINDS[kind]}», запрос {k} — {exc}"[:300], file=sys.stderr)
+                continue
+            usage = {**usage, "usd": usage["usd"] * BATCH_DISCOUNT}
+            spend(sent["steps"][k], usage)
+            answers[k], usd = answer, usd + usage["usd"]
+        if len(answers) < len(results):
+            print(f"Сюжеты: пакет «{BATCH_KINDS[kind]}» — без ответа {len(results) - len(answers)} из {len(results)}",
+                  file=sys.stderr)
+        del state["batches"][kind]
+        done[kind] = (sent, answers, usd)
+    return done
+
+
+def cancel(client, state: dict) -> None:
+    """Раскладка заново: пакеты, ещё ждущие ответа, — отменить. Их ответы про сюжеты прежней раскладки, применить их
+    не к чему, а запросы, до которых модель не дошла, при отмене не оплачиваются."""
+    for kind, sent in state.get("batches", {}).items():
+        try:
+            client.messages.batches.cancel(sent["id"])
+            print(f"Сюжеты: пакет «{BATCH_KINDS[kind]}» отменён — раскладываем заново", file=sys.stderr)
+        except Exception as exc:  # noqa: BLE001 — уже закончился или недоступен: заплачено, ответы просто не нужны
+            print(f"Сюжеты: пакет «{BATCH_KINDS[kind]}» не отменить — {type(exc).__name__}: {exc}"[:300], file=sys.stderr)
+
+
+def merge_later(client, state: dict, now: str, vectors: dict, ask) -> int:
+    """Склейка пакетом: пары — к модели, ответы применит сборка, в которую они придут. Сколько склеено сразу (пакет
+    не ушёл)."""
+    todo = stories.merge_todo(state, now, vectors)
+    calls = [(stories.MERGE_PROMPT, c, stories.MERGE_SCHEMA, stories.MERGE_EFFORT, stories.MERGE_MODEL, None)
+             for c in stories.merge_requests(state, todo, vectors)]
+    got = send(client, state, "merge", calls, {"todo": todo}, now, ask)
+    return 0 if got is None else apply_merge(state, now, {"todo": todo}, got[0])
+
+
+def apply_merge(state: dict, now: str, sent: dict, answers: dict) -> int:
+    todo = [tuple(pair) for pair in sent["todo"]]
+    same, asked = {}, set()
+    for k, answer in answers.items():
+        same |= stories.merge_answer(answer, k)
+        asked |= set(range(k * stories.MERGE_BATCH, min((k + 1) * stories.MERGE_BATCH, len(todo))))
+    return stories.merge_apply(state, now, todo, same, asked)
+
+
+def apply_lines(state: dict, now: str, sent: dict, answers: dict) -> tuple[int, int]:
+    """Ответы проверки больших сюжетов на отдельные события: (проверено, выделено событий)."""
+    found = 0
+    for k, answer in answers.items():
+        sid = sent["sids"][k]
+        if sid in state["stories"]:  # мог уйти склейкой, пока ждали ответа
+            lines = stories.lines_apply(state, now, sid, answer, sent["sizes"][k])
+            name_spun(state, [(line["to"], line["name"]) for line in lines])
+            found += len(lines)
+    return len(answers), found
+
+
+def name_spun(state: dict, spun: list[tuple[str, str]]) -> None:
+    """Выделенному сюжету — имя события, которое дала модель; исходный назовём заново: его имя могло быть и про
+    выделенное событие («Adriatic нефтепровод акцизы»)."""
+    for sid, name in spun:
+        state.setdefault("names", {})[sid] = name
+        state.setdefault("named_at", {})[sid] = len(state["stories"][sid]["urls"])
+        state["named_at"][state["spun"][sid]] = 0
 
 
 def name_stories(state: dict, vectors: dict, ask) -> int:
@@ -261,14 +393,17 @@ def fingerprint() -> str:
 
 
 def run(archive: dict, sections: dict) -> None:
-    """Одна сборка: новые новости архива — в сюжеты, раз в час склейка, потом страница. sections — {id: название}."""
+    """Одна сборка: ответы пакетов, пришедшие с прошлой сборки, — в раскладку; новые новости архива — в сюжеты,
+    раз в MERGE_EVERY склейка, деление больших сюжетов топа, вечером проверка дня, потом страница. sections — {id: название}."""
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     state, vectors = load_state()
+    client = make_client()
     rebuilt = ""
     if state.get("fingerprint") in SAME_RULES:
         state["fingerprint"] = fingerprint()
     if state.get("fingerprint") != fingerprint() or state.get("start") != START:
         rebuilt = "правила изменились" if state.get("start") == START else "новое начало" if state.get("start") else "начало"
+        cancel(client, state)
         # номера новостей и сюжетов дальше растут, а не начинаются заново: старый №1234 из Telegram не попадёт в другую
         # новость. Применённые команды заново не применяем: к новой раскладке они могут не подходить
         keep = {k: state[k] for k in ("spent", "next_n", "next_id", "commands_done", "commands") if k in state}
@@ -293,19 +428,27 @@ def run(archive: dict, sections: dict) -> None:
     done = apply_commands(state, vectors, now)
 
     day = datetime.fromisoformat(now).astimezone(LOCAL_TZ).date().isoformat()
-    ask = ask_with_spending(state, day)
+    spend = spender(state, day)
+    ask = ask_with_spending(client, spend)
     usd, merges = state.get("spent", {}).get(day, {}).get("usd", 0), len(state.get("merges", []))
+    # ответы пакетов прошлых сборок — до новых новостей: склейки и выделения применяем к раскладке, которую видела модель
+    arrived = collect(client, state, now, spend)
+    checked = found = 0
+    merged = apply_merge(state, now, *arrived["merge"][:2]) if "merge" in arrived else 0
+    if "lines" in arrived:
+        checked, found = apply_lines(state, now, *arrived["lines"][:2])
     # по сборкам, в которых новости впервые появились (seen), как в прогонах на снимках: при старте с нуля так
     # время сюжетов настоящее, а не время этой сборки. Новость, ждавшая перевода, идёт со временем прошлой сборки
     builds = {}
     for url, item in items:
         builds.setdefault(max(item["seen"], state.get("built", "")), []).append((url, item))
-    decided = merged = laid = 0
+    decided = laid = 0
     started, step = time.monotonic(), max(len(items) // 10, 1)  # большая раскладка — в лог примерно каждые 10%
     for seen, group in sorted(builds.items()):
         decided += stories.update(state, group, seen, vectors, ask)["decided"]
-        if stories.merge_due(state, seen):
-            merged += stories.merge(state, seen, vectors, ask)["merged"]
+        if stories.merge_due(state, seen) and "merge" not in state.get("batches", {}):
+            merged += (stories.merge(state, seen, vectors, ask)["merged"] if rebuilt
+                       else merge_later(client, state, seen, vectors, ask))
         laid += len(group)
         if len(items) >= PROGRESS_FROM and laid // step > (laid - len(group)) // step and laid < len(items):
             took = time.monotonic() - started
@@ -316,20 +459,43 @@ def run(archive: dict, sections: dict) -> None:
         print(f"Сюжеты: разложено всё за {(time.monotonic() - started) / 60:.0f} мин; "
               "имена и поиск отдельных событий в больших сюжетах…", file=sys.stderr)
     name_stories(state, vectors, ask)
-    lines = stories.find_lines(state, now, ask)
-    for sid, name in lines["spun"]:  # выделенному сюжету — имя события, которое дала модель; исходный назовём заново:
-        # его имя могло быть и про выделенное событие («Adriatic нефтепровод акцизы»)
-        state["names"][sid], state.setdefault("named_at", {})[sid] = name, len(state["stories"][sid]["urls"])
-        state["named_at"][state["spun"][sid]] = 0
-    # сюжеты, которые сейчас в топе, — для вечерней проверки; сама проверка — раз в сутки после AUDIT_HOUR.
-    # Ошибка проверки не роняет сборку: повторим в следующей
+    # сюжеты, которые сейчас в топе, — для вечерней проверки и деления: на отдельные события проверяем только топ
+    # (сюжеты за день, хоть раз бывшие в нём), остальные читатель почти не открывает
     cutoff = (datetime.fromisoformat(now) - PAGE_WINDOW).isoformat()
     stories_audit.note_top(state, day, {sid: heat(state, sid, now) for sid, s in state["stories"].items()
                                         if s["updated"] >= cutoff and stories.visible(state, sid)})
-    audit, audit_day = None, stories_audit.due(state, now, LOCAL_TZ)
-    if audit_day:
+    top = set(state["top"][day])
+    if rebuilt:
+        lines = stories.find_lines(state, now, ask, top)
+        name_spun(state, lines["spun"])
+        checked, found = checked + lines["checked"], found + lines["found"]
+    elif "lines" not in state.get("batches", {}):
+        sids = stories.lines_todo(state, top)
+        calls = [(stories.LINES_PROMPT, stories.lines_request(state, sid), stories.LINES_SCHEMA, stories.LINES_EFFORT,
+                  stories.MERGE_MODEL, None) for sid in sids]
+        sent = {"sids": sids, "sizes": [len(state["stories"][sid]["urls"]) for sid in sids]}
+        if got := send(client, state, "lines", calls, sent, now, ask):
+            c, f = apply_lines(state, now, sent, got[0])
+            checked, found = checked + c, found + f
+    # проверка дня — раз в сутки после AUDIT_HOUR, пакетом; отчёт — в сборке, в которую придут ответы.
+    # Ошибка проверки не роняет сборку: не пришли ответы — отправим заново в следующей
+    audit, audit_day = None, ""
+    if "audit" in arrived or stories_audit.due(state, now, LOCAL_TZ):
         try:
-            audit = stories_audit.run(state, audit_day, ask)
+            if "audit" in arrived:
+                sent, answers, spent_usd = arrived["audit"]
+                audit_day = sent["day"]
+                audit = stories_audit.finish(state, audit_day, sent["sids"], sent["chunks"], sent["sizes"], answers,
+                                             spent_usd, ask)
+            else:
+                audit_day = stories_audit.due(state, now, LOCAL_TZ)
+                sids, chunks = stories_audit.todo(state, audit_day)
+                calls = [(stories_audit.AUDIT_PROMPT, stories_audit.request(state, chunk), stories_audit.AUDIT_SCHEMA,
+                          stories_audit.AUDIT_EFFORT, stories_audit.AUDIT_MODEL, stories_audit.AUDIT_PRICE) for chunk in chunks]
+                sizes = {sid: len(state["stories"][sid]["urls"]) for chunk in chunks for sid in chunk}
+                sent = {"day": audit_day, "sids": sids, "chunks": chunks, "sizes": sizes}
+                if got := send(client, state, "audit", calls, sent, now, ask):
+                    audit = stories_audit.finish(state, audit_day, sids, chunks, sizes, *got, ask)
         except Exception as exc:  # noqa: BLE001
             traceback.print_exc()
             print(f"Сюжеты: проверка дня не прошла — {type(exc).__name__}: {exc}"[:300], file=sys.stderr)
@@ -344,7 +510,7 @@ def run(archive: dict, sections: dict) -> None:
     # что сделала эта сборка — сводкой наверху страницы
     state["last"] = {"t": now, "rebuilt": rebuilt, "news": [u for u, _ in items], "commands": [c["result"] for c in done],
                      "merges": [[m["keep"], m["gone"]] for m in state.get("merges", [])[merges:]],
-                     "lines": [lines["checked"], lines["found"]],
+                     "lines": [checked, found],
                      "usd": round(state.get("spent", {}).get(day, {}).get("usd", 0) - usd, 4)}
     forget_old(state, vectors, now)
     state["spent"] = {d: s for d, s in sorted(state.get("spent", {}).items())[-SPENT_DAYS:]}
@@ -632,7 +798,9 @@ td{padding:2px 14px 2px 0}.what{color:#777;font-size:13px}
             "команды: " + "; ".join(e(r) for r in last["commands"]) if last.get("commands") else "",
             (f"большие сюжеты проверены на отдельные события: {last['lines'][0]}, выделено событий {last['lines'][1]}"
              if last.get("lines", [0])[0] else ""),
-            f"запросы к модели ≈ ${last.get('usd', 0):.3f}"]
+            f"запросы к модели ≈ ${last.get('usd', 0):.3f}",
+            "ждут ответа модели: " + ", ".join(f"{BATCH_KINDS[k]} (с {e(local_time(b['t']))})"
+                                               for k, b in state.get("batches", {}).items()) if state.get("batches") else ""]
     summary = " · ".join(x for x in done if x)
     rebuilt_note = (f'<p class="meta">Раскладка заново: здесь все новости с {e(local_time(START))} по порядку, как они '
                     f'приходили; «открыла сюжет» — была в нём первой, остальные добавлялись позже.</p>'

@@ -5,7 +5,8 @@
 Модель (AUDIT_MODEL) читает каждый такой сюжет целиком и отмечает новости, которым в нём не место: чужие и отдельные
 события. Отчёт — в Telegram через приёмник жалоб (path="stories", как итоги команд): доля ошибок, откуда они пришли
 (раскладка, склейка, перепроверка…), готовые команды для бота и предложения по правилам. Итоги дня — в
-state["audits"], уже отмеченные новости — в state["audited_news"]: на следующий день их не повторяем.
+state["audits"], уже отмеченные новости — в state["audited_news"]: на следующий день их не повторяем, а сюжет,
+не изменившийся с прошлой проверки, модель не читает заново (state["audit_seen"]).
 """
 import json
 from collections import Counter
@@ -61,7 +62,7 @@ AUDIT_SCHEMA = {
 }
 
 ADVICE_PROMPT = f"""Ты настраиваешь раскладку новостей по сюжетам в агрегаторе новостей о Сербии. Правила сюжета сейчас: {stories.RULES}
-Как новость попадает в сюжет: раскладка (Haiku решает по новости и похожим сюжетам: join — в сюжет, new — новый сюжет; join с низким сходством перепроверяется), склейка дублей раз в час (Sonnet по паре сюжетов называет общее событие и решает, одна ли это история; одиночка — сюжет из одной новости — тоже идёт в склейку), выделение отдельных событий из больших сюжетов, ручные команды.
+Как новость попадает в сюжет: раскладка (Haiku решает по новости и похожим сюжетам: join — в сюжет, new — новый сюжет; join с низким сходством перепроверяется), склейка дублей раз в два часа (Sonnet по паре сюжетов называет общее событие и решает, одна ли это история; одиночка — сюжет из одной новости — тоже идёт в склейку), выделение отдельных событий из больших сюжетов, ручные команды.
 Вход — JSON: errors — ошибки, найденные проверкой за день: what — новость, story — сюжет, в который она попала, why — почему ей там не место, path — как она туда попала.
 Верни advice — до трёх предложений: pattern — что повторяется в ошибках, change — что поменять и на каком шаге (правило, промпт раскладки или склейки, порог, перепроверка). Единичную ошибку без закономерности не обобщай. Закономерностей нет — пустой advice."""
 
@@ -103,7 +104,9 @@ def due(state: dict, now: str, tz) -> str:
     """День (по Белграду), за который пора проверять, или пустая строка."""
     local = datetime.fromisoformat(now).astimezone(tz)
     day = local.date().isoformat()
-    return day if local.hour >= AUDIT_HOUR and day not in state.get("audits", {}) and state.get("top", {}).get(day) else ""
+    sent = state.get("batches", {}).get("audit", {}).get("day") == day  # уже у модели пакетом
+    return day if (local.hour >= AUDIT_HOUR and day not in state.get("audits", {}) and state.get("top", {}).get(day)
+                   and not sent) else ""
 
 
 def _path(it: dict) -> tuple[str, str]:
@@ -117,41 +120,58 @@ def _path(it: dict) -> tuple[str, str]:
     return PATHS.get(why, why), PATHS.get(why, why) + f": {why}"
 
 
-def run(state: dict, day: str, ask) -> dict:
-    """Проверка дня: findings, итоги в state["audits"][day]. ask(system, content, schema, effort, model, price)."""
+def todo(state: dict, day: str) -> tuple[list[str], list[list[str]]]:
+    """Что проверять за день: (сюжеты топа, пачки сюжетов для модели). Модель читает только сюжеты, изменившиеся
+    с прошлой проверки (state["audit_seen"] — сколько в сюжете было новостей, когда его проверили): в неизменном
+    находки уже были в прошлом отчёте. Пачка — до AUDIT_BATCH новостей, большой сюжет — один."""
+    seen = state.get("audit_seen", {})
+    sids = [sid for sid in state["top"][day] if sid in state["stories"]]
+    chunks, size = [], 0
+    for sid in sorted(sids, key=lambda s: len(state["stories"][s]["urls"])):
+        n = len(state["stories"][sid]["urls"])
+        if seen.get(sid) == n:
+            continue
+        if not chunks or size + n > AUDIT_BATCH:
+            chunks.append([])
+            size = 0
+        chunks[-1].append(sid)
+        size += n
+    return sids, chunks
+
+
+def request(state: dict, chunk: list[str]) -> str:
+    """Запрос проверки пачки сюжетов. Системный промпт — AUDIT_PROMPT."""
+    items = state["items"]
+    return json.dumps({"stories": [
+        {"id": f"S{k}", "name": state.get("names", {}).get(sid, ""),
+         "news": [{"n": items[u]["n"], "t": items[u]["seen"][5:16], "source": items[u]["source"],
+                   "what": items[u].get("what") or items[u]["title"]} for u in state["stories"][sid]["urls"]]}
+        for k, sid in enumerate(chunk)]}, ensure_ascii=False)
+
+
+def finish(state: dict, day: str, sids: list[str], chunks: list[list[str]], sizes: dict[str, int],
+           answers: dict[int, dict], usd: float, ask) -> dict:
+    """Итоги дня по ответам модели на пачки (answers — номер пачки → ответ; ответ мог прийти в другой сборке):
+    находки, советы по правилам (сразу, ask(system, content, schema, effort, model, price)), итоги — в
+    state["audits"][day]. sizes — сколько новостей было в сюжете, когда его отдали модели; usd — во что обошлись
+    пачки."""
     items, by_n = state["items"], {it["n"]: u for u, it in state["items"].items() if it.get("story")}
     reported = set(state.get("audited_news", []))
-    sids = [sid for sid in state["top"][day] if sid in state["stories"]]
-    usd, found, chunk, size = 0.0, [], [], 0
-
-    def ask_chunk(chunk: list[str]) -> None:
-        nonlocal usd
-        content = json.dumps({"stories": [
-            {"id": f"S{k}", "name": state.get("names", {}).get(sid, ""),
-             "news": [{"n": items[u]["n"], "t": items[u]["seen"][5:16], "source": items[u]["source"],
-                       "what": items[u].get("what") or items[u]["title"]} for u in state["stories"][sid]["urls"]]}
-            for k, sid in enumerate(chunk)]}, ensure_ascii=False)
-        answer, usage = ask(AUDIT_PROMPT, content, AUDIT_SCHEMA, AUDIT_EFFORT, AUDIT_MODEL, AUDIT_PRICE)
-        usd += usage["usd"]
+    sids = [sid for sid in sids if sid in state["stories"]]
+    found = []
+    for k, answer in answers.items():
+        chunk = chunks[k]
         for s in answer["stories"]:
-            k = s["id"][1:]
-            if not (k.isdigit() and int(k) < len(chunk)):
+            j = s["id"][1:]
+            if not (j.isdigit() and int(j) < len(chunk)):
                 continue
-            sid = chunk[int(k)]
+            sid = chunk[int(j)]
             for f in s["findings"]:
                 news = sorted({n for n in f["news"] if n in by_n and items[by_n[n]]["story"] == sid})
                 if news and set(news) - reported:
                     found.append({"story": sid, "kind": f["kind"], "news": news, "why": f["why"].strip(), "sure": f["sure"]})
-
-    for sid in sorted(sids, key=lambda s: len(state["stories"][s]["urls"])):
-        n = len(state["stories"][sid]["urls"])
-        if chunk and size + n > AUDIT_BATCH:
-            ask_chunk(chunk)
-            chunk, size = [], 0
-        chunk.append(sid)
-        size += n
-    if chunk:
-        ask_chunk(chunk)
+        for sid in chunk:  # проверен; сюжеты пачки без ответа проверим в следующий раз
+            state.setdefault("audit_seen", {})[sid] = sizes[sid]
 
     news_total = sum(len(state["stories"][sid]["urls"]) for sid in sids)
     flagged = {n for f in found for n in f["news"]}
@@ -165,11 +185,24 @@ def run(state: dict, day: str, ask) -> dict:
         usd += usage["usd"]
         advice = answer["advice"]
     state["audited_news"] = sorted(reported | flagged)
-    state.setdefault("audits", {})[day] = {"stories": len(sids), "news": news_total, "flagged": len(flagged),
+    state["audit_seen"] = {sid: n for sid, n in state.get("audit_seen", {}).items() if sid in state["stories"]}
+    state.setdefault("audits", {})[day] = {"stories": len(sids), "news": news_total,
+                                           "checked": sum(len(chunks[k]) for k in answers), "flagged": len(flagged),
                                            "sure": len({n for f in found if f["sure"] for n in f["news"]}),
                                            "paths": dict(paths), "usd": round(usd, 4)}
     state["audits"] = dict(sorted(state["audits"].items())[-AUDIT_DAYS:])
     return {"found": found, "advice": advice}
+
+
+def run(state: dict, day: str, ask) -> dict:
+    """Проверка дня сразу: пачки (todo) — к модели одна за другой, итоги — finish."""
+    sids, chunks = todo(state, day)
+    answers, usd = {}, 0.0
+    for k, chunk in enumerate(chunks):
+        answers[k], usage = ask(AUDIT_PROMPT, request(state, chunk), AUDIT_SCHEMA, AUDIT_EFFORT, AUDIT_MODEL, AUDIT_PRICE)
+        usd += usage["usd"]
+    return finish(state, day, sids, chunks, {sid: len(state["stories"][sid]["urls"]) for c in chunks for sid in c},
+                  answers, usd, ask)
 
 
 def fix(state: dict, finding: dict) -> str:
@@ -205,6 +238,8 @@ def report(state: dict, day: str, result: dict) -> list[str]:
             "",
             f"В топе за день было {a['stories']} сюжетов, в них {a['news']} новостей. Лишних нашлось {a['flagged']} "
             f"({share:.1f}%), цель — не больше 0.1%."
+            + (f" Заново прочитаны только изменившиеся с прошлой проверки ({a['checked']}), в остальных находки были в прошлых отчётах."
+               if a.get("checked", a["stories"]) < a["stories"] else "")
             + (f" В прошлый раз было {before[-1]['flagged'] / max(before[-1]['news'], 1) * 100:.1f}%." if before else ""),
             *([f"Откуда лишние: {', '.join(f'{k} — {v}' for k, v in paths)}."] if paths else []),
             "",
