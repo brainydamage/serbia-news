@@ -25,6 +25,9 @@ RETRY_EFFORT = "medium"
 RETRY_BATCH = 10
 RETRIES = 2
 WORKERS = 4
+# повторы запроса к API при сбоях (503, перегрузка): паузы растут до 8 с, всего ≈ 40 с. 13.11 сбой «credential
+# validation failed» длился дольше 2 повторов по умолчанию и ронял сборку
+API_RETRIES = 8
 # новости, на которые читатели пожаловались кнопкой «Плохой перевод?» (worker/), переводит модель посильнее.
 # Жалобы сборка берёт по адресу REPORTS_URL с паролем REPORTS_TOKEN (секреты репозитория); без них шаг пропускается
 REVIEW_MODEL = "claude-sonnet-5-5"
@@ -591,7 +594,7 @@ def connect():
     if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
         print("Перевод пропущен: не задан ANTHROPIC_API_KEY", file=sys.stderr)
         return None, None
-    return anthropic, anthropic.Anthropic()
+    return anthropic, anthropic.Anthropic(max_retries=API_RETRIES)
 
 
 def reports_api(data: dict | None = None, path: str = "reports") -> dict | None:

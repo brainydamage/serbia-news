@@ -187,7 +187,7 @@ def ask_with_spending(state: dict, day: str):
     """ask для stories.update и stories.merge: запрос к модели, расход — в state["spent"][день]."""
     import anthropic
 
-    client = anthropic.Anthropic()
+    client = anthropic.Anthropic(max_retries=translate.API_RETRIES)
     spent = state.setdefault("spent", {})
 
     def ask(system: str, content: str, schema: dict, effort: str = stories.EFFORT,
