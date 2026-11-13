@@ -54,6 +54,9 @@ PAGE_WINDOW = timedelta(hours=24)  # на странице — видимые с
 # за HEAT_HALF_LIFE. Свежий сюжет на 5 изданий выше вчерашнего на 25, одна реплика большой сюжет не поднимает,
 # а новый поворот, о котором пишут многие, — поднимает
 HEAT_HALF_LIFE = timedelta(hours=6)
+# заголовок сюжета — из его новостей за столько часов до последней: самая типичная за всё время 13.11 держала
+# анонс «пройдут консультации», когда они давно прошли
+HEADLINE_RECENT = timedelta(hours=6)
 PROGRESS_FROM = 200  # с стольких новостей за сборку (раскладка заново) — прогресс в лог
 LOCAL_TZ = ZoneInfo("Europe/Belgrade")
 # кодовые имена видимых сюжетов — чтобы узнавать сюжет по ссылке, а не по номеру. Имя даётся один раз и не меняется:
@@ -359,8 +362,12 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
 
     def headline(urls: list[str]) -> str:
         """Пока у сюжетов нет своих названий — «что произошло» (what, ровный пересказ без кликбейта из перевода)
-        самой типичной новости: больше всех похожей на остальные новости сюжета. Без what — заголовок."""
+        самой типичной из свежих новостей (HEADLINE_RECENT до последней): больше всех похожей на остальные свежие.
+        Нет свежих с what — из всех. Без what — заголовок."""
+        last = max(datetime.fromisoformat(state["items"][u]["seen"]) for u in urls)
         with_what = [u for u in urls if state["items"][u].get("what") and u in vectors]
+        with_what = [u for u in with_what
+                     if last - datetime.fromisoformat(state["items"][u]["seen"]) <= HEADLINE_RECENT] or with_what
         if not with_what:
             return state["items"][urls[0]]["title"]
         v = np.stack([vectors[u] for u in with_what])
