@@ -45,6 +45,11 @@ COMMANDS_SHOWN = 30  # последних команд с итогом — на 
 START = "2026-11-12T16:05:00+00:00"
 # новость без перевода ждёт одну сборку (перевод мог опоздать), потом идёт по оригинальному заголовку
 WAIT_TRANSLATION = timedelta(minutes=20)
+# константы stories.py, которые не меняют раскладку, — не в отпечатке: их правка не раскладывает всё заново
+NOT_RULES = {"LINES_STEP"}
+# отпечаток до 13.11, когда перепроверку больших сюжетов перевели с роста в 1.5 раза на LINES_STEP: остальные
+# правила те же — раскладку не пересобираем
+SAME_RULES = {"93f151fd03"}
 # сюжет, который не обновлялся дольше, убираем из состояния вместе с его новостями: архив их уже забыл
 # (ARCHIVE_DAYS в build.py — 4 дня), так что заново раскладывать их не придётся
 FORGET = timedelta(days=5)
@@ -239,7 +244,7 @@ def fingerprint() -> str:
     """Отпечаток правил: правила, промпты, модели и пороги stories.py (константы), LAYOUT_VERSION — для логики."""
     # множество — отсортированным: его repr меняет порядок от запуска к запуску, и каждая вторая сборка раскладывала заново
     rules = {k: repr(sorted(v) if isinstance(v, (set, frozenset)) else v) for k, v in sorted(vars(stories).items())
-             if k.isupper()}
+             if k.isupper() and k not in NOT_RULES}
     return hashlib.sha1(json.dumps(rules, ensure_ascii=False).encode()).hexdigest()[:10]
 
 
@@ -248,6 +253,8 @@ def run(archive: dict, sections: dict) -> None:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     state, vectors = load_state()
     rebuilt = ""
+    if state.get("fingerprint") in SAME_RULES:
+        state["fingerprint"] = fingerprint()
     if state.get("fingerprint") != fingerprint() or state.get("start") != START:
         rebuilt = "правила изменились" if state.get("start") == START else "новое начало" if state.get("start") else "начало"
         # номера новостей и сюжетов дальше растут, а не начинаются заново: старый №1234 из Telegram не попадёт в другую

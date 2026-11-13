@@ -177,7 +177,9 @@ LINES_SCHEMA = {
     "additionalProperties": False,
 }
 LINES_MIN = 15  # сюжет проверяем, когда в нём столько новостей,
-LINES_GROW = 1.5  # и снова — когда вырос во столько раз с прошлой проверки
+# и снова — когда в нём прибавилось столько новостей (до 13.11 — когда вырос в 1.5 раза: 156 новостей s3868
+# ждали проверки до 234). Когда проверять — не правило раскладки, в отпечаток не входит (stories_live.fingerprint)
+LINES_STEP = 15
 LINES_NEWS, LINES_OUTLETS = 3, 2  # отдельное событие — не меньше стольких новостей и изданий; и столько же остаётся
 LINES_EFFORT = "medium"
 
@@ -535,13 +537,13 @@ def merge(state: dict, now: str, vectors: dict, ask) -> dict:
 def find_lines(state: dict, now: str, ask) -> dict:
     """Отдельные события внутри больших видимых сюжетов (Sonnet) — в свои сюжеты (_spin_off); что нашли — в
     state["lines"][сюжет]: {"size", "t", "found"}. Сюжет проверяем, когда в нём LINES_MIN новостей, и снова — когда
-    вырос в LINES_GROW раз. Модели не верим на слово: событие — не меньше LINES_NEWS новостей и LINES_OUTLETS изданий,
+    в нём прибавилось LINES_STEP. Модели не верим на слово: событие — не меньше LINES_NEWS новостей и LINES_OUTLETS изданий,
     и в сюжете остаётся не меньше LINES_NEWS. Возвращает {"in", "out", "usd", "checked", "found", "spun": [(сюжет, имя)]}."""
     total = {"in": 0, "out": 0, "usd": 0.0, "checked": 0, "found": 0, "spun": []}
     lines = state.setdefault("lines", {})
     for sid, story in list(state["stories"].items()):  # выделенные сюжеты добавляются по ходу
         size = len(story["urls"])
-        if size < LINES_MIN or size < lines.get(sid, {}).get("size", 0) * LINES_GROW or not visible(state, sid):
+        if size < LINES_MIN or size < lines.get(sid, {}).get("size", 0) + LINES_STEP or not visible(state, sid):
             continue
         by_n = {state["items"][u]["n"]: u for u in story["urls"]}
         items = {n: state["items"][u] for n, u in by_n.items()}
