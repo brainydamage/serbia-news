@@ -204,11 +204,15 @@ def _apply(state: dict, vectors: dict, now: str, c: dict, by_n: dict) -> str:
 
 
 def ask_with_spending(state: dict, day: str):
-    """ask для stories.update и stories.merge: запрос к модели, расход — в state["spent"][день]."""
+    """ask для stories.update и stories.merge: запрос к модели, расход — в state["spent"][день], и по шагам —
+    в state["spent"][день]["steps"]: шаг узнаём по системному промпту."""
     import anthropic
 
     client = anthropic.Anthropic(max_retries=translate.API_RETRIES)
     spent = state.setdefault("spent", {})
+    steps = {stories.SYSTEM_PROMPT: "раскладка", stories.RECHECK_PROMPT: "перепроверка", stories.MERGE_PROMPT: "склейка",
+             stories.LINES_PROMPT: "деление", NAME_PROMPT: "имена", stories_audit.AUDIT_PROMPT: "аудит",
+             stories_audit.ADVICE_PROMPT: "аудит"}
 
     def ask(system: str, content: str, schema: dict, effort: str = stories.EFFORT,
             model: str = stories.MODEL, price: tuple[float, float] | None = None) -> tuple[dict, dict]:
@@ -217,6 +221,9 @@ def ask_with_spending(state: dict, day: str):
         total["calls"] += 1
         for k in ("in", "out", "usd", "read"):  # read — часть входа из кэша
             total[k] = round(total.get(k, 0) + usage[k], 6)
+        step = total.setdefault("steps", {}).setdefault(steps.get(system, "другое"), {"calls": 0, "usd": 0.0})
+        step["calls"] += 1
+        step["usd"] = round(step["usd"] + usage["usd"], 6)
         return answer, usage
 
     return ask
@@ -326,6 +333,9 @@ def run(archive: dict, sections: dict) -> None:
         except Exception as exc:  # noqa: BLE001
             traceback.print_exc()
             print(f"Сюжеты: проверка дня не прошла — {type(exc).__name__}: {exc}"[:300], file=sys.stderr)
+    if rebuilt:  # во сколько обошлась раскладка заново — отдельно: в обычный день её нет
+        today = state["spent"].setdefault(day, {"calls": 0, "in": 0, "out": 0, "usd": 0.0})
+        today["rebuild"] = round(today.get("rebuild", 0) + today["usd"] - usd, 6)
     # время публикации из RSS — для порядка новостей в сюжете. Позже, чем мы её увидели, — неверный часовой пояс у
     # издания (RTS и др.): тогда время, когда увидели
     for u, it in state["items"].items():
@@ -348,9 +358,17 @@ def run(archive: dict, sections: dict) -> None:
         translate.reports_api({"results": [{"text": m} for m in stories_audit.report(state, audit_day, audit)]}, "stories")
     today = state["spent"].get(day, {})
     print(f"Сюжеты: решено {decided}, склеено {merged}, сюжетов {len(state['stories'])}, "
-          f"за сегодня ≈ ${today.get('usd', 0):.3f} (входа из кэша {today.get('read', 0) * 100 // max(today.get('in', 0), 1)}%)",
-          file=sys.stderr)
+          f"за сегодня ≈ ${today.get('usd', 0):.3f} (входа из кэша {today.get('read', 0) * 100 // max(today.get('in', 0), 1)}%"
+          f"{'; ' + by_steps(today) if today.get('steps') else ''})", file=sys.stderr)
     write_page(state, vectors, sections)
+
+
+def by_steps(spent: dict) -> str:
+    """Расход дня по шагам, дорогие первыми; пересборка — отдельно (она входит в шаги)."""
+    parts = [f"{k} ${v['usd']:.2f}" for k, v in sorted(spent.get("steps", {}).items(), key=lambda kv: -kv[1]["usd"])]
+    if spent.get("rebuild"):
+        parts.append(f"из них раскладка заново ${spent['rebuild']:.2f}")
+    return " · ".join(parts)
 
 
 def count(n: int, one: str, few: str, many: str) -> str:
@@ -578,7 +596,7 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
 
     commands = "".join(command(c) for c in reversed(state.get("commands", [])))
 
-    spent = "".join(f"<tr><td>{d}</td><td>{s['calls']}</td><td>${s['usd']:.3f}</td></tr>"
+    spent = "".join(f"<tr><td>{d}</td><td>{s['calls']}</td><td>${s['usd']:.3f}</td><td>{e(by_steps(s))}</td></tr>"
                     for d, s in sorted(state.get("spent", {}).items(), reverse=True))
     total = len(state["stories"])
     style = """<style>body{font:15px/1.45 system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#222;background:#fff}
@@ -648,7 +666,7 @@ td{padding:2px 14px 2px 0}.what{color:#777;font-size:13px}
 <p class="meta">Боту в Telegram: /move 1234 s471 — новость №1234 в сюжет s471 (new — в новый), /split s191 — часть
 в отдельный сюжет, /unmerge s102 — отменить склейку.</p>
 {f"<ul>{commands}</ul>" if commands else "<p class=meta>Пока не было.</p>"}
-<h2 id="spent">Расход</h2><table><tr><td>день</td><td>запросов</td><td>≈ $</td></tr>{spent}</table>
+<h2 id="spent">Расход</h2><table><tr><td>день</td><td>запросов</td><td>≈ $</td><td>по шагам</td></tr>{spent}</table>
 <script>
 // оглавление сбоку на широком экране открыто, на узком — свёрнуто наверху
 if (matchMedia('(min-width:1400px)').matches) document.getElementById('toc').open = true;
