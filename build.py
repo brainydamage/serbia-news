@@ -12,6 +12,7 @@
 import collections
 import html
 import json
+import math
 import re
 import shutil
 import sys
@@ -108,12 +109,12 @@ USER_AGENT = (
 )
 
 
-def fetch(url: str) -> bytes:
+def fetch(url: str, timeout: float = TIMEOUT, agent: str = USER_AGENT) -> bytes:
     req = urllib.request.Request(url, headers={
-        "User-Agent": USER_AGENT,
+        "User-Agent": agent,
         "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
     })
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read()
 
 
@@ -393,46 +394,115 @@ WEATHER_URL = f"https://api.open-meteo.com/v1/forecast?latitude={CITY[0]}&longit
 AIR_URL = f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={CITY[0]}&longitude={CITY[1]}&current=european_aqi,pm2_5"
 METAR_URL = "https://aviationweather.gov/api/data/metar?ids=LYBE&format=json"  # аэропорт Никола Тесла
 METAR_MAX_AGE = 2 * 3600
+# запасная модель — норвежский метеоинститут. Пускает только с User-Agent, где названо приложение и как связаться
+METNO_URL = f"https://api.met.no/weatherapi/locationforecast/2.0/compact?lat={CITY[0]}&lon={CITY[1]}"
+METNO_AGENT = "vestomat.rs https://vestomat.rs"
+METNO_CODES = {"clearsky": 0, "fair": 1, "partlycloudy": 2, "cloudy": 3, "fog": 45}
+# api.open-meteo.com с раннеров GitHub то и дело не отвечает на TLS-рукопожатие (13.11.2026 — 14 сборок из 37, каждая
+# ждала все 25 секунд). Поэтому у шапки таймаут короткий, две попытки, а дальше — следующий источник
+HEADER_TIMEOUT = 8
+HEADER_MAX_AGE = 3 * 3600  # не ответил никто — показываем значение прошлой сборки, если оно не старше трёх часов
 
 
-def observed_code() -> int | None:
-    """Погода по наблюдениям аэропорта в кодах WMO, как у Open-Meteo; None — сводки нет или она устарела."""
-    reports = json.loads(fetch(METAR_URL))
+def fetch_json(url: str, agent: str = USER_AGENT):
+    for attempt in range(2):
+        try:
+            return json.loads(fetch(url, HEADER_TIMEOUT, agent))
+        except (OSError, ValueError):  # URLError, таймаут и HTTPError — наследники OSError
+            if attempt:
+                raise
+
+
+def latest_metar() -> dict | None:
+    """Последняя сводка аэропорта; None — сводки нет или она устарела."""
+    reports = fetch_json(METAR_URL)
     if not reports or datetime.now(timezone.utc).timestamp() - reports[0]["obsTime"] > METAR_MAX_AGE:
         return None
+    return reports[0]
+
+
+def observed_code(report: dict) -> int:
+    """Погода по наблюдениям аэропорта в кодах WMO, как у Open-Meteo."""
     # явления «поблизости» (VCSH, VCTS) — не над станцией, их пропускаем
-    weather = " ".join(w for w in (reports[0].get("wxString") or "").split() if not w.startswith("VC"))
+    weather = " ".join(w for w in (report.get("wxString") or "").split() if not w.startswith("VC"))
     for codes, wmo in (("TS", 95), ("SN SG", 71), ("RA DZ PL GR GS", 61), ("FG", 45)):
         if any(code in weather for code in codes.split()):
             return wmo
-    return {"OVC": 3, "OVX": 3, "BKN": 3, "SCT": 2, "FEW": 1}.get(reports[0].get("cover"), 0)
+    return {"OVC": 3, "OVX": 3, "BKN": 3, "SCT": 2, "FEW": 1}.get(report.get("cover"), 0)
+
+
+def sun_up(now: datetime | None = None) -> int:
+    """1, если солнце над горизонтом в Белграде, — день для значка ☀️/🌙, когда погода не от Open-Meteo (у него это is_day)."""
+    now = now or datetime.now(timezone.utc)
+    b = 2 * math.pi * (now.timetuple().tm_yday - 81) / 365
+    declination = math.radians(23.44) * math.sin(b)
+    equation_of_time = 9.87 * math.sin(2 * b) - 7.53 * math.cos(b) - 1.5 * math.sin(b)  # минуты
+    hour_angle = math.radians((now.hour * 60 + now.minute + 4 * CITY[1] + equation_of_time) / 4 - 180)
+    lat = math.radians(CITY[0])
+    elevation = math.sin(lat) * math.sin(declination) + math.cos(lat) * math.cos(declination) * math.cos(hour_angle)
+    return int(elevation > math.sin(math.radians(-0.83)))  # верхний край диска с поправкой на рефракцию
+
+
+def open_meteo() -> tuple:
+    now = fetch_json(WEATHER_URL)["current"]
+    return now["temperature_2m"], now["weather_code"], now["is_day"]
+
+
+def met_no() -> tuple:
+    now = fetch_json(METNO_URL, METNO_AGENT)["properties"]["timeseries"][0]["data"]
+    symbol = now["next_1_hours"]["summary"]["symbol_code"].split("_")[0]  # partlycloudy_night → partlycloudy
+    code = next((wmo for part, wmo in (("thunder", 95), ("snow", 71), ("rain", 61), ("sleet", 61)) if part in symbol),
+                METNO_CODES.get(symbol, 3))
+    return now["instant"]["details"]["air_temperature"], code, sun_up()
+
+
+def weather_now() -> dict:
+    """Температура — модель Open-Meteo, при сбое met.no, а не ответили обе — термометр аэропорта. Погода — по аэропорту."""
+    try:
+        report = latest_metar()
+    except Exception as exc:  # noqa: BLE001 — тогда по модели
+        print(f"Шапка: METAR не получен — {type(exc).__name__}: {exc}"[:200], file=sys.stderr)
+        report = None
+    for name, source in (("Open-Meteo", open_meteo), ("met.no", met_no)):
+        try:
+            temp, code, day = source()
+            break
+        except Exception as exc:  # noqa: BLE001 — следующий источник
+            print(f"Шапка: погода {name} не получена — {type(exc).__name__}: {exc}"[:200], file=sys.stderr)
+    else:
+        if report is None:
+            raise LookupError("не ответил ни один источник погоды")
+        temp, code, day = report["temp"], None, sun_up()
+    return {"temp": temp, "code": code if report is None else observed_code(report), "day": day}
 
 
 def header_info() -> dict:
-    """Что не ответило, в шапке просто не показываем — сборку это не ломает."""
+    """Что не ответило, берём из прошлой сборки, пока оно не старше HEADER_MAX_AGE, а нет — в шапке просто не показываем.
+    Сборку это не ломает. Поле at — когда значение получено."""
     def rates():
-        eur, rub = (json.loads(fetch(RATE_URL.format(code))) for code in ("eur", "rub"))
+        eur, rub = (fetch_json(RATE_URL.format(code)) for code in ("eur", "rub"))
         return {"EUR": eur["exchange_middle"], "RUB": rub["exchange_middle"], "date": eur["date"]}
 
-    def weather():
-        now = json.loads(fetch(WEATHER_URL))["current"]
-        try:
-            code = observed_code()
-        except Exception as exc:  # noqa: BLE001 — тогда по модели
-            print(f"Шапка: METAR не получен — {type(exc).__name__}: {exc}"[:200], file=sys.stderr)
-            code = None
-        return {"temp": now["temperature_2m"], "code": now["weather_code"] if code is None else code, "day": now["is_day"]}
-
     def air():
-        now = json.loads(fetch(AIR_URL))["current"]
+        now = fetch_json(AIR_URL)["current"]
         return {"aqi": now["european_aqi"], "pm25": now["pm2_5"]}
 
+    try:  # main пишет data.json после шапки, так что здесь ещё прошлая сборка
+        old = json.loads(DATA_FILE.read_text("utf-8"))
+    except (OSError, ValueError):
+        old = {}
+    now = datetime.now(timezone.utc)
     info = {}
-    for key, job in (("rates", rates), ("weather", weather), ("air", air)):
+    for key, job in (("rates", rates), ("weather", weather_now), ("air", air)):
         try:
-            info[key] = job()
+            info[key] = {**job(), "at": now.isoformat(timespec="seconds")}
         except Exception as exc:  # noqa: BLE001
             print(f"Шапка: {key} не получено — {type(exc).__name__}: {exc}"[:200], file=sys.stderr)
+            prev = (old.get("info") or {}).get(key)
+            at = prev and (prev.get("at") or old.get("generated"))  # в сборках до поля at — время самой сборки
+            if at and (now - datetime.fromisoformat(at)).total_seconds() <= HEADER_MAX_AGE:
+                info[key] = {**prev, "at": at}
+                print(f"Шапка: {key} — значение прошлой сборки от {at[:16]} UTC", file=sys.stderr)
     return info
 
 
