@@ -114,7 +114,9 @@ def forget_old(state: dict, vectors: dict, now: str) -> None:
     state["checked"] = {k: v for k, v in state.get("checked", {}).items()
                         if all(s in state["stories"] for s in k.split("|"))}
     state.pop("merged", None)  # кто в кого склеился — только для разбора прогонов; журнал склеек — merges
-    state["names"] = {sid: name for sid, name in state.get("names", {}).items() if sid in state["stories"]}
+    # до 13.11 у имени срезалась и закрывающая кавычка названия внутри: «Разрешение на «Югославию»
+    state["names"] = {sid: name + "»" * (name.count("«") - name.count("»"))
+                      for sid, name in state.get("names", {}).items() if sid in state["stories"]}
     state["named_at"] = {sid: n for sid, n in state.get("named_at", {}).items() if sid in state["stories"]}
     state.pop("names_whole", None)  # прежняя разовая чистка обрезанных имён; теперь имена обновляются, когда сюжет вырос
     state["lines"] = {sid: v for sid, v in state.get("lines", {}).items() if sid in state["stories"]}
@@ -218,7 +220,7 @@ def name_stories(state: dict, vectors: dict, ask) -> int:
         for named in answer["names"]:
             n = named["id"][1:]
             if n.isdigit() and int(n) < len(chunk) and named["name"].strip():
-                name, sid = named["name"].strip().strip("«»\"'."), chunk[int(n)]
+                name, sid = stories.clean_name(named["name"]), chunk[int(n)]
                 # длинное — по словам, не посреди слова
                 names[sid] = name if len(name) <= 50 else name[:50].rsplit(" ", 1)[0]
                 named_at[sid] = len(state["stories"][sid]["urls"])
@@ -432,8 +434,8 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
         checked = (f'проверено {e(local_time(check["t"]))}, когда в сюжете стало {count(check["size"], *NEWS)}'
                    if check else "")
         if out:
-            return ('<div class="lines">Выделены отдельными сюжетами:<ul>'
-                    + "".join(f'<li>{page_link(c)} — {count(len(state["stories"][c]["urls"]), *NEWS)}'
+            return ('<div class="lines">Из этого сюжета ушли в свои сюжеты (новости перенесены туда):<ul>'
+                    + "".join(f'<li>→ {page_link(c)} — {count(len(state["stories"][c]["urls"]), *NEWS)}'
                               f'{" · " + e(why[c]) if c in why else ""}</li>' for c in out)
                     + f'</ul><span class="meta">{checked}</span></div>')
         if check and not check["found"]:
@@ -541,9 +543,9 @@ li{margin:6px 0}.meta{color:#888;font-size:13px}a{color:#1a5fb4}table{border-col
 td{padding:2px 14px 2px 0}.what{color:#777;font-size:13px}
 .toc ol{padding-left:24px;font-size:13px}.toc li{margin:3px 0}
 @media (min-width:1400px){.toc{position:fixed;left:16px;top:16px;width:calc(50vw - 490px);max-height:calc(100vh - 32px);overflow:auto}}
-.lines{background:#fff6d6;border-radius:6px;padding:8px 12px;margin:8px 0}.lines ul{margin:4px 0}
+.lines{background:#f2f2f2;border-radius:6px;padding:8px 12px;margin:8px 0}.lines ul{margin:4px 0}
 .sim.mid{color:#b7791f}.sim.low{color:#c0392b;font-weight:600}.err{background:#fde8d8;color:#a33;padding:8px 12px}
-@media (prefers-color-scheme:dark){body{background:#161616;color:#ddd}details{border-color:#333}a{color:#78aeed}}</style>"""
+@media (prefers-color-scheme:dark){body{background:#161616;color:#ddd}details{border-color:#333}a{color:#78aeed}.lines{background:#262626}}</style>"""
     head = '<!doctype html><html lang="ru"><head><meta charset="utf-8">\n<meta name="viewport" ' \
            'content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">'
     toggle = "document.querySelectorAll('details.story').forEach(d => d.open = %s)"

@@ -556,7 +556,7 @@ def find_lines(state: dict, now: str, ask) -> dict:
             if (len(news) >= LINES_NEWS and len({items[n]["source"] for n in news}) >= LINES_OUTLETS
                     and size - len(taken) - len(news) >= LINES_NEWS and line["name"].strip()):
                 taken |= set(news)
-                found.append({"name": line["name"].strip().strip("«»\"'."), "why": line["why"].strip(), "news": news})
+                found.append({"name": clean_name(line["name"]), "why": line["why"].strip(), "news": news})
         for line in found:
             line["to"] = _spin_off(state, sid, [by_n[n] for n in line["news"]], now)
             total["spun"].append((line["to"], line["name"]))
@@ -564,6 +564,14 @@ def find_lines(state: dict, now: str, ask) -> dict:
         total["checked"] += 1
         total["found"] += len(found)
     return total
+
+
+def clean_name(name: str) -> str:
+    """Имя без кавычек вокруг и точки в конце. Кавычки названия внутри остаются: «Разрешение на «Югославию»»."""
+    name = name.strip().rstrip(".").strip()
+    while len(name) > 1 and name[0] + name[-1] in ("«»", '""', "''") and not set(name[0] + name[-1]) & set(name[1:-1]):
+        name = name[1:-1].strip()
+    return name
 
 
 def _spin_off(state: dict, parent: str, urls: list[str], now: str) -> str:
