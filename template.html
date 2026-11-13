@@ -2,12 +2,20 @@
 <html lang="__HTML_LANG__">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- viewport-fit=cover: на iPhone страница доходит до краёв, а отступы от выреза и полоски «домой» — через env(safe-area-inset-*) -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <!--__HEAD__-->
 <!-- favicon.ico — для браузеров, которые не понимают SVG (иначе рисуют букву-заглушку); остальные берут SVG -->
 <link rel="icon" href="/favicon.ico" sizes="32x32">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<!-- приложение «На экран Домой»: без адресной строки, страницу держит в кеше /sw.js -->
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="apple-mobile-web-app-title" content="Vestomat">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#282c35" media="(prefers-color-scheme: dark)">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;900&display=swap">
@@ -57,6 +65,7 @@
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
+  padding: 0 env(safe-area-inset-right) 0 env(safe-area-inset-left);  /* iPhone боком: вырез слева или справа */
   background: var(--bg);
   color: var(--text);
   font: 16px/1.3 "Nunito", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -1033,6 +1042,8 @@ async function checkVersion() {
 }
 setInterval(checkVersion, 5 * 60e3);
 document.addEventListener("visibilitychange", checkVersion);
+// страницу мог отдать кеш service worker'а (плохая сеть) — тогда она старше сборки, проверяем сразу
+if (navigator.serviceWorker?.controller) checkVersion();
 // «12 мин» и «последний пост 2 ч назад» иначе так и застынут с момента открытия
 setInterval(() => {
   now = Date.now();
@@ -1048,6 +1059,12 @@ function track(path) {
 }
 // на каком языке и алфавите открывают сайт (с учётом сохранённого выбора) — один раз за визит
 addEventListener("load", () => track(`visit/${ru() ? "ru" : state.script}`));
+// сколько читателей открывают сайт как приложение с экрана «Домой»
+if (matchMedia("(display-mode: standalone)").matches || navigator.standalone) addEventListener("load", () => track("visit/app"));
+
+// ---------- приложение ----------
+// /sw.js держит страницу в кеше: с экрана «Домой» она открывается сразу и без сети
+if ("serviceWorker" in navigator) addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
 
 // ---------- wiring ----------
 for (const [id, key] of [["lang", "lang"], ["view", "view"], ["script", "script"]]) {
