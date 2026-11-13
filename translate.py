@@ -124,6 +124,29 @@ SCHEMA = {
 }
 
 
+# русскоязычные новости не переводим, но размечаем — те же правила, что в SYSTEM_PROMPT. Без разметки сюжеты видят
+# у них один заголовок: 12–13.11 модель раскладки дважды сочла «непонятным» анонс матча Сербия — Германия из Google News
+MARKUP_PROMPT = ("Ты размечаешь русскоязычные новости о Сербии. На вход приходит JSON-массив материалов с полями id, title "
+                 "и summary. Для каждого id верни поля разметки.\n\n" + SYSTEM_PROMPT[SYSTEM_PROMPT.index("Тип материала (поле kind)"):])
+MARKUP_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {k: v for k, v in SCHEMA["properties"]["items"]["items"]["properties"].items()
+                               if k == "id" or k in MARKUP},
+                "required": ["id", *MARKUP],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["items"],
+    "additionalProperties": False,
+}
+
+
 def text_key(item: dict) -> str:
     # ключ по тексту, а не по ссылке: если издание поправило заголовок, он переведётся заново.
     # Записи глоссария, которые встречаются в новости, тоже входят в ключ: поправили глоссарий —
@@ -515,6 +538,30 @@ def translate_batch(client, batch: list[tuple[str, dict]], kind: str = "new", st
     return out
 
 
+def markup_batch(client, batch: list[tuple[str, dict]]) -> dict:
+    """Разметка (MARKUP) русскоязычных новостей: ключ → {kind, what, entities, place, topic}."""
+    payload = [{"id": str(n), "title": item["title"], "summary": item.get("summary", "")} for n, (_, item) in enumerate(batch)]
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=16000,
+        system=MARKUP_PROMPT,
+        output_config={"effort": EFFORT, "format": {"type": "json_schema", "schema": MARKUP_SCHEMA}},
+        messages=[{"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
+    )
+    spend("new", len(batch), response.usage)  # в статистике расходов — вместе с новыми переводами: та же модель
+    if response.stop_reason in ("max_tokens", "refusal"):
+        raise RuntimeError(f"stop_reason={response.stop_reason}")
+    by_number = {str(n): key for n, (key, _) in enumerate(batch)}
+    out = {}
+    for t in json.loads(next(b.text for b in response.content if b.type == "text"))["items"]:
+        if t["id"] in by_number:
+            out[by_number[t["id"]]] = {
+                "kind": t["kind"], "what": t["what"].strip() if t["kind"] == "event" else "",
+                "entities": list(dict.fromkeys(e.strip() for e in t["entities"] if e.strip()))[:5],
+                "place": t["place"].strip(), "topic": t["topic"]}
+    return out
+
+
 def spend(kind: str, items: int, usage) -> None:
     with USAGE_LOCK:
         total = USAGE.setdefault(kind, {"items": 0, "in": 0, "out": 0})
@@ -596,12 +643,15 @@ def report_results(reported: set[str], copies: dict, cache: dict, before: dict) 
 def attach_translations(sources: list[dict]) -> None:
     """Добавляет к каждой нерусскоязычной новости поле "ru": {"title", "summary"}, а ко всем — "lead" (см. lead_state).
     MARKUP — оценки модели: kind (event, opinion, service, feature), what (что произошло, одной фразой), entities,
-    place, topic; у русскоязычных новостей и переведённых до 07.11.2026 их нет (what, entities, place, topic — с 07.11 вечера)."""
+    place, topic; у русскоязычных новостей — с 13.11 (markup_batch), у переведённых до 07.11.2026 их нет."""
     # один и тот же текст агентства бывает у нескольких изданий: переводим один раз, раздаём всем
     todo, copies, source_of = {}, {}, {}
+    marks = {}  # русскоязычные: ключ разметки → новости (переводить не нужно, только разметить)
     for src in sources:
         for item in src["items"]:
-            if item.get("lang", src["lang"]) != "ru":
+            if item.get("lang", src["lang"]) == "ru":
+                marks.setdefault("ru" + text_key(item), []).append(item)
+            else:
                 bare = {**item, "title": split_live(item["title"])[1]}
                 key = text_key(bare)
                 todo[key] = bare
@@ -618,7 +668,8 @@ def attach_translations(sources: list[dict]) -> None:
     reported = reported_urls()
     review = [(key, todo[key]) for key, items in copies.items()
               if key in cache and cache[key].get("by") != REVIEW_MODEL and any(i["url"] in reported for i in items)][:REVIEW_LIMIT]
-    anthropic, client = connect() if missing or review else (None, None)
+    unmarked = [(key, items[0]) for key, items in marks.items() if key not in cache]
+    anthropic, client = connect() if missing or review or unmarked else (None, None)
 
     if missing and client:
         batches = [missing[i:i + BATCH_SIZE] for i in range(0, len(missing), BATCH_SIZE)]
@@ -675,6 +726,18 @@ def attach_translations(sources: list[dict]) -> None:
         if stuck:
             reports_api({"items": stuck}, "untranslated")
 
+    if unmarked and client:
+        marked = 0
+        for batch in (unmarked[i:i + BATCH_SIZE] for i in range(0, len(unmarked), BATCH_SIZE)):
+            try:
+                done = markup_batch(client, batch)
+            except Exception as exc:  # noqa: BLE001 — разметим в следующую сборку
+                print(f"  разметка не получена: {type(exc).__name__}: {exc}"[:200], file=sys.stderr)
+                continue
+            cache.update(done)
+            marked += len(done)
+        print(f"Разметка русскоязычных: {marked} из {len(unmarked)}", file=sys.stderr)
+
     before = {}  # переводы до жалобы — чтобы понять, изменила ли что-то сильная модель
     if review and client:
         before = {key: cache[key] for key, _ in review}
@@ -702,7 +765,7 @@ def attach_translations(sources: list[dict]) -> None:
             else:
                 item.pop("ru", None)  # мог остаться в данных прошлой сборки
 
-    judged = {id(item): cache[key] for key, items in copies.items() if key in cache for item in items}
+    judged = {id(item): cache[key] for key, items in [*copies.items(), *marks.items()] if key in cache for item in items}
     for src in sources:
         for item in src["items"]:
             lead = lead_state(item, judged.get(id(item), {}).get("lead_ok"))
@@ -715,4 +778,4 @@ def attach_translations(sources: list[dict]) -> None:
 
     # в кэше держим только то, что сейчас на странице, чтобы файл не рос бесконечно
     CACHE_FILE.parent.mkdir(exist_ok=True)
-    CACHE_FILE.write_text(json.dumps({k: cache[k] for k in todo if k in cache}, ensure_ascii=False), "utf-8")
+    CACHE_FILE.write_text(json.dumps({k: cache[k] for k in [*todo, *marks] if k in cache}, ensure_ascii=False), "utf-8")

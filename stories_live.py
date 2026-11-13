@@ -58,7 +58,7 @@ LOCAL_TZ = ZoneInfo("Europe/Belgrade")
 # его ценность в том, что оно постоянно. На раскладку не влияет, поэтому и не в отпечатке правил
 NAME_PROMPT = """Ты даёшь сюжетам агрегатора новостей о Сербии кодовые имена — чтобы редактор узнавал сюжет по ссылке.
 Вход — JSON: stories — сюжеты, id вида S…, у каждого несколько новостей (что произошло).
-Для каждого сюжета верни name — не больше трёх слов по-русски: главный участник и предмет, по которым сюжет легко узнать и отличить от соседних. Без кавычек и точки в конце."""
+Для каждого сюжета верни name — не больше трёх слов по-русски: главный участник и предмет, по которым сюжет легко узнать и отличить от соседних. Имя — для сюжета целиком, его общего события, а не подробности одной из новостей. Без кавычек и точки в конце."""
 NAME_SCHEMA = {
     "type": "object",
     "properties": {
@@ -76,6 +76,8 @@ NAME_SCHEMA = {
     "additionalProperties": False,
 }
 NAME_BATCH = 30
+NAME_GROW = 3  # имя — заново, когда сюжет вырос во столько раз с тех пор, как его назвали
+NAME_SHOWN = 6  # сколько новостей сюжета видит модель: первая и самые типичные
 
 
 def load_state() -> tuple[dict, dict]:
@@ -111,6 +113,8 @@ def forget_old(state: dict, vectors: dict, now: str) -> None:
                         if all(s in state["stories"] for s in k.split("|"))}
     state.pop("merged", None)  # кто в кого склеился — только для разбора прогонов; журнал склеек — merges
     state["names"] = {sid: name for sid, name in state.get("names", {}).items() if sid in state["stories"]}
+    state["named_at"] = {sid: n for sid, n in state.get("named_at", {}).items() if sid in state["stories"]}
+    state.pop("names_whole", None)  # прежняя разовая чистка обрезанных имён; теперь имена обновляются, когда сюжет вырос
     state["lines"] = {sid: v for sid, v in state.get("lines", {}).items() if sid in state["stories"]}
     # журнал склеек и ручные разделения — пока живы их части
     parts = {it["part"] for it in state["items"].values()}
@@ -196,24 +200,25 @@ def ask_with_spending(state: dict, day: str):
 
 
 def name_stories(state: dict, vectors: dict, ask) -> int:
-    """Кодовые имена видимым сюжетам, у которых их ещё нет (Haiku, пачками). Возвращает, скольким дали имя."""
+    """Кодовые имена видимым сюжетам (Haiku, пачками): тем, у кого имени ещё нет, и тем, кто с тех пор вырос в
+    NAME_GROW раз — имя по первым новостям бывает про одну из них (12.11 матч Сербия — Германия назвался по прогнозу
+    одного букмекера). Возвращает, скольким дали имя."""
     names = state.setdefault("names", {})
-    if not state.get("names_whole"):  # до 12.11 имена резались по 40 знакам посреди слова — такие назвать заново
-        state["names_whole"] = True
-        for sid in [sid for sid, name in names.items() if len(name) == 40]:
-            del names[sid]
-    todo = [sid for sid in state["stories"] if sid not in names and stories.visible(state, sid)]
+    named_at = state.setdefault("named_at", {})  # сюжет → сколько в нём было новостей, когда его назвали
+    todo = [sid for sid, story in state["stories"].items() if stories.visible(state, sid)
+            and (sid not in names or len(story["urls"]) >= NAME_GROW * named_at.get(sid, 2))]
     for start in range(0, len(todo), NAME_BATCH):
         chunk = todo[start:start + NAME_BATCH]
-        content = json.dumps({"stories": [{"id": f"S{n}", "news": stories._shown(state, sid, vectors)}
+        content = json.dumps({"stories": [{"id": f"S{n}", "news": stories._shown(state, sid, vectors, NAME_SHOWN)}
                                           for n, sid in enumerate(chunk)]}, ensure_ascii=False)
         answer, _ = ask(NAME_PROMPT, content, NAME_SCHEMA)
         for named in answer["names"]:
             n = named["id"][1:]
             if n.isdigit() and int(n) < len(chunk) and named["name"].strip():
-                name = named["name"].strip().strip("«»\"'.")
+                name, sid = named["name"].strip().strip("«»\"'."), chunk[int(n)]
                 # длинное — по словам, не посреди слова
-                names[chunk[int(n)]] = name if len(name) <= 50 else name[:50].rsplit(" ", 1)[0]
+                names[sid] = name if len(name) <= 50 else name[:50].rsplit(" ", 1)[0]
+                named_at[sid] = len(state["stories"][sid]["urls"])
     return len(todo)
 
 

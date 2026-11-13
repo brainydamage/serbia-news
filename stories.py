@@ -181,7 +181,7 @@ LINES_EFFORT = "medium"
 
 
 def eligible(item: dict) -> bool:
-    """Идёт ли новость в сюжеты: события и русскоязычные ленты (у них нет kind), без Reddit и Trends."""
+    """Идёт ли новость в сюжеты: события (и новости без kind — русскоязычные до 13.11), без Reddit и Trends."""
     return item["section"] not in SKIP_SECTIONS and item.get("kind") in ("event", None)
 
 
