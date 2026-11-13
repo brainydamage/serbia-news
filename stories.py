@@ -214,9 +214,10 @@ def new_state() -> dict:
 
 
 def ask_model(client, system: str, content: str, schema: dict, effort: str = EFFORT,
-              model: str = MODEL) -> tuple[dict, dict]:
+              model: str = MODEL, price: tuple[float, float] | None = None) -> tuple[dict, dict]:
     """Запрос к модели: (ответ по схеме, {"in", "out", "write", "read", "usd"} — токены, из них записанные в кэш
-    и прочитанные из кэша, и оценка в долларах). Системный промпт — в кэше, как у перевода."""
+    и прочитанные из кэша, и оценка в долларах). Системный промпт — в кэше, как у перевода. price — цена модели,
+    которой нет в PRICES (вход / выход за 1M токенов)."""
     response = client.messages.create(
         model=model,
         max_tokens=16000,
@@ -228,7 +229,7 @@ def ask_model(client, system: str, content: str, schema: dict, effort: str = EFF
         raise RuntimeError(f"stop_reason={response.stop_reason}")
     text = next(b.text for b in response.content if b.type == "text")
     used = translate.tokens(response.usage)
-    return json.loads(text), {**used, "usd": translate.usd(used, PRICES[model])}
+    return json.loads(text), {**used, "usd": translate.usd(used, price or PRICES[model])}
 
 
 def visible(state: dict, sid: str) -> bool:

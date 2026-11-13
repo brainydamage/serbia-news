@@ -33,6 +33,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 
 import stories
+import stories_audit
 import translate
 
 ROOT = Path(__file__).parent
@@ -120,6 +121,9 @@ def forget_old(state: dict, vectors: dict, now: str) -> None:
             state["items"].pop(u, None)
     # новости без сюжета (до 12.11 так оставались «непонятные», unclear): забываем по времени
     state["items"] = {u: it for u, it in state["items"].items() if it["story"] or it["seen"] >= cutoff}
+    if "audited_news" in state:  # отмеченные вечерней проверкой — пока новость помним
+        known = {it["n"] for it in state["items"].values()}
+        state["audited_news"] = [n for n in state["audited_news"] if n in known]
     state["checked"] = {k: v for k, v in state.get("checked", {}).items()
                         if all(s in state["stories"] for s in k.split("|"))}
     state.pop("merged", None)  # кто в кого склеился — только для разбора прогонов; журнал склеек — merges
@@ -207,8 +211,8 @@ def ask_with_spending(state: dict, day: str):
     spent = state.setdefault("spent", {})
 
     def ask(system: str, content: str, schema: dict, effort: str = stories.EFFORT,
-            model: str = stories.MODEL) -> tuple[dict, dict]:
-        answer, usage = stories.ask_model(client, system, content, schema, effort, model)
+            model: str = stories.MODEL, price: tuple[float, float] | None = None) -> tuple[dict, dict]:
+        answer, usage = stories.ask_model(client, system, content, schema, effort, model, price)
         total = spent.setdefault(day, {"calls": 0, "in": 0, "out": 0, "usd": 0.0})
         total["calls"] += 1
         for k in ("in", "out", "usd", "read"):  # read — часть входа из кэша
@@ -310,6 +314,18 @@ def run(archive: dict, sections: dict) -> None:
         # его имя могло быть и про выделенное событие («Adriatic нефтепровод акцизы»)
         state["names"][sid], state.setdefault("named_at", {})[sid] = name, len(state["stories"][sid]["urls"])
         state["named_at"][state["spun"][sid]] = 0
+    # сюжеты, которые сейчас в топе, — для вечерней проверки; сама проверка — раз в сутки после AUDIT_HOUR.
+    # Ошибка проверки не роняет сборку: повторим в следующей
+    cutoff = (datetime.fromisoformat(now) - PAGE_WINDOW).isoformat()
+    stories_audit.note_top(state, day, {sid: heat(state, sid, now) for sid, s in state["stories"].items()
+                                        if s["updated"] >= cutoff and stories.visible(state, sid)})
+    audit, audit_day = None, stories_audit.due(state, now, LOCAL_TZ)
+    if audit_day:
+        try:
+            audit = stories_audit.run(state, audit_day, ask)
+        except Exception as exc:  # noqa: BLE001
+            traceback.print_exc()
+            print(f"Сюжеты: проверка дня не прошла — {type(exc).__name__}: {exc}"[:300], file=sys.stderr)
     # время публикации из RSS — для порядка новостей в сюжете. Позже, чем мы её увидели, — неверный часовой пояс у
     # издания (RTS и др.): тогда время, когда увидели
     for u, it in state["items"].items():
@@ -326,6 +342,10 @@ def run(archive: dict, sections: dict) -> None:
     save_state(state, vectors)
     if done:  # ответы в Telegram — после сохранения: не сохранилось — команды применятся заново в следующей сборке
         translate.reports_api({"results": [{"message": c.get("message"), "text": c["result"]} for c in done]}, "stories")
+    if audit is not None:
+        a = state["audits"][audit_day]
+        print(f"Сюжеты: проверка дня — {a['flagged']} из {a['news']} новостей не на месте, ≈ ${a['usd']:.2f}", file=sys.stderr)
+        translate.reports_api({"results": [{"text": m} for m in stories_audit.report(state, audit_day, audit)]}, "stories")
     today = state["spent"].get(day, {})
     print(f"Сюжеты: решено {decided}, склеено {merged}, сюжетов {len(state['stories'])}, "
           f"за сегодня ≈ ${today.get('usd', 0):.3f} (входа из кэша {today.get('read', 0) * 100 // max(today.get('in', 0), 1)}%)",
@@ -342,6 +362,15 @@ def count(n: int, one: str, few: str, many: str) -> str:
 NEWS, OUTLETS = ("новость", "новости", "новостей"), ("издание", "издания", "изданий")
 
 
+def heat(state: dict, sid: str, now: str) -> float:
+    latest = {}  # издание → время его последней новости в сюжете (публикации, не позже, чем увидели)
+    for u in state["stories"][sid]["urls"]:
+        it = state["items"][u]
+        latest[it["source"]] = max(latest.get(it["source"], ""), it.get("published", it["seen"]))
+    moment = datetime.fromisoformat(now)
+    return sum(0.5 ** ((moment - datetime.fromisoformat(t)) / HEAT_HALF_LIFE) for t in latest.values())
+
+
 def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> None:
     """site/plot/index.html — статичная страница: видимые сюжеты за PAGE_WINDOW, крупные сверху; у каждого видимого
     сюжета — своя страница site/plot/sX/."""
@@ -354,15 +383,7 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
     def sources(sid):
         return {state["items"][u]["source"] for u in state["stories"][sid]["urls"]}
 
-    def heat(sid: str) -> float:
-        latest = {}  # издание → время его последней новости в сюжете (публикации, не позже, чем увидели)
-        for u in state["stories"][sid]["urls"]:
-            it = state["items"][u]
-            latest[it["source"]] = max(latest.get(it["source"], ""), it.get("published", it["seen"]))
-        moment = datetime.fromisoformat(now)
-        return sum(0.5 ** ((moment - datetime.fromisoformat(t)) / HEAT_HALF_LIFE) for t in latest.values())
-
-    heats = {sid: heat(sid) for sid in shown}
+    heats = {sid: heat(state, sid, now) for sid in shown}
     shown.sort(key=lambda sid: (heats[sid], state["stories"][sid]["updated"]), reverse=True)
 
     def local_time(iso: str) -> str:
