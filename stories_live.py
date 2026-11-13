@@ -121,6 +121,11 @@ def forget_old(state: dict, vectors: dict, now: str) -> None:
     state.pop("names_whole", None)  # прежняя разовая чистка обрезанных имён; теперь имена обновляются, когда сюжет вырос
     state["lines"] = {sid: v for sid, v in state.get("lines", {}).items() if sid in state["stories"]}
     state["spun"] = {sid: p for sid, p in state.get("spun", {}).items() if sid in state["stories"]}
+    # события, выделенные из одного сюжета до 13.11, склейка могла соединить друг с другом — теперь не соединит
+    for a, parent in state["spun"].items():
+        for b, other in state["spun"].items():
+            if a < b and parent == other and not stories._apart(state, a, b):
+                state.setdefault("apart", []).append([sorted(stories._parts(state, a)), sorted(stories._parts(state, b))])
     # журнал склеек и ручные разделения — пока живы их части
     parts = {it["part"] for it in state["items"].values()}
     state["merges"] = [m for m in state.get("merges", []) if parts & set(m["parts"])]
@@ -197,8 +202,8 @@ def ask_with_spending(state: dict, day: str):
         answer, usage = stories.ask_model(client, system, content, schema, effort, model)
         total = spent.setdefault(day, {"calls": 0, "in": 0, "out": 0, "usd": 0.0})
         total["calls"] += 1
-        for k in ("in", "out", "usd"):
-            total[k] = round(total[k] + usage[k], 6)
+        for k in ("in", "out", "usd", "read"):  # read — часть входа из кэша
+            total[k] = round(total.get(k, 0) + usage[k], 6)
         return answer, usage
 
     return ask
@@ -310,8 +315,10 @@ def run(archive: dict, sections: dict) -> None:
     save_state(state, vectors)
     if done:  # ответы в Telegram — после сохранения: не сохранилось — команды применятся заново в следующей сборке
         translate.reports_api({"results": [{"message": c.get("message"), "text": c["result"]} for c in done]}, "stories")
+    today = state["spent"].get(day, {})
     print(f"Сюжеты: решено {decided}, склеено {merged}, сюжетов {len(state['stories'])}, "
-          f"за сегодня ≈ ${state['spent'].get(day, {}).get('usd', 0):.3f}", file=sys.stderr)
+          f"за сегодня ≈ ${today.get('usd', 0):.3f} (входа из кэша {today.get('read', 0) * 100 // max(today.get('in', 0), 1)}%)",
+          file=sys.stderr)
     write_page(state, vectors, sections)
 
 
@@ -541,7 +548,7 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
 summary{cursor:pointer;padding:6px 0}details{border-bottom:1px solid #eee}ul{margin:4px 0 12px;padding-left:20px}
 li{margin:6px 0}.meta{color:#888;font-size:13px}a{color:#1a5fb4}table{border-collapse:collapse;font-size:13px}
 td{padding:2px 14px 2px 0}.what{color:#777;font-size:13px}
-.toc ol{padding-left:24px;font-size:13px}.toc li{margin:3px 0}
+.toc ol{padding-left:3em;font-size:13px}.toc li{margin:3px 0}
 @media (min-width:1400px){.toc{position:fixed;left:16px;top:16px;width:calc(50vw - 490px);max-height:calc(100vh - 32px);overflow:auto}}
 .lines{background:#f2f2f2;border-radius:6px;padding:8px 12px;margin:8px 0}.lines ul{margin:4px 0}
 .sim.mid{color:#b7791f}.sim.low{color:#c0392b;font-weight:600}.err{background:#fde8d8;color:#a33;padding:8px 12px}

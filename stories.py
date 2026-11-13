@@ -24,6 +24,8 @@ from datetime import datetime, timedelta
 
 import numpy as np
 
+import translate
+
 # поднять при изменении логики раскладки или склейки (правила, промпты и пороги отслеживаются и так):
 # живая страница (stories_live.py) разложит все свои новости заново
 # 2 — при раскладке модель видит и новость сюжета, самую похожую на новую; 3 — участники сравниваются латиницей;
@@ -207,21 +209,20 @@ def new_state() -> dict:
 
 def ask_model(client, system: str, content: str, schema: dict, effort: str = EFFORT,
               model: str = MODEL) -> tuple[dict, dict]:
-    """Запрос к модели: (ответ по схеме, {"in", "out", "usd"} — токены и оценка в долларах)."""
+    """Запрос к модели: (ответ по схеме, {"in", "out", "write", "read", "usd"} — токены, из них записанные в кэш
+    и прочитанные из кэша, и оценка в долларах). Системный промпт — в кэше, как у перевода."""
     response = client.messages.create(
         model=model,
         max_tokens=16000,
-        system=system,
+        system=translate.cached(system),
         output_config={"effort": effort, "format": {"type": "json_schema", "schema": schema}},
         messages=[{"role": "user", "content": content}],
     )
     if response.stop_reason in ("max_tokens", "refusal"):
         raise RuntimeError(f"stop_reason={response.stop_reason}")
     text = next(b.text for b in response.content if b.type == "text")
-    usage = response.usage
-    price = PRICES[model]
-    return json.loads(text), {"in": usage.input_tokens, "out": usage.output_tokens,
-                              "usd": (usage.input_tokens * price[0] + usage.output_tokens * price[1]) / 1e6}
+    used = translate.tokens(response.usage)
+    return json.loads(text), {**used, "usd": translate.usd(used, PRICES[model])}
 
 
 def visible(state: dict, sid: str) -> bool:
@@ -576,11 +577,14 @@ def clean_name(name: str) -> str:
 
 def _spin_off(state: dict, parent: str, urls: list[str], now: str) -> str:
     """Новости отдельного события — из сюжета parent в новый сюжет. Связь — state["spun"][новый] = parent; склейка
-    их обратно не соединит (state["apart"]). Возвращает новый сюжет."""
+    их обратно не соединит (state["apart"]) — ни с ним, ни с событиями, выделенными из него раньше: 13.11 «Отвод
+    прокурора» склеился с «Разрешением на «Югославию»», выделенным из того же сюжета. Возвращает новый сюжет."""
     sid = None
     for u in sorted(urls, key=lambda u: state["items"][u]["seen"]):
         sid = move(state, u, sid, now, part=sid, why="line")
-    state.setdefault("apart", []).append([[sid], sorted(_parts(state, parent))])
+    siblings = {p for c, was in state.get("spun", {}).items() if was == parent and c in state["stories"]
+                for p in _parts(state, c)}
+    state.setdefault("apart", []).append([[sid], sorted(_parts(state, parent) | siblings)])
     state.setdefault("spun", {})[sid] = parent
     return sid
 

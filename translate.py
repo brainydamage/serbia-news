@@ -38,7 +38,12 @@ REVIEW_LIMIT = 30  # за одну сборку — на случай, если 
 KINDS = {"new": (MODEL, EFFORT), "retry": (MODEL, RETRY_EFFORT), "review": (REVIEW_MODEL, REVIEW_EFFORT)}
 PRICES = {MODEL: PRICE_PER_MTOK, REVIEW_MODEL: REVIEW_PRICE}
 CACHE_FILE = Path(__file__).parent / "cache" / "translations.json"
-# потрачено за эту сборку: вид работы → {"items", "in", "out"}; пачки переводятся в несколько потоков
+# системный промпт — в кэш на час (сборки идут раз в 15–30 минут, пятиминутный кэш между ними истекал бы). Запись
+# в такой кэш стоит ×2 от цены входа, чтение — ×0.1. Меняющееся (новости, глоссарий) — в сообщении, после промпта
+CACHE_TTL = "1h"
+CACHE_WRITE, CACHE_READ = 2.0, 0.1
+# потрачено за эту сборку: вид работы → {"items", "in", "out", "write", "read"}; in — весь вход, write и read — его
+# часть, записанная в кэш и прочитанная из кэша; пачки переводятся в несколько потоков
 USAGE: dict[str, dict] = {}
 USAGE_LOCK = threading.Lock()
 
@@ -505,7 +510,7 @@ def translate_batch(client, batch: list[tuple[str, dict]], kind: str = "new", st
     response = client.messages.create(
         model=model,
         max_tokens=16000,
-        system=SYSTEM_PROMPT,
+        system=cached(SYSTEM_PROMPT),
         output_config={"effort": effort, "format": {"type": "json_schema", "schema": SCHEMA}},
         messages=[{"role": "user", "content": content}],
     )
@@ -547,7 +552,7 @@ def markup_batch(client, batch: list[tuple[str, dict]]) -> dict:
     response = client.messages.create(
         model=MODEL,
         max_tokens=16000,
-        system=MARKUP_PROMPT,
+        system=cached(MARKUP_PROMPT),
         output_config={"effort": EFFORT, "format": {"type": "json_schema", "schema": MARKUP_SCHEMA}},
         messages=[{"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
     )
@@ -565,23 +570,43 @@ def markup_batch(client, batch: list[tuple[str, dict]]) -> dict:
     return out
 
 
+def cached(system: str) -> list[dict]:
+    """Системный промпт с меткой кэша (CACHE_TTL)."""
+    return [{"type": "text", "text": system, "cache_control": {"type": "ephemeral", "ttl": CACHE_TTL}}]
+
+
+def tokens(usage) -> dict:
+    """{"in", "out", "write", "read"} из usage ответа: in — весь вход, вместе с записанным в кэш и прочитанным из него."""
+    write, read = usage.cache_creation_input_tokens or 0, usage.cache_read_input_tokens or 0
+    return {"in": usage.input_tokens + write + read, "out": usage.output_tokens, "write": write, "read": read}
+
+
+def usd(used: dict, price: tuple[float, float]) -> float:
+    """Цена в $ по токенам tokens(): вход без кэша — по цене входа, запись и чтение кэша — с множителями."""
+    fresh = used.get("in", 0) - used.get("write", 0) - used.get("read", 0)
+    return ((fresh + used.get("write", 0) * CACHE_WRITE + used.get("read", 0) * CACHE_READ) * price[0]
+            + used.get("out", 0) * price[1]) / 1e6
+
+
 def spend(kind: str, items: int, usage) -> None:
     with USAGE_LOCK:
-        total = USAGE.setdefault(kind, {"items": 0, "in": 0, "out": 0})
+        total = USAGE.setdefault(kind, {"items": 0, "in": 0, "out": 0, "write": 0, "read": 0})
         total["items"] += items
-        total["in"] += usage.input_tokens
-        total["out"] += usage.output_tokens
+        for k, n in tokens(usage).items():
+            total[k] += n
 
 
-def cost(*kinds: str) -> tuple[int, int, float]:
-    """Токены на входе, на выходе и примерная цена в $ за эти виды работы в текущей сборке."""
-    tokens_in = tokens_out = usd = 0
+def cost(*kinds: str) -> tuple[int, int, float, int]:
+    """Токены на входе, на выходе, примерная цена в $ и сколько входа прочитано из кэша — за эти виды работы
+    в текущей сборке."""
+    tokens_in = tokens_out = spent = read = 0
     for kind in kinds:
-        total, price = USAGE.get(kind, {}), PRICES[KINDS[kind][0]]
+        total = USAGE.get(kind, {})
         tokens_in += total.get("in", 0)
         tokens_out += total.get("out", 0)
-        usd += total.get("in", 0) / 1e6 * price[0] + total.get("out", 0) / 1e6 * price[1]
-    return tokens_in, tokens_out, usd
+        read += total.get("read", 0)
+        spent += usd(total, PRICES[KINDS[kind][0]])
+    return tokens_in, tokens_out, spent, read
 
 
 def connect():
@@ -713,11 +738,11 @@ def attach_translations(sources: list[dict]) -> None:
         except anthropic.AuthenticationError:
             print("Перевод пропущен: ключ ANTHROPIC_API_KEY не подошёл", file=sys.stderr)
 
-        tokens_in, tokens_out, usd = cost("new", "retry")
+        tokens_in, tokens_out, spent, read = cost("new", "retry")
         left = sum(key not in cache for key, _ in missing)
         print(
             f"Перевод: {len(missing)} новых, не переведено {left}, {failed} пачек с ошибкой, "
-            f"{tokens_in} + {tokens_out} токенов ≈ ${usd:.3f}",
+            f"{tokens_in} + {tokens_out} токенов (из кэша {read * 100 // max(tokens_in, 1)}%) ≈ ${spent:.3f}",
             file=sys.stderr,
         )
         # не перевелось и с подсказкой — шлём в Telegram (через worker/, каждую новость один раз):
@@ -752,9 +777,9 @@ def attach_translations(sources: list[dict]) -> None:
                 print(f"  пачка не переведена: {type(exc).__name__}: {exc}"[:200], file=sys.stderr)
                 continue
             cache.update({key: {**tr, "by": REVIEW_MODEL} for key, tr in done.items()})
-        tokens_in, tokens_out, usd = cost("review")
+        tokens_in, tokens_out, spent, _ = cost("review")
         print(f"По жалобам: переведено {sum(cache[k].get('by') == REVIEW_MODEL for k, _ in review)} из {len(review)}, "
-              f"{tokens_in} + {tokens_out} токенов ≈ ${usd:.3f}", file=sys.stderr)
+              f"{tokens_in} + {tokens_out} токенов ≈ ${spent:.3f}", file=sys.stderr)
     if USAGE:
         reports_api({"kinds": {kind: {**total, "usd": round(cost(kind)[2], 6)} for kind, total in USAGE.items()}}, "stats")
     if reported:
