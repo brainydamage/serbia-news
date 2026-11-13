@@ -47,9 +47,10 @@ START = "2026-11-12T16:05:00+00:00"
 WAIT_TRANSLATION = timedelta(minutes=20)
 # константы stories.py, которые не меняют раскладку, — не в отпечатке: их правка не раскладывает всё заново
 NOT_RULES = {"LINES_STEP"}
-# отпечаток до 13.11, когда перепроверку больших сюжетов перевели с роста в 1.5 раза на LINES_STEP: остальные
-# правила те же — раскладку не пересобираем
-SAME_RULES = {"93f151fd03"}
+# прежние отпечатки, при которых раскладку не пересобираем — новые правила действуют на следующие новости:
+# 93f151fd03 — до 13.11, когда перепроверку больших сюжетов перевели с роста в 1.5 раза на LINES_STEP;
+# dfadd2988f — до 13.11, когда склейка стала называть общее событие пары (event)
+SAME_RULES = {"93f151fd03", "dfadd2988f"}
 # сюжет, который не обновлялся дольше, убираем из состояния вместе с его новостями: архив их уже забыл
 # (ARCHIVE_DAYS в build.py — 4 дня), так что заново раскладывать их не придётся
 FORGET = timedelta(days=5)
@@ -423,12 +424,13 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
             text = (f'открыла {where(first["story"])}' + (" вместе с " + ", ".join(f"№{m}" for m in others) if others else "")
                     + {"alone": ": похожих сюжетов не было", "new": ": модель сочла событие новым",
                        "unclear": ": модель не поняла, о чём новость"}.get(first["why"], ""))
-        steps = {"recheck": "перепроверка не согласилась — новость ушла в {}", "merge": "её сюжет {from_} влит в {}",
+        steps = {"recheck": "перепроверка не согласилась — новость ушла в {}", "merge": "её сюжет {from_} влит в {}{event}",
                  "line": "выделена отдельным событием в {}", "move": "перенесена командой /move в {}", "split": "отделена командой /split в {}",
                  "unmerge": "склейка отменена командой /unmerge — вернулась в {}"}
         for h in later:
             text += "; " + steps.get(h["why"], h["why"] + " → {}").format(
-                where(h["story"]) if h["story"] else "без сюжета", from_=e(h.get("from") or "—"))
+                where(h["story"]) if h["story"] else "без сюжета", from_=e(h.get("from") or "—"),
+                event=f" (общее: {e(h['event'])})" if h.get("event") else "")
         return text
 
     def item_row(u: str, it: dict, extra: str) -> str:

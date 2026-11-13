@@ -121,9 +121,13 @@ RECHECK_EFFORT = "medium"
 MERGE_PROMPT = f"""Ты проверяешь сюжеты агрегатора новостей о Сербии на дубли. {RULES}
 
 Вход — JSON: stories — сюжеты, id вида S…, у каждого несколько новостей (время UTC · издание: что произошло); pairs — пары сюжетов, похожих по словам, id вида P…
-Для каждой пары ответь same: true, если оба сюжета — про одну историю: одно событие или одно дело, его развитие, последствия и реакции. Заявления, прозвучавшие на одном выступлении, пресс-конференции или в одном интервью, — true, даже если темы разные: смотри на время и участника.
+Для каждой пары сначала в event назови общее событие обоих сюжетов одной фразой: кто что сделал, по какому поводу. Общий участник, партия, ведомство или тема — ещё не общее событие. Назвать общее событие не можешь — event пустой и same: false.
+same: true, если оба сюжета — про одну историю: одно событие или одно дело, его развитие, последствия и реакции. Заявления, прозвучавшие на одном выступлении, пресс-конференции или в одном интервью, — true, даже если темы разные: смотри на время и участника.
 false — если общего события нет: тот же участник, ведомство или тема, но другой повод; однотипные, но не связанные события. Если сомневаешься — false."""
 
+# event в ответе склейки — общее событие пары, которое модель называет до same: 13.11 одиночки про «Студенческий список»
+# (дестабилизация, Шешель, Курти, энергетика) склеились с консультациями в Скупщине — общим был только участник.
+# Сходство их не отличает: у неверных 0.87–0.91, у верных столько же. Событие пишется в журнал склеек и на страницу
 MERGE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -131,8 +135,8 @@ MERGE_SCHEMA = {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {"id": {"type": "string"}, "same": {"type": "boolean"}},
-                "required": ["id", "same"],
+                "properties": {"id": {"type": "string"}, "event": {"type": "string"}, "same": {"type": "boolean"}},
+                "required": ["id", "event", "same"],
                 "additionalProperties": False,
             },
         }
@@ -430,9 +434,9 @@ def _share_entities(state: dict, a: str, b: str) -> bool:
 
 
 def _same_pairs(state: dict, pairs: list[tuple[str, str]], vectors: dict, model: str, effort: str, ask,
-                total: dict) -> set[int]:
-    """Номера пар, которые модель считает одним событием."""
-    same = set()
+                total: dict) -> dict[int, str]:
+    """Номера пар, которые модель считает одним событием, → общее событие, которое она назвала."""
+    same = {}
     for start in range(0, len(pairs), MERGE_BATCH):
         chunk = pairs[start:start + MERGE_BATCH]
         aliases = {}
@@ -446,7 +450,8 @@ def _same_pairs(state: dict, pairs: list[tuple[str, str]], vectors: dict, model:
         for k in ("in", "out", "usd"):
             total[k] += usage.get(k, 0)
         total["asked"][model] = total["asked"].get(model, 0) + len(chunk)
-        same |= {start + int(p["id"][1:]) for p in answer["pairs"] if p["same"] and p["id"][1:].isdigit()}
+        same |= {start + int(p["id"][1:]): p["event"].strip() for p in answer["pairs"]
+                 if p["same"] and p["event"].strip() and p["id"][1:].isdigit()}
     return same
 
 
@@ -497,26 +502,28 @@ def merge(state: dict, now: str, vectors: dict, ask) -> dict:
         if n in same and a not in used and b not in used:
             if a in shown and b in shown:
                 used.update((a, b))
-                merges.append((a, b))
+                merges.append((a, b, same[n]))
             else:  # обрывок — в видимый, а не наоборот
                 gone = a if a not in shown else b
                 used.add(gone)
-                merges.append((b if gone == a else a, gone))
+                merges.append((b if gone == a else a, gone, same[n]))
     for a, b in todo:
-        if (a, b) not in merges and a not in used and b not in used:
+        if not {(a, b), (b, a)} & {m[:2] for m in merges} and a not in used and b not in used:
             checked[f"{a}|{b}"] = [len(stories[a]["urls"]), len(stories[b]["urls"])]
 
     moved = {}  # склеенный сюжет → куда ушёл: видимый мог принять обрывки и сам уйти в другой видимый
-    for keep, gone in merges:
+    for keep, gone, event in merges:
         while keep in moved:
             keep = moved[keep]
         moved[gone] = keep
         state.setdefault("merges", []).append(
-            {"t": now, "keep": keep, "gone": gone, "parts": sorted({state["items"][u]["part"] for u in stories[gone]["urls"]})})
+            {"t": now, "keep": keep, "gone": gone, "parts": sorted({state["items"][u]["part"] for u in stories[gone]["urls"]}),
+             "event": event})
         for u in stories[gone]["urls"]:
             it = state["items"][u]
             it["story"] = keep
-            it.setdefault("history", []).append({"t": now, "why": "merge", "story": keep, "part": it["part"], "from": gone})
+            it.setdefault("history", []).append({"t": now, "why": "merge", "story": keep, "part": it["part"], "from": gone,
+                                                    "event": event})
         stories[keep]["urls"] = sorted(stories[keep]["urls"] + stories[gone]["urls"],
                                        key=lambda u: state["items"][u]["seen"])
         stories[keep]["updated"] = max(stories[keep]["updated"], stories[gone]["updated"])
