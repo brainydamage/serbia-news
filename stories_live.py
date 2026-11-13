@@ -23,6 +23,7 @@ import html
 import json
 import os
 import sys
+import time
 import traceback
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -53,6 +54,7 @@ PAGE_WINDOW = timedelta(hours=24)  # на странице — видимые с
 # за HEAT_HALF_LIFE. Свежий сюжет на 5 изданий выше вчерашнего на 25, одна реплика большой сюжет не поднимает,
 # а новый поворот, о котором пишут многие, — поднимает
 HEAT_HALF_LIFE = timedelta(hours=6)
+PROGRESS_FROM = 200  # с стольких новостей за сборку (раскладка заново) — прогресс в лог
 LOCAL_TZ = ZoneInfo("Europe/Belgrade")
 # кодовые имена видимых сюжетов — чтобы узнавать сюжет по ссылке, а не по номеру. Имя даётся один раз и не меняется:
 # его ценность в том, что оно постоянно. На раскладку не влияет, поэтому и не в отпечатке правил
@@ -254,8 +256,11 @@ def run(archive: dict, sections: dict) -> None:
     need = [u for u, _ in items] + [u for u in state["items"] if u not in vectors]
     texts = {u: stories.text_of(archive.get(u) or state["items"][u]) for u in need}
     if need:
+        t = time.monotonic()
         for u, v in zip(need, stories.embed([texts[u] for u in need])):
             vectors[u] = v
+        if len(need) >= PROGRESS_FROM:
+            print(f"Сюжеты: векторы для {len(need)} новостей — {time.monotonic() - t:.0f} с", file=sys.stderr)
     done = apply_commands(state, vectors, now)
 
     day = datetime.fromisoformat(now).astimezone(LOCAL_TZ).date().isoformat()
@@ -266,11 +271,21 @@ def run(archive: dict, sections: dict) -> None:
     builds = {}
     for url, item in items:
         builds.setdefault(max(item["seen"], state.get("built", "")), []).append((url, item))
-    decided = merged = 0
+    decided = merged = laid = 0
+    started, step = time.monotonic(), max(len(items) // 10, 1)  # большая раскладка — в лог примерно каждые 10%
     for seen, group in sorted(builds.items()):
         decided += stories.update(state, group, seen, vectors, ask)["decided"]
         if stories.merge_due(state, seen):
             merged += stories.merge(state, seen, vectors, ask)["merged"]
+        laid += len(group)
+        if len(items) >= PROGRESS_FROM and laid // step > (laid - len(group)) // step and laid < len(items):
+            took = time.monotonic() - started
+            print(f"Сюжеты: разложено {laid} из {len(items)} ({laid * 100 // len(items)}%), склеено {merged}, "
+                  f"≈ ${state['spent'].get(day, {}).get('usd', 0) - usd:.2f}, прошло {took / 60:.0f} мин, "
+                  f"осталось ≈ {took * (len(items) - laid) / laid / 60:.0f} мин", file=sys.stderr)
+    if len(items) >= PROGRESS_FROM:
+        print(f"Сюжеты: разложено всё за {(time.monotonic() - started) / 60:.0f} мин; "
+              "имена и поиск отдельных событий в больших сюжетах…", file=sys.stderr)
     name_stories(state, vectors, ask)
     lines = stories.find_lines(state, now, ask)
     for sid, name in lines["spun"]:  # выделенному сюжету — имя события, которое дала модель; исходный назовём заново:
