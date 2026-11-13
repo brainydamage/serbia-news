@@ -1,9 +1,11 @@
 // Vestomat как приложение («На экран Домой»): страница / и /ru/ лежит в кеше, поэтому открывается и без сети.
 // Новости встроены в саму страницу, так что кешируем её целиком, а не «оболочку + данные»: оболочка — 3% веса.
 //
-// Сборка выходит раз в 15 минут. Страница в кеше моложе этого — отдаём сразу, не спрашивая сеть.
-// Старше — идём в сеть, но ждём не дольше TIMEOUT: на плохой сети показываем кеш, а свежую версию докачиваем
-// в фоне — страница сама проверит version.json и покажет кнопку «Свежие новости».
+// Страницу всегда сначала спрашиваем у сети: если сборка не менялась, сервер отвечает коротким 304, так что
+// это почти бесплатно. Сеть молчит дольше TIMEOUT или её нет — показываем кеш, а свежую версию докачиваем
+// в фоне; страница сама проверит version.json и покажет кнопку «Свежие новости».
+// (В первой версии копия моложе 15 минут отдавалась без сети — и F5 с кнопкой «обновить» возвращали ту же
+// старую страницу: возраст считался от скачивания, а не от сборки.)
 //
 // Аварийный выключатель: если service worker сломал сайт, замените этот файл на
 //   self.addEventListener("install", () => self.skipWaiting());
@@ -11,13 +13,11 @@
 //     .then(keys => Promise.all(keys.map(k => caches.delete(k)))).then(() => self.registration.unregister())));
 // Просто удалить файл нельзя: на 404 браузер оставляет старый service worker работать.
 
-const VERSION = 1;  // поднять, если поменялось устройство кеша: старые кеши удалятся при активации
+const VERSION = 2;  // поднять, если поменялось устройство кеша: старые кеши удалятся при активации
 const PAGES = `pages-v${VERSION}`;
 const ASSETS = `assets-v${VERSION}`;
 const PAGE_PATHS = ["/", "/ru/"];
-const FRESH = 15 * 60e3;
 const TIMEOUT = 3000;
-const CACHED_AT = "x-vestomat-cached-at";
 
 // иконки изданий, шрифт и favicon'ы от Google: меняются редко — берём из кеша и тихо обновляем
 const isAsset = url => url.origin === location.origin
@@ -30,10 +30,10 @@ self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", event => event.waitUntil((async () => {
   for (const key of await caches.keys()) if (key !== PAGES && key !== ASSETS) await caches.delete(key);
   await self.clients.claim();
-  // первую открытую страницу service worker не видел — кладём её в кеш сразу (обычно из HTTP-кеша браузера)
+  // первую открытую страницу service worker не видел — кладём её в кеш сразу, на случай если сети потом не будет
   const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
   const paths = new Set(windows.map(w => new URL(w.url).pathname).filter(p => PAGE_PATHS.includes(p)));
-  await Promise.all([...paths].map(p => fetch(p).then(r => store(p, r)).catch(() => {})));
+  await Promise.all([...paths].map(p => fetch(p, { cache: "no-cache" }).then(r => store(p, r)).catch(() => {})));
 })()));
 
 self.addEventListener("fetch", event => {
@@ -49,16 +49,11 @@ self.addEventListener("fetch", event => {
 });
 
 async function store(path, response) {
-  if (!response.ok) return;
-  const headers = new Headers(response.headers);
-  headers.set(CACHED_AT, String(Date.now()));
-  const body = await response.blob();
-  await (await caches.open(PAGES)).put(path, new Response(body, { status: response.status, statusText: response.statusText, headers }));
+  if (response.ok) await (await caches.open(PAGES)).put(path, response);
 }
 
 async function page(path, event) {
   const cached = await (await caches.open(PAGES)).match(path);
-  if (cached && Date.now() - Number(cached.headers.get(CACHED_AT)) < FRESH) return cached;
   // no-cache: GitHub Pages разрешает браузеру держать страницу 10 минут, а нам нужна последняя сборка
   const network = fetch(path, { cache: "no-cache" }).then(async r => { await store(path, r.clone()); return r; });
   event.waitUntil(network.catch(() => {}));
