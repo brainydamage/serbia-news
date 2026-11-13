@@ -27,8 +27,8 @@ import numpy as np
 # поднять при изменении логики раскладки или склейки (правила, промпты и пороги отслеживаются и так):
 # живая страница (stories_live.py) разложит все свои новости заново
 # 2 — при раскладке модель видит и новость сюжета, самую похожую на новую; 3 — участники сравниваются латиницей;
-# 4 — «непонятная» новость — свой сюжет, а не без сюжета
-LAYOUT_VERSION = 4
+# 4 — «непонятная» новость — свой сюжет, а не без сюжета; 5 — отдельные события выделяются в свои сюжеты
+LAYOUT_VERSION = 5
 MODEL = "claude-haiku-5-5"
 EFFORT = "low"
 # e5-large против MiniLM на эталоне 09–10.11: нужная новость первой среди похожих в 96–97% случаев против 91–93%;
@@ -57,12 +57,12 @@ SYSTEM_PROMPT = f"""Ты раскладываешь свежие новости 
 Если сомневаешься — new: лишний сюжет потом склеят, а чужая новость в сюжете видна читателю.
 
 Вход — JSON:
-- stories: живые сюжеты-кандидаты, id вида S…; news — несколько новостей сюжета (что произошло), outlets — сколько изданий о нём пишут, updated — время последней новости (UTC);
+- stories: живые сюжеты-кандидаты, id вида S…; news — несколько новостей сюжета (что произошло), outlets — сколько изданий о нём пишут, updated — время последней новости (UTC); from — если сюжет выделен как отдельное событие из другого кандидата: S… того сюжета;
 - news: новые новости, id вида N…: издание, время, заголовок, что произошло (бывает пустым), candidates — сюжеты, похожие по словам.
 Заголовок бывает кликбейтом — опирайся на смысл.
 
 Для каждой новой новости верни verdict и target:
-- join — о той же истории, что сюжет target (S… из её candidates); обзор, подходящий к нескольким candidates, — к тому, у кого больше outlets, при равенстве — с более поздним updated;
+- join — о той же истории, что сюжет target (S… из её candidates); обзор, подходящий к нескольким candidates, — к тому, у кого больше outlets, при равенстве — с более поздним updated; новость об отдельном событии — к его сюжету (с from), а не к сюжету, из которого его выделили;
 - same — подходящего сюжета нет, но это то же событие, что другая новая новость target (N…);
 - new — новое событие, target пустой;
 - unclear — нельзя понять, о каком событии речь (кликбейт без факта), target пустой."""
@@ -153,7 +153,7 @@ MERGE_SURE_SIM = 0.9  # пары похожее этого идут к моде�
 PRICES = {MODEL: (0.10, 0.50), MERGE_MODEL: (2.0, 10.0)}  # вход / выход за 1M токенов, $
 
 
-# отдельные события внутри больших сюжетов. Пока только предложения на странице: новости не переносим
+# отдельные события внутри больших сюжетов — в свои сюжеты (13.11: из 8 предложений за день верны все 8)
 LINES_PROMPT = """Ты проверяешь большие сюжеты агрегатора новостей о Сербии. Сюжет собирает одно событие или одно дело вместе с его развитием, последствиями и реакциями. Разрастаясь, он может вобрать отдельное событие: у него свой повод и о нём пишут как о самостоятельном, даже если участники те же.
 Вход — JSON: news — новости одного сюжета по времени: n — номер, t — время UTC, source — издание, what — что произошло.
 Верни lines — отдельные события внутри сюжета: name — 1–3 слова по-русски, why — одной фразой, чем это отдельное событие, news — номера n всех его новостей. Подробности, реакции, заявления и следствия без своего повода — не отдельное событие. Основное событие сюжета в lines не входит. Если такого нет или сомневаешься — пустой lines."""
@@ -303,10 +303,12 @@ def _decide(state: dict, batch: list[tuple[str, dict]], now: str, vectors: dict,
         for sid in candidates[n]:
             aliases.setdefault(sid, f"S{len(aliases)}")
     stories = []
+    spun = state.get("spun", {})  # выделенный сюжет → из какого (find_lines)
     for sid, alias in aliases.items():
         stories.append({"id": alias, "news": _shown(state, sid, vectors, extra=closest.get(sid, [])),
                         "outlets": len({state["items"][u]["source"] for u in state["stories"][sid]["urls"]}),
-                        "updated": state["stories"][sid]["updated"][11:16]})
+                        "updated": state["stories"][sid]["updated"][11:16]}
+                       | ({"from": aliases[spun[sid]]} if spun.get(sid) in aliases else {}))
     news = []
     for n in asked:
         url, item = batch[n]
@@ -530,33 +532,49 @@ def merge(state: dict, now: str, vectors: dict, ask) -> dict:
 
 
 def find_lines(state: dict, now: str, ask) -> dict:
-    """Отдельные события внутри больших видимых сюжетов (Sonnet) — в state["lines"][сюжет]: {"size", "t", "found"}.
-    Сюжет проверяем, когда в нём LINES_MIN новостей, и снова — когда вырос в LINES_GROW раз. Модели не верим на слово:
-    событие — не меньше LINES_NEWS новостей и LINES_OUTLETS изданий, и в сюжете остаётся не меньше LINES_NEWS.
-    Возвращает {"in", "out", "usd", "checked", "found"}."""
-    total = {"in": 0, "out": 0, "usd": 0.0, "checked": 0, "found": 0}
+    """Отдельные события внутри больших видимых сюжетов (Sonnet) — в свои сюжеты (_spin_off); что нашли — в
+    state["lines"][сюжет]: {"size", "t", "found"}. Сюжет проверяем, когда в нём LINES_MIN новостей, и снова — когда
+    вырос в LINES_GROW раз. Модели не верим на слово: событие — не меньше LINES_NEWS новостей и LINES_OUTLETS изданий,
+    и в сюжете остаётся не меньше LINES_NEWS. Возвращает {"in", "out", "usd", "checked", "found", "spun": [(сюжет, имя)]}."""
+    total = {"in": 0, "out": 0, "usd": 0.0, "checked": 0, "found": 0, "spun": []}
     lines = state.setdefault("lines", {})
-    for sid, story in state["stories"].items():
+    for sid, story in list(state["stories"].items()):  # выделенные сюжеты добавляются по ходу
         size = len(story["urls"])
         if size < LINES_MIN or size < lines.get(sid, {}).get("size", 0) * LINES_GROW or not visible(state, sid):
             continue
-        items = {state["items"][u]["n"]: state["items"][u] for u in story["urls"]}
+        by_n = {state["items"][u]["n"]: u for u in story["urls"]}
+        items = {n: state["items"][u] for n, u in by_n.items()}
         content = json.dumps({"news": [{"n": n, "t": it["seen"][5:16], "source": it["source"],
                                         "what": it.get("what") or it["title"]} for n, it in items.items()]},
                              ensure_ascii=False)
         answer, usage = ask(LINES_PROMPT, content, LINES_SCHEMA, LINES_EFFORT, MERGE_MODEL)
         for k in ("in", "out", "usd"):
             total[k] += usage.get(k, 0)
-        found = []
+        found, taken = [], set()
         for line in answer["lines"]:
-            news = sorted({n for n in line["news"] if n in items})
+            news = sorted({n for n in line["news"] if n in items} - taken)  # новость — только в одно событие
             if (len(news) >= LINES_NEWS and len({items[n]["source"] for n in news}) >= LINES_OUTLETS
-                    and size - len(news) >= LINES_NEWS and line["name"].strip()):
+                    and size - len(taken) - len(news) >= LINES_NEWS and line["name"].strip()):
+                taken |= set(news)
                 found.append({"name": line["name"].strip().strip("«»\"'."), "why": line["why"].strip(), "news": news})
-        lines[sid] = {"size": size, "t": now, "found": found}
+        for line in found:
+            line["to"] = _spin_off(state, sid, [by_n[n] for n in line["news"]], now)
+            total["spun"].append((line["to"], line["name"]))
+        lines[sid] = {"size": len(story["urls"]), "t": now, "found": found}
         total["checked"] += 1
         total["found"] += len(found)
     return total
+
+
+def _spin_off(state: dict, parent: str, urls: list[str], now: str) -> str:
+    """Новости отдельного события — из сюжета parent в новый сюжет. Связь — state["spun"][новый] = parent; склейка
+    их обратно не соединит (state["apart"]). Возвращает новый сюжет."""
+    sid = None
+    for u in sorted(urls, key=lambda u: state["items"][u]["seen"]):
+        sid = move(state, u, sid, now, part=sid, why="line")
+    state.setdefault("apart", []).append([[sid], sorted(_parts(state, parent))])
+    state.setdefault("spun", {})[sid] = parent
+    return sid
 
 
 def _parts(state: dict, sid: str) -> set[str]:

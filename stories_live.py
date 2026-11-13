@@ -116,6 +116,7 @@ def forget_old(state: dict, vectors: dict, now: str) -> None:
     state["named_at"] = {sid: n for sid, n in state.get("named_at", {}).items() if sid in state["stories"]}
     state.pop("names_whole", None)  # прежняя разовая чистка обрезанных имён; теперь имена обновляются, когда сюжет вырос
     state["lines"] = {sid: v for sid, v in state.get("lines", {}).items() if sid in state["stories"]}
+    state["spun"] = {sid: p for sid, p in state.get("spun", {}).items() if sid in state["stories"]}
     # журнал склеек и ручные разделения — пока живы их части
     parts = {it["part"] for it in state["items"].values()}
     state["merges"] = [m for m in state.get("merges", []) if parts & set(m["parts"])]
@@ -272,6 +273,10 @@ def run(archive: dict, sections: dict) -> None:
             merged += stories.merge(state, seen, vectors, ask)["merged"]
     name_stories(state, vectors, ask)
     lines = stories.find_lines(state, now, ask)
+    for sid, name in lines["spun"]:  # выделенному сюжету — имя события, которое дала модель; исходный назовём заново:
+        # его имя могло быть и про выделенное событие («Adriatic нефтепровод акцизы»)
+        state["names"][sid], state.setdefault("named_at", {})[sid] = name, len(state["stories"][sid]["urls"])
+        state["named_at"][state["spun"][sid]] = 0
     # время публикации из RSS — для порядка новостей в сюжете. Позже, чем мы её увидели, — неверный часовой пояс у
     # издания (RTS и др.): тогда время, когда увидели
     for u, it in state["items"].items():
@@ -381,7 +386,7 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
                     + {"alone": ": похожих сюжетов не было", "new": ": модель сочла событие новым",
                        "unclear": ": модель не поняла, о чём новость"}.get(first["why"], ""))
         steps = {"recheck": "перепроверка не согласилась — новость ушла в {}", "merge": "её сюжет {from_} влит в {}",
-                 "move": "перенесена командой /move в {}", "split": "отделена командой /split в {}",
+                 "line": "выделена отдельным событием в {}", "move": "перенесена командой /move в {}", "split": "отделена командой /split в {}",
                  "unmerge": "склейка отменена командой /unmerge — вернулась в {}"}
         for h in later:
             text += "; " + steps.get(h["why"], h["why"] + " → {}").format(
@@ -395,19 +400,30 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
                 f'<a href="{e(u)}" rel="noopener" target="_blank">{e(it["title"])}</a>'
                 f'{f"<br><span class=what>{e(what)}</span>" if what and what != it["title"] else ""}</li>')
 
+    children = {}  # сюжет → выделенные из него
+    for child, parent in state.get("spun", {}).items():
+        children.setdefault(parent, []).append(child)
+
+    def page_link(sid: str) -> str:  # абсолютная ссылка: работает и на главной, и на странице сюжета
+        text = sid + (f' «{names[sid]}»' if sid in names else "")
+        return (f'<a href="/plot/{sid}/" target="_blank">{e(text)}</a>' if stories.visible(state, sid)
+                else e(text)) if sid in state["stories"] else e(sid)
+
     def lines_note(sid: str) -> str:
-        """Отдельные события внутри сюжета, которые можно выделить (stories.find_lines), — или что их не нашлось."""
+        """Отдельные события, выделенные из сюжета в свои (stories.find_lines), — или что их не нашлось."""
         check = state.get("lines", {}).get(sid)
-        if not check:
-            return ""
-        if not check["found"]:
-            return (f'<p class="meta">Отдельных событий внутри не нашлось: проверено {e(local_time(check["t"]))}, '
-                    f'когда в сюжете было {count(check["size"], *NEWS)}.</p>')
-        return ('<div class="lines">Можно выделить отдельным сюжетом:<ul>'
-                + "".join(f'<li><b>«{e(line["name"])}»</b> — {e(line["why"])} · '
-                          f'{", ".join(f"№{n}" for n in line["news"])}</li>' for line in check["found"])
-                + f'</ul><span class="meta">проверено {e(local_time(check["t"]))}, когда в сюжете было '
-                  f'{count(check["size"], *NEWS)}; новости пока не переносим</span></div>')
+        why = {line.get("to"): line["why"] for c in state.get("lines", {}).values() for line in c["found"]}
+        out = [c for c in children.get(sid, []) if c in state["stories"]]
+        checked = (f'проверено {e(local_time(check["t"]))}, когда в сюжете стало {count(check["size"], *NEWS)}'
+                   if check else "")
+        if out:
+            return ('<div class="lines">Выделены отдельными сюжетами:<ul>'
+                    + "".join(f'<li>{page_link(c)} — {count(len(state["stories"][c]["urls"]), *NEWS)}'
+                              f'{" · " + e(why[c]) if c in why else ""}</li>' for c in out)
+                    + f'</ul><span class="meta">{checked}</span></div>')
+        if check and not check["found"]:
+            return f'<p class="meta">Отдельных событий внутри не нашлось: {checked}.</p>'
+        return ""
 
     def story_parts(sid: str) -> tuple[str, str, str, str]:
         """Сюжет: (заголовок, строка о нём, что можно выделить, список новостей)."""
@@ -435,7 +451,8 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
                  f'{count(len(urls), *NEWS)} · {count(len(sources(sid)), *OUTLETS)} · '
                  f'{e(", ".join(f"{c} {n}" for c, n in camps.most_common()))} · '
                  f'{local_time(story["created"])} — {local_time(story["updated"])} · {sid}'
-                 f'{f" «{e(names[sid])}»" if sid in names else ""}')
+                 f'{f" «{e(names[sid])}»" if sid in names else ""}'
+                 f'{" · выделен из " + page_link(state["spun"][sid]) if sid in state.get("spun", {}) else ""}')
         return headline(urls), about, lines_note(sid), body
 
     # у каждого видимого сюжета — своя страница /plot/sX/; у сюжетов, которые уже не на главной странице (старше
@@ -534,7 +551,7 @@ td{padding:2px 14px 2px 0}.what{color:#777;font-size:13px}
             f"склеено {len(merges)}" + (": " + ", ".join(f'{story_link(k)} ← {e(g)}' for k, g in merges[:20])
                                        + (" …" if len(merges) > 20 else "") if merges and not last.get("rebuilt") else ""),
             "команды: " + "; ".join(e(r) for r in last["commands"]) if last.get("commands") else "",
-            (f"большие сюжеты проверены на отдельные события: {last['lines'][0]}, можно выделить {last['lines'][1]}"
+            (f"большие сюжеты проверены на отдельные события: {last['lines'][0]}, выделено событий {last['lines'][1]}"
              if last.get("lines", [0])[0] else ""),
             f"запросы к модели ≈ ${last.get('usd', 0):.3f}"]
     summary = " · ".join(x for x in done if x)
