@@ -172,9 +172,9 @@ def run(state: dict, day: str, ask) -> dict:
     return {"found": found, "advice": advice}
 
 
-def commands(state: dict, finding: dict) -> list[str]:
-    """Команды бота, которые убирают находку: вся часть пришла склейкой — /unmerge; находка — ровно одна часть —
-    /split; иначе /move каждой новости (первая — в новый сюжет, остальные — за ней)."""
+def fix(state: dict, finding: dict) -> str:
+    """Как убрать находку командами бота: вся часть пришла склейкой — /unmerge; находка — ровно одна часть — /split;
+    иначе /move: первая новость — в новый сюжет, остальные — за ней."""
     items = state["items"]
     by_n = {it["n"]: it for it in items.values() if it.get("story")}
     news = set(finding["news"])
@@ -184,47 +184,61 @@ def commands(state: dict, finding: dict) -> list[str]:
         whole = {it["n"] for it in items.values() if it.get("story") == finding["story"] and it["part"] == part}
         if whole == news and part != finding["story"]:
             merged = any(m["gone"] == part for m in state.get("merges", []))
-            return [f"/unmerge {part}" if merged else f"/split {part}"]
+            return f"/unmerge {part}" if merged else f"/split {part}"
     first, *rest = sorted(news)
-    return [f"/move {first} new"] + [f"/move {n} sНОВЫЙ" for n in rest]
+    if not rest:
+        return f"/move {first} new"
+    return (f"/move {first} new, потом каждую из остальных ({', '.join(f'№{n}' for n in rest)}) — "
+            "/move <№> <сюжет из ответа бота>")
 
 
 def report(state: dict, day: str, result: dict) -> list[str]:
-    """Сообщения в Telegram: итоги, по сообщению на сюжет с находками, советы по правилам."""
+    """Сообщения в Telegram: итоги с подсказкой, как читать; по сообщению на сюжет — пронумерованные находки,
+    у каждой команда, которая её убирает; советы по правилам. Режем между находками, а не посреди."""
     a = state["audits"][day]
     names = state.get("names", {})
     by_n = {it["n"]: it for it in state["items"].values() if it.get("story")}
     share = a["flagged"] / max(a["news"], 1) * 100
     before = [v for d, v in sorted(state["audits"].items()) if d < day]
-    head = [f"Проверка сюжетов за {day[8:10]}.{day[5:7]}: сюжетов в топе — {a['stories']}, новостей в них — {a['news']}.",
-            f"Не на месте: {a['flagged']} ({share:.1f}%, уверенно — {a['sure']}); цель — не больше 0.1%."]
-    if before:
-        b = before[-1]
-        head.append(f"В прошлый раз: {b['flagged'] / max(b['news'], 1) * 100:.1f}%.")
-    if a["paths"]:
-        head.append("Откуда пришли: " + ", ".join(f"{k} — {v}" for k, v in sorted(a["paths"].items(), key=lambda kv: -kv[1])) + ".")
-    head.append(f"Проверка стоила ≈ ${a['usd']:.2f}.")
+    paths = sorted(a["paths"].items(), key=lambda kv: -kv[1])
+    head = [f"Проверка сюжетов за {day[8:10]}.{day[5:7]}",
+            "",
+            f"В топе за день было {a['stories']} сюжетов, в них {a['news']} новостей. Лишних нашлось {a['flagged']} "
+            f"({share:.1f}%), цель — не больше 0.1%."
+            + (f" В прошлый раз было {before[-1]['flagged'] / max(before[-1]['news'], 1) * 100:.1f}%." if before else ""),
+            *([f"Откуда лишние: {', '.join(f'{k} — {v}' for k, v in paths)}."] if paths else []),
+            "",
+            "Как читать: дальше по сообщению на сюжет. У каждой находки — что не так, номера новостей (как на /plot/) "
+            "и команда для бота, которая её убирает. «Уверенно» — можно отправлять сразу, «посмотри» — проверяющий "
+            "сомневается, реши, отправлять ли. В конце — советы, какие правила поменять.",
+            "",
+            f"Проверка стоила ≈ ${a['usd']:.2f}."]
     messages = ["\n".join(head)]
     by_story = {}
     for f in result["found"]:  # сюжет и новости могли забыться между проверкой и отчётом
         if f["story"] in state["stories"] and all(n in by_n for n in f["news"]):
             by_story.setdefault(f["story"], []).append(f)
     for sid, found in sorted(by_story.items(), key=lambda kv: -sum(len(f["news"]) for f in kv[1])):
-        lines = [f"{sid} «{names.get(sid, '')}», новостей — {len(state['stories'][sid]['urls'])}:"]
-        cmds = []
-        for f in found:
-            mark = "" if f["sure"] else " (проверь)"
-            kind = "чужая" if f["kind"] == "foreign" else "отдельное событие"
-            what = "; ".join(f"№{n} {(by_n[n].get('what') or by_n[n]['title'])[:80]}" for n in f["news"][:3])
-            more = f" и ещё {len(f['news']) - 3}" if len(f["news"]) > 3 else ""
-            lines.append(f"• {kind}{mark}: {what}{more} — {f['why']}")
-            if f["sure"]:
-                cmds += commands(state, f)
-        if cmds:
-            lines += ["", *cmds]
-        messages += _split("\n".join(lines))
+        title = f"{sid} «{names.get(sid, '')}» ({len(state['stories'][sid]['urls'])} новостей)"
+        blocks = []
+        for k, f in enumerate(sorted(found, key=lambda f: not f["sure"]), 1):
+            kind = "Чужая" if f["kind"] == "foreign" else "Отдельное событие"
+            how = Counter(_path(by_n[n])[0] for n in f["news"])
+            came = ", ".join(f"{p} ({c})" if len(how) > 1 else p for p, c in how.most_common())
+            news = ", ".join(f"№{n}" for n in f["news"])
+            block = (f"{k}. {kind}, {'уверенно' if f['sure'] else 'посмотри'}: {f['why']} — {news}\n"
+                     f"{'Как попала' if len(f['news']) == 1 else 'Как попали'}: {came}. Убрать: {fix(state, f)}")
+            blocks.append(block[:MESSAGE - 100])
+        cur = title
+        for block in blocks:
+            if len(cur) + len(block) + 2 > MESSAGE:
+                messages.append(cur)
+                cur = f"{sid} (продолжение)"
+            cur += "\n\n" + block
+        messages.append(cur)
     for k, tip in enumerate(result["advice"], 1):
-        messages += _split(f"Правила, совет {k}: {tip['pattern']}\n→ {tip['change']}")
+        messages += _split(f"Совет по правилам {k} из {len(result['advice'])}\n\nЧто повторяется: {tip['pattern']}\n\n"
+                           f"Что поменять: {tip['change']}")
     if len(messages) > MESSAGES:
         cut = len(messages) - MESSAGES + 1
         messages = messages[:MESSAGES - 1] + [f"…и ещё {cut} сообщений не влезло: приёмник берёт не больше {MESSAGES} за раз."]
