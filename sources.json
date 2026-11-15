@@ -6,7 +6,7 @@
       "title_ru": "Критичные к SNS",
       "note": "Televizije, dnevni list, nedeljnici, portali i novinska agencija", "note_ru": "Телеканалы, ежедневная газета, еженедельники, порталы и информагентство",
       "sources": [
-        {"name": "N1", "site": "https://n1info.rs", "feed": "https://n1info.rs/feed/", "exclude": ["/english/", "/najave-emisija/", "/svet/", "/magazin/", "/global-fokus/"]},
+        {"name": "N1", "site": "https://n1info.rs", "feed": "https://n1info.rs/feed/", "exclude": ["/english/", "/najave-emisija/", "/video/", "/svet/", "/magazin/", "/global-fokus/"]},
         {"name": "Nova", "site": "https://nova.rs", "feed": "https://nova.rs/feed/", "exclude": ["/emisije/", "/zabava/", "/sport/", "/vesti/svet/", "/magazin/"]},
         {"name": "Danas", "site": "https://www.danas.rs", "feed": "https://www.danas.rs/feed/", "exclude": ["/svet/", "/sport/", "/zivot/"]},
         {"name": "Radar", "site": "https://radar.nova.rs", "feed": "https://radar.nova.rs/feed/", "exclude": ["/global/"]},

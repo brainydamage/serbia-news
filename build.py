@@ -49,6 +49,9 @@ MARKER_RE = re.compile(r"(?<!\w)(HITNO|ХИТНО|UŽIVO|UZIVO|УЖИВО|BREAKI
 
 SITE_URL = "https://vestomat.rs"
 CARD_LIMIT = 8  # сколько новостей издания видно сразу — как в template.html
+# блок «поровну от каждого лагеря» над разделами — как CAMPS и CAMP_ITEMS в template.html
+CAMPS = ["independent", "state", "mainstream", "progov"]
+CAMP_ITEMS = 3
 # у каждого языка свой адрес: так поисковики находят и сербскую, и русскую версию
 PAGES = {
     "sr": {
@@ -56,6 +59,7 @@ PAGES = {
         "html_lang": "sr-Latn",
         "locale": "sr_RS",
         "h1": "Srbija: vesti",
+        "camps": "Najnovije sa svih strana",
         "title": "Srbija: vesti iz svih medija — Vestomat",
         "description": "Vesti iz Srbije na jednom mestu: mediji kritični prema SNS-u i bliski SNS-u, državni i regionalni "
                        "mediji, strani mediji o Srbiji. Naslovi svih izvora, ažurirano tokom celog dana.",
@@ -66,6 +70,7 @@ PAGES = {
         "html_lang": "ru",
         "locale": "ru_RU",
         "h1": "Сербия: новости",
+        "camps": "Последнее с каждой стороны",
         "title": "Новости Сербии на русском — Vestomat",
         "description": "Новости Сербии на русском языке в одном месте: СМИ, критичные к SNS и близкие к нему, "
                        "государственные и региональные медиа, зарубежная пресса о Сербии. Заголовки переводит ИИ, "
@@ -864,12 +869,54 @@ def head_tags(lang: str) -> str:
     return "\n".join(tags)
 
 
+def prerender_camps(data: dict, lang: str) -> str:
+    """Блок над разделами, как renderCamps в template.html: по CAMP_ITEMS свежих новостей лагеря от разных изданий,
+    круг за кругом; кто открывает круг, меняется раз в день по белградскому календарю — тот же сдвиг, что у скрипта."""
+    e = html.escape
+    ru = lang == "ru"
+    sections = {sec["id"]: sec for sec in data["sections"]}
+    camps = []
+    for cid in CAMPS:
+        if cid not in sections:
+            continue
+        news = sorted(((i, s) for s in data["sources"] if s["section"] == cid for i in s["items"] if i.get("date")),
+                      key=lambda pair: pair[0]["date"], reverse=True)
+        seen, picked = set(), []
+        for item, src in news:
+            if src["name"] not in seen:
+                seen.add(src["name"])
+                picked.append((item, src))
+            if len(picked) == CAMP_ITEMS:
+                break
+        if picked:
+            camps.append((cid, (sections[cid].get("title_ru") if ru else None) or sections[cid]["title"], picked))
+    if not camps:
+        return ""
+    day = datetime.now(LOCAL_TZ).date().toordinal() - date(1970, 1, 1).toordinal()
+    shift = day % len(camps)
+    camps = camps[shift:] + camps[:shift]
+    dot = lambda cid: f'<span class="dot" style="background:var(--c-{cid})"></span>'
+    legend = "".join(f"<span>{dot(cid)}{e(title)}</span>" for cid, title, _ in camps)
+    rows = [f'<li class="camp-name" style="--col:{k + 1};--row:1">{dot(cid)}{e(title)}</li>'
+            for k, (cid, title, _) in enumerate(camps)]
+    for r in range(CAMP_ITEMS):
+        for k, (cid, _, picked) in enumerate(camps):
+            if r < len(picked):
+                item, src = picked[r]
+                title = item["ru"]["title"] if ru and item.get("ru") else item["title"]
+                rows.append(f'<li class="item" data-round="{r + 1}" style="--col:{k + 1};--row:{r + 2}"><div class="row">'
+                            f'<span class="time"></span><a class="head" href="{e(item["url"])}" target="_blank" rel="noopener">'
+                            f'<span class="src">{dot(cid)}{e(src["name"])}</span>{e(title)}</a></div></li>')
+    return (f'<div class="camps" data-id="camps"><h2>{e(PAGES[lang]["camps"])}</h2><p class="camps-legend">{legend}</p>'
+            f'<ul class="items camps-grid">{"".join(rows)}</ul></div>')
+
+
 def prerender(data: dict, lang: str) -> str:
     """Те же разделы и колонки, что рисует скрипт, но готовым HTML: заголовки видят и роботы без JS.
     Разметка повторяет template.html, чтобы до запуска скрипта страница выглядела так же."""
     e = html.escape
     ru = lang == "ru"
-    out = []
+    out = [prerender_camps(data, lang)]
     for sec in data["sections"]:
         cards = []
         for name, site, items in cards_of(sec, [s for s in data["sources"] if s["section"] == sec["id"] and s["items"]]):

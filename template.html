@@ -162,6 +162,27 @@ main { max-width: 1300px; margin: 0 auto; padding: 0 0 40px; }
 .section-head p { margin: 4px 0 0; color: var(--muted); font-size: 15px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); }
 
+.camps { scroll-margin-top: calc(var(--sticky-h, 0px) + 10px); margin: 30px 20px 0; padding: 18px 20px 6px; border: 1.5px solid var(--line); border-radius: 10px; }
+.camps-dot { background: conic-gradient(var(--c-independent) 0 25%, var(--c-state) 0 50%, var(--c-mainstream) 0 75%, var(--c-progov) 0); }
+.camps h2 { margin: 0 0 14px; font-size: 20px; }
+/* широкий экран: колонка на лагерь (--col, --row ставит renderCamps); уже — один перемешанный список кругами */
+.camps-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 28px; margin-bottom: 10px; }
+.camps-grid > li { grid-column: var(--col); grid-row: var(--row); }
+.camps-legend { display: none; margin: -6px 0 14px; color: var(--muted); font-size: 12px; }
+.camps-legend > span { display: inline-flex; align-items: center; gap: 5px; margin-right: 12px; white-space: nowrap; }
+.camp-name { font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; margin-bottom: 8px; }
+.camp-name .dot { width: 8px; height: 8px; margin: -2px 7px 0 0; vertical-align: middle; }
+/* две колонки не годятся: слева всегда были бы лагеря 1 и 3, справа 2 и 4 — как будто пары */
+@media (max-width: 1100px) {
+  .camps-grid { grid-template-columns: 1fr; }
+  .camps-grid > li { grid-column: auto; grid-row: auto; }
+  .camps-grid > .camp-name { display: none; }
+  .camps-legend { display: block; }
+}
+@media (max-width: 640px) {
+  .camps-grid > [data-round="3"] { display: none; }  /* на телефоне два круга — блок не длиннее экрана */
+}
+
 .card { padding: 35px 20px 0; min-width: 0; }
 .card-head { display: flex; gap: 12px; align-items: center; margin-bottom: 15px; }
 .avatar {
@@ -305,6 +326,8 @@ footer a { color: var(--text); }
   .section-head h2 { font-size: 20px; }
   .section-head .dot { width: 8px; height: 8px; margin-right: 8px; }
   .section-head p { font-size: 13px; }
+  .camps { margin: 20px 16px 0; padding: 14px 14px 2px; }
+  .camps h2 { font-size: 18px; margin-bottom: 10px; }
   .card { padding: 22px 16px 0; }
   .card-head { margin-bottom: 10px; }
   .card-name { font-size: 18px; }
@@ -414,6 +437,8 @@ const UI = {
   title: "Srbija: vesti",
   pageTitle: "Srbija: vesti iz svih medija — Vestomat",
   bySource: "Po medijima",
+  camps: "Najnovije sa svih strana",
+  campsChip: "Najnovije",
   all: "Sve",
   feed: "Sve vesti",
   orig: "Original",
@@ -461,6 +486,8 @@ const UI_RU = {
   title: "Сербия: новости",
   pageTitle: "Новости Сербии на русском — Vestomat",
   bySource: "По изданиям",
+  camps: "Последнее с каждой стороны",
+  campsChip: "Самое новое",
   all: "Все",
   feed: "Общая лента",
   search: "Поиск",
@@ -777,8 +804,53 @@ function matches(item) {
 }
 
 // ---------- views ----------
+// первый экран — поровну от каждого лагеря, а не раздел одного из них.
+// Новости идут кругами: в каждом круге по одной от каждого лагеря — на телефоне это один список,
+// и первый экран делят все. Кто открывает круг, меняется раз в день (по белградскому календарю).
+// На широком экране те же строки расставлены колонками по лагерям: --col и --row в .camps-grid.
+const CAMPS = ["independent", "state", "mainstream", "progov"];
+const CAMP_ITEMS = 3;
+function renderCamps() {
+  const camps = [];
+  for (const id of CAMPS) {
+    const sec = sectionById[id];
+    if (!sec || !state.sections.has(id)) continue;
+    const all = DATA.sources.filter(s => s.section === id)
+      .flatMap(src => src.items.filter(i => i.date).map(i => [i, src]))
+      .sort((a, b) => b[0].date.localeCompare(a[0].date));
+    const seen = new Set(), picked = [];
+    for (const [item, src] of all) {  // от разных изданий: иначе N1 займёт весь лагерь
+      if (seen.has(src.name)) continue;
+      seen.add(src.name);
+      picked.push([item, src]);
+      if (picked.length === CAMP_ITEMS) break;
+    }
+    if (picked.length) camps.push({ id, sec, picked });
+  }
+  if (!camps.length) return [];
+  const day = Math.round(Date.parse(dayKey(new Date(now))) / 864e5);
+  const shift = day % camps.length;
+  const order = [...camps.slice(shift), ...camps.slice(0, shift)];
+
+  const rows = order.map(({ id, sec }, k) => h("li", { class: "camp-name", style: `--col:${k + 1};--row:1` },
+    h("span", { class: "dot", style: `background:var(--c-${id})` }), label(sec, "title")));
+  for (let r = 0; r < CAMP_ITEMS; r++) {
+    order.forEach(({ picked }, k) => {
+      if (!picked[r]) return;
+      const li = renderItem(picked[r][0], picked[r][1], { showSource: true });
+      li.dataset.round = r + 1;
+      li.style.cssText = `--col:${k + 1};--row:${r + 2}`;
+      rows.push(li);
+    });
+  }
+  // без колонок лагерь виден только по цвету точки — подписываем цвета под заголовком
+  const legend = h("p", { class: "camps-legend" }, order.map(({ id, sec }) =>
+    h("span", {}, h("span", { class: "dot", style: `background:var(--c-${id})` }), label(sec, "title"))));
+  return [h("div", { class: "camps", "data-id": "camps" }, h("h2", {}, t("camps")), legend, h("ul", { class: "items camps-grid" }, rows))];
+}
+
 function renderSources() {
-  const out = [];
+  const out = state.q ? [] : renderCamps();
   for (const sec of DATA.sections) {
     const cards = [];
     const groupOf = new Map((sec.groups || []).flatMap(g => g.sources.map(name => [name, g])));
@@ -910,8 +982,14 @@ function renderChips() {
 }
 
 // оглавление: только разделы, которые сейчас на странице (поиск мог часть скрыть)
+const JUMP_TARGETS = "#main .camps, #main .section";
 function renderContents(chips) {
-  for (const el of document.querySelectorAll("#main .section")) {
+  for (const el of document.querySelectorAll(JUMP_TARGETS)) {
+    if (el.dataset.id === "camps") {  // блок «поровну от каждого лагеря» — точка из цветов всех лагерей
+      chips.append(h("button", { class: "chip jump", "data-id": "camps", onclick: () => el.scrollIntoView({ behavior: "smooth" }) },
+        h("span", { class: "dot camps-dot" }), t("campsChip")));
+      continue;
+    }
     const sec = sectionById[el.dataset.id];
     chips.append(h("button", { class: "chip jump", "data-id": sec.id, title: label(sec, "note"), onclick: () => el.scrollIntoView({ behavior: "smooth" }) },
       h("span", { class: "dot", style: `background:var(--c-${sec.id})` }), label(sec, "title")));
@@ -921,7 +999,7 @@ function renderContents(chips) {
 // подсвечиваем в оглавлении раздел, который сейчас читают
 let stickyHeight = 0;
 function spy() {
-  const sections = [...document.querySelectorAll("#main .section")];
+  const sections = [...document.querySelectorAll(JUMP_TARGETS)];
   if (state.view === "feed" || !sections.length) return;
   const atBottom = innerHeight + scrollY >= document.documentElement.scrollHeight - 2;
   let current = atBottom ? sections.at(-1) : sections[0];
