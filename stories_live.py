@@ -59,10 +59,7 @@ SAME_RULES = {"93f151fd03", "dfadd2988f", "9e34e14300"}
 FORGET = timedelta(days=5)
 SPENT_DAYS = 14
 PAGE_WINDOW = timedelta(hours=24)  # на странице — видимые сюжеты, обновлявшиеся за это время
-# порядок сюжетов — по горячести: каждое издание даёт сюжету очко за свою последнюю новость в нём, очко вдвое тает
-# за HEAT_HALF_LIFE. Свежий сюжет на 5 изданий выше вчерашнего на 25, одна реплика большой сюжет не поднимает,
-# а новый поворот, о котором пишут многие, — поднимает
-HEAT_HALF_LIFE = timedelta(hours=6)
+# порядок сюжетов — по горячести (stories.heat): новый поворот, о котором пишут многие, поднимает сюжет
 # заголовок сюжета — из его новостей за столько часов до последней: самая типичная за всё время 13.11 держала
 # анонс «пройдут консультации», когда они давно прошли
 HEADLINE_RECENT = timedelta(hours=6)
@@ -152,6 +149,8 @@ def forget_old(state: dict, vectors: dict, now: str) -> None:
     parts = {it["part"] for it in state["items"].values()}
     state["merges"] = [m for m in state.get("merges", []) if parts & set(m["parts"])]
     state["apart"] = [pair for pair in state.get("apart", []) if parts & set(pair[0]) and parts & set(pair[1])]
+    # карточка склеенного сюжета живёт, пока жива его часть: unmerge вернёт сюжет с ней
+    state["cards"] = {sid: c for sid, c in state.get("cards", {}).items() if sid in state["stories"] or sid in parts}
     for u in set(vectors) - set(state["items"]):
         del vectors[u]
 
@@ -234,7 +233,7 @@ def make_client():
 def step_of(system: str) -> str:
     """Шаг сборки по системному промпту запроса — для расхода по шагам."""
     return {stories.SYSTEM_PROMPT: "раскладка", stories.RECHECK_PROMPT: "перепроверка", stories.MERGE_PROMPT: "склейка",
-            stories.LINES_PROMPT: "деление", NAME_PROMPT: "имена", stories_audit.AUDIT_PROMPT: "аудит",
+            stories.LINES_PROMPT: "деление", NAME_PROMPT: "имена", stories.CARD_PROMPT: "карточки", stories_audit.AUDIT_PROMPT: "аудит",
             stories_audit.ADVICE_PROMPT: "аудит"}.get(system, "другое")
 
 
@@ -563,12 +562,7 @@ NEWS, OUTLETS = ("новость", "новости", "новостей"), ("из
 
 
 def heat(state: dict, sid: str, now: str) -> float:
-    latest = {}  # издание → время его последней новости в сюжете (публикации, не позже, чем увидели)
-    for u in state["stories"][sid]["urls"]:
-        it = state["items"][u]
-        latest[it["source"]] = max(latest.get(it["source"], ""), it.get("published", it["seen"]))
-    moment = datetime.fromisoformat(now)
-    return sum(0.5 ** ((moment - datetime.fromisoformat(t)) / HEAT_HALF_LIFE) for t in latest.values())
+    return stories.heat(state, sid, now)
 
 
 def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> None:
@@ -714,7 +708,8 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
                  f'{local_time(story["created"])} — {local_time(story["updated"])} · {sid}'
                  f'{f" «{e(names[sid])}»" if sid in names else ""}'
                  f'{" · выделен из " + page_link(state["spun"][sid]) if sid in state.get("spun", {}) else ""}')
-        return headline(urls), about, lines_note(sid), body
+        card = (f'<p class="meta">Событие сюжета: {e(state["cards"][sid])}</p>' if sid in state.get("cards", {}) else "")
+        return headline(urls), about, card + lines_note(sid), body
 
     # у каждого видимого сюжета — своя страница /plot/sX/; у сюжетов, которые уже не на главной странице (старше
     # PAGE_WINDOW), тоже: на них ведут ссылки, отправленные раньше
@@ -836,7 +831,7 @@ td{padding:2px 14px 2px 0}.what{color:#777;font-size:13px}
 {f'<details><summary>Новости этой сборки — что сделала каждая</summary>{rebuilt_note}<ul>{arrived}</ul></details>' if arrived else ""}
 {f'<p class="err">Сюжеты в этой сборке не обновились: {e(error)}</p>' if error else ""}
 <p class="meta">Сюжеты — по горячести: каждое издание даёт очко за свою последнюю новость в сюжете, очко вдвое тает
-за {int(HEAT_HALF_LIFE.total_seconds() // 3600)} ч (час назад — почти 1, {int(HEAT_HALF_LIFE.total_seconds() // 3600)} ч назад — 0.5, сутки назад — 0.06).
+за {int(stories.HEAT_HALF_LIFE.total_seconds() // 3600)} ч (час назад — почти 1, {int(stories.HEAT_HALF_LIFE.total_seconds() // 3600)} ч назад — 0.5, сутки назад — 0.06).
 Цифра у новости — сходство с самой похожей другой новостью сюжета (у одиночных — с новостью видимого сюжета).
 Модель видит новость с сюжетом, только если сходство не ниже {stories.CANDIDATE_SIM}; <span class="sim mid">жёлтые</span> — ниже
 {stories.RECHECK_SIM}, такое добавление перепроверяет Haiku; <span class="sim low">красные</span> — ниже {stories.CANDIDATE_SIM}.
