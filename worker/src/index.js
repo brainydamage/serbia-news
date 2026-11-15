@@ -15,7 +15,9 @@
 //   worker коммитит в glossary.json на GitHub (секрет GITHUB_TOKEN), а коммит запускает сборку.
 //   Команды сюжетам (теневой режим, vestomat.rs/plot/) — «/move 1234 s471», «/split s191», «/unmerge s102» —
 //   так же дописывает в stories-commands.json; сборка их применяет (stories_live.py).
-// POST /stories {results: [{message, text}]} — от сборки: чем кончились команды сюжетам, ответом на сообщение с командой.
+// POST /stories {results: [{message, text, buttons}]} — от сборки: чем кончились команды сюжетам, ответом на сообщение
+//   с командой; отчёт проверки сюжетов — с кнопками (buttons — ряды {text, data}). Нажатая кнопка «fix:день:находка»
+//   становится командой {do: "fix"} в stories-commands.json, как набранная.
 //   Webhook worker подключает сам при первой сборке после выкатки (см. ensureWebhook).
 // GET /costs — страница с этой статистикой, GET /stats — сами данные для неё (с ключом STATS_KEY).
 //   Ключ страница берёт из адреса после # — эта часть не уходит ни на сервер, ни в Referer.
@@ -45,13 +47,14 @@ const GLOSSARY_PATH = "glossary.json";
 const COMMANDS_PATH = "stories-commands.json";
 const COMMANDS_KEEP = 200;  // последних команд в файле: сборка помнит, до какой дошла
 // поменять, если изменятся настройки webhook, — worker подключит его заново
-const WEBHOOK_VERSION = "1";
+const WEBHOOK_VERSION = "2";  // 2 — и нажатия кнопок (callback_query)
 const GLOSSARY_HELP = [
   "Чтобы добавить название в глоссарий, напиши строку «как в оригинале = как по-русски», можно несколько строк:",
   "Air Serbia = Air Serbia", "Republika Srpska = Республика Сербская", "",
   "Убрать: «удалить Air Serbia». Новости с этим названием переведутся заново в ближайшей сборке.",
   "", "Сюжеты (vestomat.rs/plot/), по команде на строку:",
   "/move 1234 s471 — новость №1234 в сюжет s471 (new вместо s471 — в новый сюжет)",
+  "/move 1234 1240 1302 new — несколько новостей вместе в один новый сюжет (или в s471)",
   "/split s191 s298 — части s191 и s298 в отдельный сюжет",
   "/unmerge s102 — отменить склейку: s102 снова отдельный сюжет",
 ].join("\n");
@@ -297,7 +300,7 @@ async function webhookSecret(env) {
 async function ensureWebhook(env, origin) {
   if (!env.TELEGRAM_TOKEN || (await env.REPORTS.get("webhook")) === WEBHOOK_VERSION) return;
   const done = await telegram(env, "setWebhook", {
-    url: `${origin}/telegram`, secret_token: await webhookSecret(env), allowed_updates: ["message"],
+    url: `${origin}/telegram`, secret_token: await webhookSecret(env), allowed_updates: ["message", "callback_query"],
   });
   if (done) await env.REPORTS.put("webhook", WEBHOOK_VERSION);
 }
@@ -306,7 +309,12 @@ async function ensureWebhook(env, origin) {
 async function telegramUpdate(request, env) {
   const secret = await webhookSecret(env);
   if (!secret || request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== secret) return json({ error: "unauthorized" }, 401);
-  const message = (await request.json()).message;
+  const update = await request.json();
+  if (update.callback_query) {
+    await storyButton(env, update.callback_query);
+    return json({ ok: true });
+  }
+  const message = update.message;
   if (!message?.text || String(message.chat?.id) !== String(env.TELEGRAM_CHAT_ID)) return json({ ok: true });
   const reply = text => telegram(env, "sendMessage", { text, reply_parameters: { message_id: message.message_id } });
 
@@ -344,17 +352,40 @@ async function telegramUpdate(request, env) {
   return json({ ok: true });
 }
 
-// «/move 1234 s471», «/move №1234 new», «/split s191 s298», «/unmerge s102»; в группе Telegram дописывает к команде
+// «/move 1234 s471», «/move №1234 new», «/move 1234 1240 new» (вместе), «/split s191 s298», «/unmerge s102»; в группе Telegram дописывает к команде
 // @имя_бота — его отбрасываем. Не команда сюжетам — null
 function storyCommand(line) {
   const [head, ...args] = line.replace(/^(\/\w+)@\w+/, "$1").split(/[\s,]+/);
   const story = /^s\d+$/;
-  if (head === "/move" && args.length === 2 && /^[№#]?\d+$/.test(args[0]) && (story.test(args[1]) || args[1] === "new")) {
-    return { do: "move", news: Number(args[0].replace(/^[№#]/, "")), to: args[1] };
+  const to = args.at(-1), numbers = args.slice(0, -1);
+  if (head === "/move" && numbers.length && numbers.every(a => /^[№#]?\d+$/.test(a)) && (story.test(to) || to === "new")) {
+    const news = numbers.map(a => Number(a.replace(/^[№#]/, "")));
+    return { do: "move", news: news.length === 1 ? news[0] : news, to };
   }
   if (head === "/split" && args.length && args.every(a => story.test(a))) return { do: "split", parts: args };
   if (head === "/unmerge" && args.length === 1 && story.test(args[0])) return { do: "unmerge", story: args[0] };
   return head.startsWith("/") && ["/move", "/split", "/unmerge"].includes(head) ? { do: "bad" } : null;
+}
+
+// кнопка под отчётом проверки сюжетов: «fix:2026-11-14:7» — убрать находку 7, «fix:2026-11-14:sure» — все уверенные.
+// Нажатую кнопку убираем с сообщения, чтобы не нажать дважды; ответ — сообщением на отчёт, как на набранную команду
+async function storyButton(env, query) {
+  const answer = text => telegram(env, "answerCallbackQuery", { callback_query_id: query.id, text });
+  const message = query.message;
+  if (!message || String(message.chat?.id) !== String(env.TELEGRAM_CHAT_ID)) return answer("Эта кнопка не отсюда");
+  const fix = String(query.data || "").match(/^fix:(\d{4}-\d\d-\d\d):(sure|\d+)$/);
+  if (!fix) return answer("Не знаю такой кнопки");
+  try {
+    const text = await addStoryCommands(env, [{ do: "fix", day: fix[1], which: fix[2] === "sure" ? "sure" : Number(fix[2]) }],
+      message.message_id);
+    await answer("Записала: применится в ближайшей сборке");
+    const rows = (message.reply_markup?.inline_keyboard || []).map(row => row.filter(b => b.callback_data !== query.data))
+      .filter(row => row.length);
+    await telegram(env, "editMessageReplyMarkup", { message_id: message.message_id, reply_markup: { inline_keyboard: rows } });
+    await telegram(env, "sendMessage", { text, reply_parameters: { message_id: message.message_id } });
+  } catch (error) {
+    await answer(`Не получилось: ${error.message}`.slice(0, 200));
+  }
 }
 
 // stories-commands.json — по команде на строку; id растёт, сборка применяет те, что новее последней применённой
@@ -374,7 +405,8 @@ async function addStoryCommands(env, commands, messageId) {
     for (const c of commands) list.push({ id: ++id, t, message: messageId, ...c });
     const kept = list.slice(-COMMANDS_KEEP);
     const text = `{\n  "commands": [\n${kept.map(c => `    ${JSON.stringify(c)}`).join(",\n")}\n  ]\n}\n`;
-    const label = commands.map(c => c.do === "move" ? `move ${c.news} → ${c.to}` : c.do === "split" ? `split ${c.parts.join(" ")}` : `unmerge ${c.story}`);
+    const label = commands.map(c => c.do === "move" ? `move ${[c.news].flat().join(" ")} → ${c.to}` : c.do === "split" ? `split ${c.parts.join(" ")}`
+      : c.do === "fix" ? `fix ${c.day} ${c.which === "sure" ? "все уверенные" : "находка " + c.which}` : `unmerge ${c.story}`);
     const saved = await fetch(api, {
       method: "PUT", headers,
       body: JSON.stringify({ message: `Stories from Telegram: ${label.join(", ")}`.slice(0, 200), content: toBase64(text), sha, branch: "main" }),
@@ -392,6 +424,10 @@ async function storyResults(request, env) {
     const text = String(r?.text || "").slice(0, 1000);
     if (!text) continue;
     const payload = { text };
+    const rows = (Array.isArray(r.buttons) ? r.buttons : []).filter(Array.isArray)
+      .map(row => row.filter(b => b?.text && b?.data).map(b => ({ text: String(b.text).slice(0, 64), callback_data: String(b.data).slice(0, 64) })))
+      .filter(row => row.length);
+    if (rows.length) payload.reply_markup = { inline_keyboard: rows };
     if (Number.isInteger(r.message)) payload.reply_parameters = { message_id: r.message, allow_sending_without_reply: true };
     await telegram(env, "sendMessage", payload);
   }

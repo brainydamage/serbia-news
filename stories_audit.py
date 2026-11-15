@@ -21,7 +21,8 @@ AUDIT_PRICE = (4.0, 20.0)  # вход / выход за 1M токенов, $
 AUDIT_BATCH = 200  # новостей в одном запросе: большой сюжет — один, мелкие — пачкой
 AUDIT_DAYS = 14  # сколько дней итогов хранить — для сравнения со вчера
 MESSAGE = 1000  # приёмник жалоб режет сообщение до 1000 знаков
-MESSAGES = 20  # и берёт не больше 20 за раз
+MESSAGES = 20  # и берёт не больше 20 за раз: отчёт длиннее уходит несколькими порциями
+REPORT_MAX = 60  # больше сообщений за вечер не шлём
 
 AUDIT_PROMPT = f"""Ты проверяешь сюжеты агрегатора новостей о Сербии перед показом читателям. {stories.RULES}
 
@@ -184,6 +185,9 @@ def finish(state: dict, day: str, sids: list[str], chunks: list[list[str]], size
                             AUDIT_EFFORT, AUDIT_MODEL, AUDIT_PRICE)
         usd += usage["usd"]
         advice = answer["advice"]
+    for k, f in enumerate(found, 1):
+        f["id"] = k
+    state["audit_found"] = {d: v for d, v in sorted({**state.get("audit_found", {}), day: found}.items())[-AUDIT_DAYS:]}
     state["audited_news"] = sorted(reported | flagged)
     state["audit_seen"] = {sid: n for sid, n in state.get("audit_seen", {}).items() if sid in state["stories"]}
     state.setdefault("audits", {})[day] = {"stories": len(sids), "news": news_total,
@@ -205,35 +209,79 @@ def run(state: dict, day: str, ask) -> dict:
                   answers, usd, ask)
 
 
-def fix(state: dict, finding: dict) -> str:
-    """Как убрать находку командами бота: вся часть пришла склейкой — /unmerge; находка — ровно одна часть — /split;
-    иначе /move: первая новость — в новый сюжет, остальные — за ней."""
+def _remedy(state: dict, finding: dict) -> tuple[str, str]:
+    """Как убрать находку: вся часть пришла склейкой — ("unmerge", часть); находка — ровно одна часть — ("split",
+    часть); иначе ("move", "") — новости находки вместе в новый сюжет."""
     items = state["items"]
-    by_n = {it["n"]: it for it in items.values() if it.get("story")}
     news = set(finding["news"])
-    parts = {by_n[n]["part"] for n in news}
+    parts = {it["part"] for it in items.values() if it.get("story") and it["n"] in news}
     if len(parts) == 1:
         part = parts.pop()
         whole = {it["n"] for it in items.values() if it.get("story") == finding["story"] and it["part"] == part}
         if whole == news and part != finding["story"]:
             merged = any(m["gone"] == part for m in state.get("merges", []))
-            return f"/unmerge {part}" if merged else f"/split {part}"
-    first, *rest = sorted(news)
-    if not rest:
-        return f"/move {first} new"
-    return (f"/move {first} new, потом каждую из остальных ({', '.join(f'№{n}' for n in rest)}) — "
-            "/move <№> <сюжет из ответа бота>")
+            return ("unmerge", part) if merged else ("split", part)
+    return "move", ""
 
 
-def report(state: dict, day: str, result: dict) -> list[str]:
-    """Сообщения в Telegram: итоги с подсказкой, как читать; по сообщению на сюжет — пронумерованные находки,
-    у каждой команда, которая её убирает; советы по правилам. Режем между находками, а не посреди."""
+def _remedy_text(state: dict, finding: dict) -> str:
+    """Что сделает кнопка находки — словами."""
+    how, part = _remedy(state, finding)
+    if how == "unmerge":
+        return f"отменит склейку {part} — её новости снова отдельный сюжет"
+    if how == "split":
+        return f"вынесет часть {part} в свой сюжет"
+    news = ", ".join(f"№{n}" for n in finding["news"])
+    return f"вынесет {news} в новый сюжет" + (" — вместе" if len(finding["news"]) > 1 else "")
+
+
+def apply_fix(state: dict, day: str, which, now: str) -> str:
+    """Кнопка отчёта: which — номер находки дня или "sure" — все уверенные. Находка, чьих новостей в сюжете уже нет
+    (убрали руками, ушли склейкой), — мимо; часть новостей ушла — выносим оставшиеся. Вынесенное склейка обратно
+    не вернёт (state["apart"]). Возвращает итог для ответа в Telegram."""
+    found = state.get("audit_found", {}).get(day)
+    if found is None:
+        raise ValueError(f"находок за {day} нет: проверки не было или она уже забыта")
+    todo = [f for f in found if f["sure"]] if which == "sure" else [f for f in found if f["id"] == which]
+    if not todo:
+        raise ValueError("уверенных находок нет" if which == "sure" else f"находки {which} за {day} нет")
+    by_n = {it["n"]: u for u, it in state["items"].items() if it.get("story")}
+    done = []
+    for f in todo:
+        urls = [by_n[n] for n in f["news"] if n in by_n and state["items"][by_n[n]]["story"] == f["story"]]
+        if not urls:
+            done.append(f"{f['id']}: уже не в {f['story']}")
+            continue
+        how, part = _remedy(state, {**f, "news": [state["items"][u]["n"] for u in urls]})
+        if how == "unmerge":
+            sid = stories.unmerge(state, part, now)
+        elif how == "split":
+            sid = stories.split(state, [part], now)
+        else:
+            sid = stories.move(state, urls[0], None, now)
+            for u in urls[1:]:
+                stories.move(state, u, sid, now, part=sid)
+            if f["story"] in state["stories"]:
+                state.setdefault("apart", []).append([[sid], sorted(stories._parts(state, f["story"]))])
+        done.append(f"{f['id']}: {', '.join('№' + str(state['items'][u]['n']) for u in urls)} → {sid}")
+    return (f"находки {day[8:10]}.{day[5:7]}: " if which == "sure" else "") + "; ".join(done)
+
+
+def report(state: dict, day: str, result: dict) -> list[dict]:
+    """Сообщения в Telegram ({"text", "buttons"}): итоги с подсказкой, как читать, и кнопкой «убрать все уверенные»;
+    по сообщению на сюжет — пронумерованные находки, под сообщением — кнопка на каждую; советы по правилам.
+    Режем между находками, а не посреди. Кнопка шлёт боту fix:<день>:<номер находки или sure>."""
     a = state["audits"][day]
     names = state.get("names", {})
     by_n = {it["n"]: it for it in state["items"].values() if it.get("story")}
     share = a["flagged"] / max(a["news"], 1) * 100
     before = [v for d, v in sorted(state["audits"].items()) if d < day]
     paths = sorted(a["paths"].items(), key=lambda kv: -kv[1])
+    by_story = {}
+    for f in result["found"]:  # сюжет и новости могли забыться между проверкой и отчётом
+        if f["story"] in state["stories"] and all(n in by_n for n in f["news"]):
+            by_story.setdefault(f["story"], []).append(f)
+    sure = [f for found in by_story.values() for f in found if f["sure"]]
     head = [f"Проверка сюжетов за {day[8:10]}.{day[5:7]}",
             "",
             f"В топе за день было {a['stories']} сюжетов, в них {a['news']} новостей. Лишних нашлось {a['flagged']} "
@@ -244,15 +292,13 @@ def report(state: dict, day: str, result: dict) -> list[str]:
             *([f"Откуда лишние: {', '.join(f'{k} — {v}' for k, v in paths)}."] if paths else []),
             "",
             "Как читать: дальше по сообщению на сюжет. У каждой находки — что не так, номера новостей (как на /plot/) "
-            "и команда для бота, которая её убирает. «Уверенно» — можно отправлять сразу, «посмотри» — проверяющий "
-            "сомневается, реши, отправлять ли. В конце — советы, какие правила поменять.",
+            "и что сделает её кнопка под сообщением. «Уверенно» — проверяющий не сомневается, «посмотри» — реши сам. "
+            + (f"Кнопка ниже убирает все {len(sure)} уверенных разом. " if sure else "")
+            + "Нажатие — команда боту: применится в ближайшей сборке, бот ответит, что вышло. В конце — советы, какие правила поменять.",
             "",
             f"Проверка стоила ≈ ${a['usd']:.2f}."]
-    messages = ["\n".join(head)]
-    by_story = {}
-    for f in result["found"]:  # сюжет и новости могли забыться между проверкой и отчётом
-        if f["story"] in state["stories"] and all(n in by_n for n in f["news"]):
-            by_story.setdefault(f["story"], []).append(f)
+    messages = [{"text": "\n".join(head),
+                 "buttons": [[{"text": f"Убрать все уверенные ({len(sure)})", "data": f"fix:{day}:sure"}]] if sure else []}]
     for sid, found in sorted(by_story.items(), key=lambda kv: -sum(len(f["news"]) for f in kv[1])):
         title = f"{sid} «{names.get(sid, '')}» ({len(state['stories'][sid]['urls'])} новостей)"
         blocks = []
@@ -262,22 +308,28 @@ def report(state: dict, day: str, result: dict) -> list[str]:
             came = ", ".join(f"{p} ({c})" if len(how) > 1 else p for p, c in how.most_common())
             news = ", ".join(f"№{n}" for n in f["news"])
             block = (f"{k}. {kind}, {'уверенно' if f['sure'] else 'посмотри'}: {f['why']} — {news}\n"
-                     f"{'Как попала' if len(f['news']) == 1 else 'Как попали'}: {came}. Убрать: {fix(state, f)}")
-            blocks.append(block[:MESSAGE - 100])
-        cur = title
-        for block in blocks:
+                     f"{'Как попала' if len(f['news']) == 1 else 'Как попали'}: {came}. "
+                     f"Кнопка «Убрать {k}» {_remedy_text(state, f)}.")
+            blocks.append((block[:MESSAGE - 100], {"text": f"Убрать {k}", "data": f"fix:{day}:{f['id']}"}))
+        cur, buttons = title, []
+        for block, button in blocks:
             if len(cur) + len(block) + 2 > MESSAGE:
-                messages.append(cur)
-                cur = f"{sid} (продолжение)"
+                messages.append({"text": cur, "buttons": _rows(buttons)})
+                cur, buttons = f"{sid} (продолжение)", []
             cur += "\n\n" + block
-        messages.append(cur)
+            buttons.append(button)
+        messages.append({"text": cur, "buttons": _rows(buttons)})
     for k, tip in enumerate(result["advice"], 1):
-        messages += _split(f"Совет по правилам {k} из {len(result['advice'])}\n\nЧто повторяется: {tip['pattern']}\n\n"
-                           f"Что поменять: {tip['change']}")
-    if len(messages) > MESSAGES:
-        cut = len(messages) - MESSAGES + 1
-        messages = messages[:MESSAGES - 1] + [f"…и ещё {cut} сообщений не влезло: приёмник берёт не больше {MESSAGES} за раз."]
+        messages += [{"text": m} for m in _split(f"Совет по правилам {k} из {len(result['advice'])}\n\n"
+                                                 f"Что повторяется: {tip['pattern']}\n\nЧто поменять: {tip['change']}")]
+    if len(messages) > REPORT_MAX:
+        cut = len(messages) - REPORT_MAX + 1
+        messages = messages[:REPORT_MAX - 1] + [{"text": f"…и ещё {cut} сообщений: больше {REPORT_MAX} за вечер не шлём."}]
     return messages
+
+
+def _rows(buttons: list[dict]) -> list[list[dict]]:
+    return [buttons[k:k + 4] for k in range(0, len(buttons), 4)]
 
 
 def _split(text: str) -> list[str]:

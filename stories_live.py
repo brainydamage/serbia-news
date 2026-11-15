@@ -11,7 +11,8 @@
 
 Править раскладку руками — командами Telegram-боту (worker/): он дописывает их в stories-commands.json, коммит
 запускает сборку, сборка применяет новые команды (apply_commands) и отвечает в Telegram, что вышло:
-    /move 1234 s471   — новость №1234 в сюжет s471 (new — в новый сюжет)
+    /move 1234 s471   — новость №1234 в сюжет s471 (new — в новый сюжет); несколько номеров — вместе:
+                        /move 1234 1240 1302 new
     /split s191 s298  — части s191 и s298 в отдельный сюжет
     /unmerge s102     — отменить склейку: части, которые принёс s102, снова сюжет s102
 
@@ -178,23 +179,36 @@ def apply_commands(state: dict, vectors: dict, now: str) -> list[dict]:
 def _apply(state: dict, vectors: dict, now: str, c: dict, by_n: dict) -> str:
     """Одна команда; ошибка — ValueError с текстом для ответа в Telegram."""
     stories_ = state["stories"]
-    if c["do"] == "move":
-        url = by_n.get(c["news"])
-        if not url:
-            raise ValueError(f"новости №{c['news']} нет: забыта или ещё не разложена")
-        old = state["items"][url]["story"]
+    if c["do"] == "move":  # news — номер или список: несколько новостей — вместе в один сюжет
+        numbers = c["news"] if isinstance(c["news"], list) else [c["news"]]
+        missing = [n for n in numbers if n not in by_n]
+        if missing:
+            raise ValueError(f"новост{'и' if len(missing) == 1 else 'ей'} {', '.join(f'№{n}' for n in missing)} нет: "
+                             "забыт{'а' if len(missing) == 1 else 'ы'} или ещё не разложен{'а' if len(missing) == 1 else 'ы'}")
+        urls = [by_n[n] for n in numbers]
+        news = ", ".join(f"№{n}" for n in numbers)
+        olds = sorted({state["items"][u]["story"] for u in urls}, key=lambda s: int(s[1:]))
         if c["to"] == "new":
-            sid = stories.move(state, url, None, now)
-            if old in stories_:  # новая история: склейка не вернёт её туда, откуда сняли
-                state.setdefault("apart", []).append([[sid], sorted(stories._parts(state, old))])
-            return f"№{c['news']}: {old} → новый сюжет {sid}"
+            sid = stories.move(state, urls[0], None, now)
+            for u in urls[1:]:
+                stories.move(state, u, sid, now, part=sid)
+            for old in olds:
+                if old in stories_:  # новая история: склейка не вернёт её туда, откуда сняли
+                    state.setdefault("apart", []).append([[sid], sorted(stories._parts(state, old))])
+            return f"{news}: {', '.join(olds)} → новый сюжет {sid}"
         if c["to"] not in stories_:
             raise ValueError(f"сюжета {c['to']} нет")
-        if c["to"] == old:
-            return f"№{c['news']} уже в {old}"
-        part = stories._nearest_part(state, c["to"], vectors[url], vectors) if url in vectors else c["to"]
-        stories.move(state, url, c["to"], now, part=part)
-        return f"№{c['news']}: {old} → {c['to']} (часть {part})"
+        parts = []
+        for u in urls:
+            if state["items"][u]["story"] != c["to"]:
+                part = stories._nearest_part(state, c["to"], vectors[u], vectors) if u in vectors else c["to"]
+                stories.move(state, u, c["to"], now, part=part)
+                parts.append(part)
+        if not parts:
+            return f"{news} уже в {c['to']}"
+        return f"{news}: {', '.join(olds)} → {c['to']} (часть {', '.join(sorted(set(parts)))})"
+    if c["do"] == "fix":  # кнопка отчёта проверки дня
+        return stories_audit.apply_fix(state, c["day"], c["which"], now)
     if c["do"] == "split":
         known = {it["part"] for it in state["items"].values() if it.get("story")}
         missing = [p for p in c["parts"] if p not in known]
@@ -521,7 +535,9 @@ def run(archive: dict, sections: dict) -> None:
     if audit is not None:
         a = state["audits"][audit_day]
         print(f"Сюжеты: проверка дня — {a['flagged']} из {a['news']} новостей не на месте, ≈ ${a['usd']:.2f}", file=sys.stderr)
-        translate.reports_api({"results": [{"text": m} for m in stories_audit.report(state, audit_day, audit)]}, "stories")
+        messages = stories_audit.report(state, audit_day, audit)
+        for k in range(0, len(messages), stories_audit.MESSAGES):  # приёмник берёт не больше MESSAGES за раз
+            translate.reports_api({"results": messages[k:k + stories_audit.MESSAGES]}, "stories")
     today = state["spent"].get(day, {})
     print(f"Сюжеты: решено {decided}, склеено {merged}, сюжетов {len(state['stories'])}, "
           f"за сегодня ≈ ${today.get('usd', 0):.3f} (входа из кэша {today.get('read', 0) * 100 // max(today.get('in', 0), 1)}%"
@@ -756,8 +772,9 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
     lonely = "".join(item_row(u, state["items"][u], f' · {how(u)}{company(u)}{nearest(u)}') for u in hidden)
 
     def command(c: dict) -> str:
-        args = {"move": lambda: f"{c['news']} {c['to']}", "split": lambda: " ".join(c["parts"]),
-                "unmerge": lambda: c["story"]}.get(c["do"], lambda: "")()
+        args = {"move": lambda: f"{' '.join(map(str, c['news'])) if isinstance(c['news'], list) else c['news']} {c['to']}",
+                "split": lambda: " ".join(c["parts"]), "unmerge": lambda: c["story"],
+                "fix": lambda: f"{c['day']} {c['which']} (кнопка отчёта)"}.get(c["do"], lambda: "")()
         return f"<li>{e(local_time(c['applied']))} · /{e(c['do'])} {e(args)} — {e(c['result'])}</li>"
 
     commands = "".join(command(c) for c in reversed(state.get("commands", [])))
