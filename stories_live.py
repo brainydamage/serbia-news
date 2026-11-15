@@ -53,13 +53,15 @@ NOT_RULES = {"LINES_STEP", "MERGE_EVERY"}
 # 93f151fd03 — до 13.11, когда перепроверку больших сюжетов перевели с роста в 1.5 раза на LINES_STEP;
 # dfadd2988f — до 13.11, когда склейка стала называть общее событие пары (event);
 # 9e34e14300 — до 14.11, когда склейку перевели с раза в час на раз в два часа (MERGE_EVERY ушло из отпечатка);
-# a0cbf341ea — до 15.11, когда повод сюжета с карточкой в склейке стал самой карточкой (пересборка с карточками стоила $6)
-SAME_RULES = {"93f151fd03", "dfadd2988f", "9e34e14300", "a0cbf341ea"}
+# a0cbf341ea — до 15.11, когда повод сюжета с карточкой в склейке стал самой карточкой (пересборка с карточками стоила $6);
+# 74b3c97a3d — до 16.11, когда копии пошли за оригиналом без модели, перепроверка и склейка стали выбирать тип связи
+# (LINKS) вместо «да / нет», а сильная модель — работать только на SHOW_TOP сюжетов страницы
+SAME_RULES = {"93f151fd03", "dfadd2988f", "9e34e14300", "a0cbf341ea", "74b3c97a3d"}
 # сюжет, который не обновлялся дольше, убираем из состояния вместе с его новостями: архив их уже забыл
 # (ARCHIVE_DAYS в build.py — 4 дня), так что заново раскладывать их не придётся
 FORGET = timedelta(days=5)
 SPENT_DAYS = 14
-PAGE_WINDOW = timedelta(hours=24)  # на странице — видимые сюжеты, обновлявшиеся за это время
+PAGE_WINDOW = timedelta(hours=24)  # на странице — видимые сюжеты, обновлявшиеся за это время (не больше stories.SHOW_TOP)
 # порядок сюжетов — по горячести (stories.heat): новый поворот, о котором пишут многие, поднимает сюжет
 # заголовок сюжета — из его новостей за столько часов до последней: самая типичная за всё время 13.11 держала
 # анонс «пройдут консультации», когда они давно прошли
@@ -580,6 +582,7 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
 
     heats = {sid: heat(state, sid, now) for sid in shown}
     shown.sort(key=lambda sid: (heats[sid], state["stories"][sid]["updated"]), reverse=True)
+    visible_count, shown = len(shown), shown[:stories.SHOW_TOP]
 
     def local_time(iso: str) -> str:
         return datetime.fromisoformat(iso).astimezone(LOCAL_TZ).strftime("%d.%m %H:%M")
@@ -616,7 +619,7 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
 
     opened = {}  # (сюжет, время) → номера новостей, открывших его одной сборкой
     for it in state["items"].values():
-        if it["history"][0]["story"] and it["history"][0]["why"] != "join":
+        if it["history"][0]["story"] and it["history"][0]["why"] not in ("join", "copy"):
             opened.setdefault((it["history"][0]["story"], it["history"][0]["t"]), []).append(it["n"])
 
     def how(u: str, here: str = "", link=None, sim: bool = False) -> str:
@@ -635,18 +638,22 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
         elif first["why"] == "join":
             text = f'модель добавила в {where(first["story"])}' + (
                 f' (сходство {first["sim"]:.3f})' if sim and first.get("sim") else "")
+        elif first["why"] == "copy":
+            text = f'копия №{first.get("of", "?")} — легла за ней в {where(first["story"])}' + (
+                f' (сходство {first["sim"]:.3f})' if sim and first.get("sim") else "")
         else:
             others = sorted(m for m in opened.get((first["story"], first["t"]), []) if m != it["n"])
             text = (f'открыла {where(first["story"])}' + (" вместе с " + ", ".join(f"№{m}" for m in others) if others else "")
                     + {"alone": ": похожих сюжетов не было", "new": ": модель сочла событие новым",
                        "unclear": ": модель не поняла, о чём новость"}.get(first["why"], ""))
-        steps = {"recheck": "перепроверка не согласилась — новость ушла в {}", "merge": "её сюжет {from_} влит в {}{event}",
+        steps = {"recheck": "перепроверка не согласилась{event} — новость ушла в {}", "merge": "её сюжет {from_} влит в {}{event}",
                  "line": "выделена отдельным событием в {}", "move": "перенесена командой /move в {}", "split": "отделена командой /split в {}",
                  "unmerge": "склейка отменена командой /unmerge — вернулась в {}"}
         for h in later:
             text += "; " + steps.get(h["why"], h["why"] + " → {}").format(
                 where(h["story"]) if h["story"] else "без сюжета", from_=e(h.get("from") or "—"),
-                event=f" (общее: {e(h['event'])})" if h.get("event") else "")
+                event=(f" ({e(h['link'])}: {e(h['event'])})" if h.get("link") else f" (общее: {e(h['event'])})")
+                if h.get("event") else "")
         return text
 
     def item_row(u: str, it: dict, extra: str) -> str:
@@ -748,7 +755,8 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
 
     # новости, которых на странице не видно: сюжет из одного издания. Сверху — самые похожие на видимый сюжет:
     # среди них и те, что должны были в него попасть
-    hidden = [u for sid, s in state["stories"].items() if s["updated"] >= cutoff and sid not in shown for u in s["urls"]]
+    hidden = [u for sid, s in state["stories"].items() if s["updated"] >= cutoff and not stories.visible(state, sid)
+              for u in s["urls"]]
     visible_urls = [u for sid in shown for u in state["stories"][sid]["urls"]]
     near = closest(hidden, visible_urls)
     hidden.sort(key=lambda u: near.get(u, (-1,))[0], reverse=True)
@@ -799,7 +807,8 @@ td{padding:2px 14px 2px 0}.what{color:#777;font-size:13px}
     kinds, notes = Counter(), {}
     for u in fresh:
         h = state["items"][u]["history"][0]
-        kinds["без сюжета" if not h["story"] else "добавлены в сюжет" if h["why"] == "join" else "открыли сюжет"] += 1
+        kinds["без сюжета" if not h["story"] else "добавлены в сюжет" if h["why"] == "join"
+              else "копии" if h["why"] == "copy" else "открыли сюжет"] += 1
         notes[u] = how(u, link=story_link, sim=True)
     arrived = "".join(item_row(u, state["items"][u], f" · {notes[u]}")
                       for u in sorted(fresh, key=lambda u: (state["items"][u]["seen"], state["items"][u]["n"])))
@@ -824,7 +833,7 @@ td{padding:2px 14px 2px 0}.what{color:#777;font-size:13px}
 </head><body>
 <h1 id="top">Сюжеты — теневой режим</h1>
 {toc}
-<p class="meta">Сборка {e(local_time(now))} · видимых сюжетов (от двух изданий) за сутки: {len(shown)} · всего в памяти: {total}.
+<p class="meta">Сборка {e(local_time(now))} · видимых сюжетов (от двух изданий) за сутки: {visible_count}, на странице {stories.SHOW_TOP} самых горячих · всего в памяти: {total}.
 Новости с {e(local_time(START))}; правила {e(state.get("fingerprint", ""))}, по ним разложено с {e(local_time(state.get("rebuilt", now)))}:
 поменялись правила — страница раскладывается заново целиком. Прежняя страница сюжетов-тем — <a href="/plot1/">/plot1/</a>.
 Страница не индексируется и на сайте нигде не упомянута.</p>
@@ -835,7 +844,7 @@ td{padding:2px 14px 2px 0}.what{color:#777;font-size:13px}
 за {int(stories.HEAT_HALF_LIFE.total_seconds() // 3600)} ч (час назад — почти 1, {int(stories.HEAT_HALF_LIFE.total_seconds() // 3600)} ч назад — 0.5, сутки назад — 0.06).
 Цифра у новости — сходство с самой похожей другой новостью сюжета (у одиночных — с новостью видимого сюжета).
 Модель видит новость с сюжетом, только если сходство не ниже {stories.CANDIDATE_SIM}; <span class="sim mid">жёлтые</span> — ниже
-{stories.RECHECK_SIM}, такое добавление перепроверяет Haiku; <span class="sim low">красные</span> — ниже {stories.CANDIDATE_SIM}.
+{stories.RECHECK_SIM}, такое добавление (и любое в сюжет с карточкой) перепроверяет Haiku, в сюжет этой страницы — Sonnet; копии (сходство от {stories.COPY_SIM}) идут за оригиналом без модели; <span class="sim low">красные</span> — ниже {stories.CANDIDATE_SIM}.
 Серым под заголовком — «что произошло» (what): по нему считается сходство.</p>
 <p><button onclick="{toggle % 'true'}">Раскрыть все</button> <button onclick="{toggle % 'false'}">Свернуть все</button>
 <span class="meta">· клавиши j / k — следующий / предыдущий сюжет</span></p>

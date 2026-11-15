@@ -44,6 +44,12 @@ CANDIDATES = 8
 # пороги — под e5 (у неё сходства сжаты к 0.8–0.95). На эталоне 09–10.11 у 0.855 полнота пар 0.80 при вдвое
 # меньшем числе разных пар выше порога, чем у MiniLM с прежним порогом 0.5 (полнота там была 0.72)
 CANDIDATE_SIM = 0.855  # ниже — даже не спрашиваем модель
+# копия — почти дословный пересказ уже разложенной новости другим изданием: идёт туда же, где сейчас оригинал, без
+# модели. Так одно решение не повторяется десятью: 15.11 первая новость МВД ко Дню памяти жертв ДТП легла в сюжет
+# о сводке 13.11, а за ней ещё 13 копий со сходством до 1.0. И исправление (перепроверка, команда) уводит
+# за оригиналом и будущие копии. На 15.11 выше 0.98 — 178 новостей из 1283, и каждая лежит там же, где оригинал;
+# разные выступления Вучича доходят до 0.969
+COPY_SIM = 0.98
 STORY_ITEMS = 30  # с каким числом последних новостей сюжета сравниваем
 SHOWN_ITEMS = 3  # сколько новостей сюжета видит модель: первая и последние
 BATCH = 25
@@ -55,6 +61,20 @@ RULES = """Сюжет — одна история: событие или одн�
 - Разные сюжеты: разные действия одного ведомства, компании или партии (прокуратура задержала одного и ответила на жалобу по другому делу; партия в разные дни представила разные части программы); выступления одного политика в разные дни по разным поводам; встречи одного участника с разными собеседниками (послами, делегациями, партиями), если это не одна общая встреча и не один визит; однотипные события без общего (две аварии, два ареста по разным делам, работы на двух разных дорогах, отключения в разных городах); разные выборы (парламентские и выборы в национальные советы меньшинств); общая тема без общего события («переговоры по Украине», «Сербия и ЕС», «война с Ираном»).
 - Обзор нескольких событий (подборка, сравнение) относится к сюжету любого из них.
 - Похожие слова ещё не значат одну историю."""
+
+# как связаны два повода — перепроверка (новость и событие сюжета) и склейка (два сюжета) выбирают одно из LINKS, а не
+# «да / нет»: на «одна ли это история?» модель отвечала «да» и для однотипного события другого дня — 15.11 и Haiku
+# при перепроверке, и Sonnet при склейке со сводкой МВД 13.11 и сообщением МВД ко Дню памяти 15.11, атакой дронов
+# на одно судно и на три. Когда «новый случай того же рода» — один из ответов, его и выбирают. Вместе — только KEEP_LINKS
+LINKS = """- same — одно и то же событие: тот же случай, то же выступление, пресс-конференция или интервью (даже о разных темах), то же решение или документ, один саммит;
+- development — следующий шаг того же дела или случая: подробности, задержания, обвинение, суд, итоги, выплаты, отставки по нему; подготовка и анонс самого события;
+- consequence — прямое последствие одного повода в другом;
+- reaction — заявление или ответ именно на другой повод;
+- repeat — новый случай того же рода: новое выступление, интервью, встреча, атака, сводка, происшествие, сообщение ведомства или другая часть программы — даже с теми же участниками, на ту же тему, через день;
+- topic — общие только тема, участник, ведомство, партия или компания;
+- other — не связаны."""
+KEEP_LINKS = ("same", "development", "consequence", "reaction")
+LINK_ENUM = KEEP_LINKS + ("repeat", "topic", "other")
 
 SYSTEM_PROMPT = f"""Ты раскладываешь свежие новости о Сербии по сюжетам. {RULES}
 Если сомневаешься — new: лишний сюжет потом склеят, а чужая новость в сюжете видна читателю.
@@ -95,8 +115,10 @@ SCHEMA = {
 
 RECHECK_PROMPT = f"""Ты проверяешь, правильно ли новости разложены по сюжетам агрегатора новостей о Сербии. {RULES}
 
-Вход — JSON: stories — сюжеты, id вида S…: event — событие сюжета, если уже определено, news — несколько новостей (что произошло); news — новости, id вида N…, каждая уже добавлена в сюжет story.
-Для каждой новости ответь keep: true, если она о той же истории, что сюжет (его event, если он дан: то же событие или дело, его развитие, последствия и реакции), и false, если это другое событие — пусть даже однотипное, на ту же тему или с теми же участниками."""
+Вход — JSON: stories — сюжеты, id вида S…: event — событие сюжета, если уже определено, news — несколько новостей (что произошло); news — новости, id вида N…, каждая уже добавлена в сюжет story: time — когда пришла (UTC), title — заголовок, what — что произошло.
+Для каждой новости сначала event — её повод одной фразой по самой новости: кто что сделал или что произошло и когда. Потом link — как этот повод связан с событием сюжета (его event, а нет event — с тем, о чём его новости):
+{LINKS}
+Событие сюжета — его event, что бы сюжет ни набрал потом: его новости не про event ничего не доказывают."""
 
 RECHECK_SCHEMA = {
     "type": "object",
@@ -105,8 +127,9 @@ RECHECK_SCHEMA = {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {"id": {"type": "string"}, "keep": {"type": "boolean"}},
-                "required": ["id", "keep"],
+                "properties": {"id": {"type": "string"}, "event": {"type": "string"},
+                               "link": {"type": "string", "enum": list(LINK_ENUM)}},
+                "required": ["id", "event", "link"],
                 "additionalProperties": False,
             },
         }
@@ -118,11 +141,20 @@ RECHECK_SCHEMA = {
 # снял 9 из 19 чужих и 6 из 191 своих; Sonnet снимал больше чужих, но и своих столько же, а все добавления подряд —
 # полнота падает сильнее, чем растёт точность
 RECHECK_SIM = 0.9
+# Перепроверяется и любой join в сюжет с карточкой, и любой join в сюжет со страницы (hot): 14.11 из 41 новости,
+# которую проверка дня нашла не на месте после join, у 32 сходство было выше RECHECK_SIM — выступление Вучича на TV Pink
+# легло в сюжет его вчерашнего обращения без перепроверки. Копии (COPY_SIM) не перепроверяются: они идут за оригиналом.
+# Join в сюжет со страницы с 16.11 перепроверяет Sonnet (RECHECK_MODEL), остальные — Haiku: 15.11 Haiku оставил
+# в сюжетах с карточкой и датой атаку дронов на три судна (карточка — на одно, днём раньше), новую сводку о семейном
+# насилии, «Поштанску штедионицу» в сюжете о выплатах «Алта банки» — всё перепроверенное. Sonnet на все сюжеты
+# с карточкой стоил бы $1.5–2 в день, на сюжеты страницы — около половины
+RECHECK_MODEL = "claude-sonnet-5-5"
 RECHECK_EFFORT = "medium"
-# join в сюжет из топа (столько лагерей — разделов sources.json — и такая горячесть, как у топа проверки дня)
-# перепроверяется всегда: 14.11 из 41 новости, которую проверка дня нашла не на месте после join, у 32 сходство было
-# выше RECHECK_SIM — выступление Вучича на TV Pink легло в сюжет его вчерашнего обращения без перепроверки
-RECHECK_CAMPS, RECHECK_HEAT = 3, 3.0
+# на странице — SHOW_TOP самых горячих видимых сюжетов (hot), и сильная модель работает на них: перепроверка Sonnet,
+# склейка, вечерняя проверка. 15.11 в 30 самых больших сюжетах дня — 32% новостей и 45% добавлений в сюжет
+SHOW_TOP = 30
+# склейка видит у сюжета с карточкой меньше новостей: его повод задан карточкой
+MERGE_SHOWN_CARD = 3
 # горячесть сюжета: каждое издание даёт очко за свою последнюю новость в нём, очко вдвое тает за HEAT_HALF_LIFE.
 # Свежий сюжет на 5 изданий выше вчерашнего на 25, одна реплика большой сюжет не поднимает
 HEAT_HALF_LIFE = timedelta(hours=6)
@@ -131,9 +163,11 @@ MERGE_PROMPT = f"""Ты проверяешь сюжеты агрегатора �
 
 Вход — JSON: stories — сюжеты, id вида S…: event — событие сюжета, если уже определено, news — несколько новостей (дата время UTC · издание: что произошло); pairs — пары сюжетов, похожих по словам, id вида P…: a и b — сюжеты пары.
 Для каждой пары сначала event_a — повод сюжета a. Есть у сюжета event — это и есть его повод, что бы сюжет ни набрал потом: оставь event_a пустой строкой. Нет event — назови повод одной фразой: кто что сделал или что произошло и когда. Повод — одно действие: одно выступление, одна встреча, одно решение, одно происшествие. Не обобщай («реакции на…», «ситуация с…», «споры вокруг…») и не соединяй два повода через «и» или запятую. Потом так же event_b — повод сюжета b.
-Потом same — сравни поводы (event сюжета, а нет его — названный тобой): true, только если это одно и то же событие или одно дело, либо один повод — развитие, последствие или реакция именно на другой. Новости сюжета не про его event ничего не доказывают: сюжет мог набрать и чужие. Заявления с одного выступления, пресс-конференции или интервью — одно событие, даже если темы разные. Разные выступления, встречи, решения или происшествия одних и тех же участников — false, даже если тема общая. Если сомневаешься — false."""
+Потом link — как связаны поводы (event сюжета, а нет его — названный тобой):
+{LINKS}
+Новости сюжета не про его event ничего не доказывают: сюжет мог набрать и чужие. Если сомневаешься между связью и repeat или topic — выбери repeat или topic."""
 
-# повод каждого сюжета пары модель называет отдельно (event_a, event_b), до same. С 13.11 она называла одно общее
+# повод каждого сюжета пары модель называет отдельно (event_a, event_b), до link. С 13.11 она называла одно общее
 # событие — и 14.11 в 68 из 92 склеек соединяла через «и» два повода («обращение в соцсетях и выступление на TV Pink»),
 # так что склеек по общему участнику стало только больше. Сходство их не отличает: у неверных 0.87–0.91, у верных
 # столько же. Поводы пишутся в журнал склеек и на страницу. Повод сюжета с карточкой — сама карточка (merge_answer),
@@ -148,8 +182,8 @@ MERGE_SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {"id": {"type": "string"}, "event_a": {"type": "string"}, "event_b": {"type": "string"},
-                               "same": {"type": "boolean"}},
-                "required": ["id", "event_a", "event_b", "same"],
+                               "link": {"type": "string", "enum": list(LINK_ENUM)}},
+                "required": ["id", "event_a", "event_b", "link"],
                 "additionalProperties": False,
             },
         }
@@ -334,9 +368,13 @@ def _decide(state: dict, batch: list[tuple[str, dict]], now: str, vectors: dict,
     new_vecs = np.stack([vectors[url] for url, _ in batch])
     candidates = [{} for _ in batch]  # {id сюжета: лучшее сходство с его новостями}
     closest = {}  # id сюжета → его новости, самые похожие на новые новости, для которых он кандидат
+    copies = {}  # новая новость → (уже разложенная, которую она повторяет, сходство): идёт туда же (COPY_SIM)
     if live_urls:
         sims = new_vecs @ np.stack([vectors[u] for u in live_urls]).T
         for n in range(len(batch)):
+            if sims[n].max() >= COPY_SIM:
+                copies[n] = (live_urls[int(sims[n].argmax())], float(sims[n].max()))
+                continue
             for k in np.argsort(-sims[n]):
                 if sims[n, k] < CANDIDATE_SIM or len(candidates[n]) == CANDIDATES:
                     break
@@ -346,10 +384,14 @@ def _decide(state: dict, batch: list[tuple[str, dict]], now: str, vectors: dict,
     # соседи по сборке: если две новые новости похожи, обе идут к модели — вдруг это новое событие
     near = new_vecs @ new_vecs.T
     np.fill_diagonal(near, 0)
-    asked = [n for n in range(len(batch)) if candidates[n] or near[n].max(initial=0) >= CANDIDATE_SIM]
+    asked = [n for n in range(len(batch)) if n not in copies and (candidates[n] or near[n].max(initial=0) >= CANDIDATE_SIM)]
     for n in range(len(batch)):
-        if n not in asked:
-            url, item = batch[n]
+        url, item = batch[n]
+        if n in copies:
+            original, sim = state["items"][copies[n][0]], copies[n][1]
+            _add(state, original["story"], url, item, "copy", now, original["part"], sim)
+            state["items"][url]["history"][-1]["of"] = original["n"]
+        elif n not in asked:
             _add(state, _start(state, now), url, item, "alone", now)
     if not asked:
         return {"in": 0, "out": 0}
@@ -379,8 +421,8 @@ def _decide(state: dict, batch: list[tuple[str, dict]], now: str, vectors: dict,
 
     by_alias = {alias: sid for sid, alias in aliases.items()}
     verdicts = {d["id"]: d for d in answer["decisions"]}
-    weak = []  # (n, alias сюжета): join со слабым сходством или в сюжет из топа — на перепроверку
-    top = {sid for sid in aliases if _top(state, sid, now)}
+    weak = []  # (n, alias сюжета, модель): join со слабым сходством, в сюжет страницы или с карточкой — на перепроверку
+    page = set(hot(state, now))
     for n in asked:  # по порядку: «same» ссылается на более раннюю новость, у которой сюжет уже есть
         url, item = batch[n]
         d = verdicts.get(f"N{n}", {"verdict": "new", "target": ""})
@@ -396,8 +438,8 @@ def _decide(state: dict, batch: list[tuple[str, dict]], now: str, vectors: dict,
                 sid, target = child, aliases[child]
             part = _nearest_part(state, sid, vectors[url], vectors)
             sim = candidates[n].get(sid)
-            if candidates[n].get(sid, 0) < RECHECK_SIM or sid in top:
-                weak.append((n, target))
+            if candidates[n].get(sid, 0) < RECHECK_SIM or sid in page or sid in state.get("cards", {}):
+                weak.append((n, target, RECHECK_MODEL if sid in page else MODEL))
         elif verdict == "same" and target.startswith("N") and target[1:].isdigit() \
                 and batch[int(target[1:])][0] in state["items"] and state["items"][batch[int(target[1:])][0]]["story"]:
             sid = state["items"][batch[int(target[1:])][0]]["story"]
@@ -420,13 +462,11 @@ def heat(state: dict, sid: str, now: str) -> float:
     return sum(0.5 ** ((moment - datetime.fromisoformat(t)) / HEAT_HALF_LIFE) for t in latest.values())
 
 
-def camps(state: dict, sid: str) -> int:
-    """Сколько лагерей (разделов sources.json) пишет о сюжете."""
-    return len({state["items"][u]["section"] for u in state["stories"][sid]["urls"]})
-
-
-def _top(state: dict, sid: str, now: str) -> bool:
-    return camps(state, sid) >= RECHECK_CAMPS and heat(state, sid, now) >= RECHECK_HEAT
+def hot(state: dict, now: str) -> list[str]:
+    """Сюжеты страницы: SHOW_TOP самых горячих видимых живых сюжетов, по убыванию горячести."""
+    cutoff = (datetime.fromisoformat(now) - LIVE).isoformat()
+    heats = {sid: heat(state, sid, now) for sid, s in state["stories"].items() if s["updated"] >= cutoff and visible(state, sid)}
+    return sorted(heats, key=lambda sid: (heats[sid], state["stories"][sid]["updated"]), reverse=True)[:SHOW_TOP]
 
 
 def _when(iso: str) -> str:
@@ -459,23 +499,30 @@ def _nearest_part(state: dict, sid: str, vector: np.ndarray, vectors: dict) -> s
     return nearest.get("part") or nearest["story"]
 
 
-def _recheck(state: dict, batch: list[tuple[str, dict]], weak: list[tuple[int, str]], stories: list[dict],
+def _recheck(state: dict, batch: list[tuple[str, dict]], weak: list[tuple[int, str, str]], stories: list[dict],
              now: str, ask) -> dict:
-    """Перепроверка join со слабым сходством и join в сюжет из топа: сюжет — те же новости, что модель видела при раскладке. Снятая новость
-    уходит в свой сюжет (verdict recheck); новости пачки, легшие к ней через same, остаются где были."""
+    """Перепроверка join со слабым сходством, в сюжет страницы и в сюжет с карточкой: сюжет — те же новости, что модель
+    видела при раскладке; weak — (номер новости, сюжет, какая модель проверяет), запрос — на каждую модель. Модель
+    называет повод новости и как он связан с событием сюжета (LINKS); связь не из KEEP_LINKS — новость уходит в свой
+    сюжет (verdict recheck, в истории — повод и связь); новости пачки, легшие к ней через same, остаются где были."""
     shown = {s["id"]: s for s in stories}
-    content = json.dumps({"stories": [shown[a] for a in dict.fromkeys(a for _, a in weak)],
-                          "news": [{"id": f"N{n}", "story": a, "title": state["items"][batch[n][0]]["title"],
-                                    "what": batch[n][1].get("what", "")} for n, a in weak]}, ensure_ascii=False)
-    answer, usage = ask(RECHECK_PROMPT, content, RECHECK_SCHEMA, RECHECK_EFFORT, MODEL)
-    drop = {d["id"] for d in answer["news"] if not d["keep"]}
+    drop, usage = {}, {}
+    for model in dict.fromkeys(m for *_, m in weak):
+        mine = [(n, a) for n, a, m in weak if m == model]
+        content = json.dumps({"stories": [shown[a] for a in dict.fromkeys(a for _, a in mine)],
+                              "news": [{"id": f"N{n}", "story": a, "time": _when(now), "title": state["items"][batch[n][0]]["title"],
+                                        "what": batch[n][1].get("what", "")} for n, a in mine]}, ensure_ascii=False)
+        answer, used = ask(RECHECK_PROMPT, content, RECHECK_SCHEMA, RECHECK_EFFORT, model)
+        drop |= {d["id"]: d for d in answer["news"] if d["link"] not in KEEP_LINKS}
+        usage = {k: usage.get(k, 0) + v for k, v in used.items()}
     checked = state.setdefault("checked", {})
-    for n, _ in weak:
+    for n, *_ in weak:
         if f"N{n}" in drop:
             url, item = batch[n]
             old = state["items"][url]["story"]
             state["stories"][old]["urls"].remove(url)
             _add(state, new := _start(state, now), url, item, "recheck", now)
+            state["items"][url]["history"][-1] |= {"link": drop[f"N{n}"]["link"], "event": drop[f"N{n}"]["event"].strip()}
             # пара «откуда сняли — куда» для склейки уже проверена как разная, пока один из сюжетов не вырастет вдвое:
             # 15.11 перепроверка сняла 18810 (Вучевич о запрете СНС) с сюжета о решении пленума распустить БИА,
             # а склейка через полчаса вернула её туда вместе с новым сюжетом
@@ -537,9 +584,9 @@ def _share_entities(state: dict, a: str, b: str) -> bool:
 
 
 def merge_todo(state: dict, now: str, vectors: dict) -> list[tuple[str, str]]:
-    """Пары сюжетов для склейки. Пара идёт к модели, только если: хотя бы один сюжет видимый (два невидимых обрывка
-    читателю не мешают, а невидимый рядом с видимым — новость, которая должна была лечь в видимый: пришла раньше него
-    или модель ошиблась), хотя бы один вырос с прошлой склейки, лучшая пара новостей похожа не меньше MERGE_SIM
+    """Пары сюжетов для склейки. Пара идёт к модели, только если: хотя бы один сюжет на странице (hot: дубли и обрывки
+    остальных читатель не видит; с 16.11, до того — хотя бы один видимый; невидимый рядом с видимым — новость, которая
+    должна была лечь в видимый: пришла раньше него или модель ошиблась), хотя бы один вырос с прошлой склейки, лучшая пара новостей похожа не меньше MERGE_SIM
     (одиночка с видимым — MERGE_FRAGMENT_SIM), у сюжетов есть общий участник (entities; не нужен, если сходство не ниже
     MERGE_SURE_SIM), пару ещё не признавали разными — или с тех пор один из сюжетов вырос вдвое — и её части не
     разделяли руками (split, unmerge). Отмечает время склейки: следующая — через MERGE_EVERY."""
@@ -548,6 +595,7 @@ def merge_todo(state: dict, now: str, vectors: dict) -> list[tuple[str, str]]:
     again = set(state.pop("merge_again", []))  # склеенные в прошлый проход: их пары с соседями ещё не проверены
     live_urls, owners = _live(state, now)
     shown = {sid for sid in set(owners) if visible(state, sid)}
+    page = set(hot(state, now))
     state["merged_at"] = now
     if len(live_urls) < 2:
         return []
@@ -558,7 +606,7 @@ def merge_todo(state: dict, now: str, vectors: dict) -> list[tuple[str, str]]:
     for r, c in zip(rows, cols):
         a, b = sorted((owners[r], owners[c]), key=lambda s: int(s[1:]))
         both = a in shown and b in shown
-        if a != b and (a in shown or b in shown) and sims[r, c] >= (MERGE_SIM if both else MERGE_FRAGMENT_SIM):
+        if a != b and (a in page or b in page) and sims[r, c] >= (MERGE_SIM if both else MERGE_FRAGMENT_SIM):
             candidates[(a, b)] = max(candidates.get((a, b), 0), sims[r, c])
     todo = []
     for (a, b), sim in sorted(candidates.items()):
@@ -584,7 +632,8 @@ def merge_requests(state: dict, todo: list[tuple[str, str]], vectors: dict) -> l
                 aliases.setdefault(s, f"S{len(aliases)}")
         contents.append(json.dumps({"stories": [{"id": al}
                                                 | ({"event": state["cards"][s]} if s in state.get("cards", {}) else {})
-                                                | {"news": _shown(state, s, vectors, MERGE_SHOWN, detail=True)}
+                                                | {"news": _shown(state, s, vectors, MERGE_SHOWN_CARD if s in state.get("cards", {})
+                                                                  else MERGE_SHOWN, detail=True)}
                                                 for s, al in aliases.items()],
                                     "pairs": [{"id": f"P{n}", "a": aliases[a], "b": aliases[b]}
                                               for n, (a, b) in enumerate(chunk)]}, ensure_ascii=False))
@@ -592,13 +641,13 @@ def merge_requests(state: dict, todo: list[tuple[str, str]], vectors: dict) -> l
 
 
 def merge_answer(state: dict, todo: list[tuple[str, str]], answer: dict, k: int) -> dict[int, str]:
-    """Ответ на k-ю пачку: номера пар в todo, которые модель считает одной историей, → поводы обоих сюжетов («a | b»;
+    """Ответ на k-ю пачку: номера пар в todo, чья связь — из KEEP_LINKS, → поводы обоих сюжетов («a | b»;
     один, если совпали). Повод сюжета с карточкой — карточка, без неё — как его назвала модель. Повода нет —
     не склеиваем."""
     same, cards = {}, state.get("cards", {})
     for p in answer["pairs"]:
         n = k * MERGE_BATCH + int(p["id"][1:]) if p["id"][1:].isdigit() else -1
-        if not p["same"] or not 0 <= n < len(todo):
+        if p["link"] not in KEEP_LINKS or not 0 <= n < len(todo):
             continue
         a, b = (cards.get(sid) or event.strip() for sid, event in zip(todo[n], (p["event_a"], p["event_b"])))
         if a and b:

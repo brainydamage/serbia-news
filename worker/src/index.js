@@ -17,7 +17,8 @@
 //   так же дописывает в stories-commands.json; сборка их применяет (stories_live.py).
 // POST /stories {results: [{message, text, buttons}]} — от сборки: чем кончились команды сюжетам, ответом на сообщение
 //   с командой; отчёт проверки сюжетов — с кнопками (buttons — ряды {text, data}). Нажатая кнопка «fix:день:находка»
-//   становится командой {do: "fix"} в stories-commands.json, как набранная.
+//   становится командой {do: "fix"} в stories-commands.json, как набранная. Кнопки отчёта за день лежат в KV
+//   ("fix:день"): по «убрать все уверенные» снимаем кнопки уверенных находок («fix:день:находка:s») со всех его сообщений.
 //   Webhook worker подключает сам при первой сборке после выкатки (см. ensureWebhook).
 // GET /costs — страница с этой статистикой, GET /stats — сами данные для неё (с ключом STATS_KEY).
 //   Ключ страница берёт из адреса после # — эта часть не уходит ни на сервер, ни в Referer.
@@ -367,21 +368,31 @@ function storyCommand(line) {
   return head.startsWith("/") && ["/move", "/split", "/unmerge"].includes(head) ? { do: "bad" } : null;
 }
 
-// кнопка под отчётом проверки сюжетов: «fix:2026-11-14:7» — убрать находку 7, «fix:2026-11-14:sure» — все уверенные.
-// Нажатую кнопку убираем с сообщения, чтобы не нажать дважды; ответ — сообщением на отчёт, как на набранную команду
+// кнопка под отчётом проверки сюжетов: «fix:2026-11-14:7» — убрать находку 7 («:s» в конце — она уверенная),
+// «fix:2026-11-14:sure» — все уверенные. Нажатую кнопку убираем с сообщения, чтобы не нажать дважды, а после «все
+// уверенные» — и кнопки уверенных находок со всех сообщений отчёта; ответ — сообщением на отчёт, как на набранную команду
 async function storyButton(env, query) {
   const answer = text => telegram(env, "answerCallbackQuery", { callback_query_id: query.id, text });
   const message = query.message;
   if (!message || String(message.chat?.id) !== String(env.TELEGRAM_CHAT_ID)) return answer("Эта кнопка не отсюда");
-  const fix = String(query.data || "").match(/^fix:(\d{4}-\d\d-\d\d):(sure|\d+)$/);
+  const fix = String(query.data || "").match(/^fix:(\d{4}-\d\d-\d\d):(sure|\d+)(:s)?$/);
   if (!fix) return answer("Не знаю такой кнопки");
   try {
     const text = await addStoryCommands(env, [{ do: "fix", day: fix[1], which: fix[2] === "sure" ? "sure" : Number(fix[2]) }],
       message.message_id);
     await answer("Записала: применится в ближайшей сборке");
-    const rows = (message.reply_markup?.inline_keyboard || []).map(row => row.filter(b => b.callback_data !== query.data))
-      .filter(row => row.length);
-    await telegram(env, "editMessageReplyMarkup", { message_id: message.message_id, reply_markup: { inline_keyboard: rows } });
+    const keyboards = (await env.REPORTS.get(`fix:${fix[1]}`, "json")) || {};
+    keyboards[message.message_id] = message.reply_markup?.inline_keyboard || [];
+    const gone = fix[2] === "sure" ? b => b.callback_data === query.data || b.callback_data.endsWith(":s")
+      : b => b.callback_data === query.data;
+    for (const [id, keyboard] of Object.entries(keyboards)) {
+      if (fix[2] !== "sure" && Number(id) !== message.message_id) continue;
+      const rows = keyboard.map(row => row.filter(b => !gone(b))).filter(row => row.length);
+      if (rows.flat().length === keyboard.flat().length) continue;
+      keyboards[id] = rows;
+      await telegram(env, "editMessageReplyMarkup", { message_id: Number(id), reply_markup: { inline_keyboard: rows } });
+    }
+    await env.REPORTS.put(`fix:${fix[1]}`, JSON.stringify(keyboards), { expirationTtl: KEEP_SECONDS });
     await telegram(env, "sendMessage", { text, reply_parameters: { message_id: message.message_id } });
   } catch (error) {
     await answer(`Не получилось: ${error.message}`.slice(0, 200));
@@ -420,6 +431,7 @@ async function addStoryCommands(env, commands, messageId) {
 
 async function storyResults(request, env) {
   const { results } = await request.json();
+  const reports = {};  // день → {id сообщения: кнопки} — кнопки отчёта, отправленные сейчас
   for (const r of (Array.isArray(results) ? results : []).slice(0, 20)) {
     const text = String(r?.text || "").slice(0, 1000);
     if (!text) continue;
@@ -429,7 +441,13 @@ async function storyResults(request, env) {
       .filter(row => row.length);
     if (rows.length) payload.reply_markup = { inline_keyboard: rows };
     if (Number.isInteger(r.message)) payload.reply_parameters = { message_id: r.message, allow_sending_without_reply: true };
-    await telegram(env, "sendMessage", payload);
+    const sent = await telegram(env, "sendMessage", payload);
+    const day = rows.flat().map(b => b.callback_data.match(/^fix:(\d{4}-\d\d-\d\d):/)?.[1]).find(Boolean);
+    if (sent && day) (reports[day] ||= {})[sent.message_id] = rows;
+  }
+  for (const [day, sent] of Object.entries(reports)) {
+    const keyboards = (await env.REPORTS.get(`fix:${day}`, "json")) || {};
+    await env.REPORTS.put(`fix:${day}`, JSON.stringify({ ...keyboards, ...sent }), { expirationTtl: KEEP_SECONDS });
   }
   return json({ ok: true });
 }

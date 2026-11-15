@@ -127,6 +127,7 @@ def run(snapshot: Path, first: str, last: str, tag: str = "") -> Path:
     params["MERGE_EVERY"] = str(stories.MERGE_EVERY)
     params["MERGE_SURE_SIM"] = stories.MERGE_SURE_SIM
     params["RECHECK_SIM"], params["RECHECK_EFFORT"] = stories.RECHECK_SIM, stories.RECHECK_EFFORT
+    params["RECHECK_MODEL"], params["COPY_SIM"] = stories.RECHECK_MODEL, stories.COPY_SIM
     out.write_text(json.dumps({"snapshot": snapshot.name, "first": first, "last": last, "params": params,
                                "spent": {**spent, "usd": round(usd, 4), "full_usd": round(spent["full_usd"], 4),
                                          "merged": merges, "asked": dict(asked)}, "state": state}, ensure_ascii=False), "utf-8")

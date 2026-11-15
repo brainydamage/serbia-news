@@ -1,7 +1,7 @@
 """Ежедневная проверка сюжетов из топа — раз в сутки, в первой сборке после AUDIT_HOUR по Белграду.
 
-Топ — сюжеты, у которых хоть в одной сборке за день было не меньше AUDIT_CAMPS лагерей (разделов sources.json)
-и горячесть не ниже AUDIT_HEAT; их отмечает каждая сборка (note_top). Цель — 99.9% новостей в них на своём месте.
+Топ — stories.SHOW_TOP сюжетов с самой высокой за день горячестью среди тех, что хоть раз были на странице
+(stories.hot); их горячесть отмечает каждая сборка (note_top). Цель — 99.9% новостей в них на своём месте.
 Модель (AUDIT_MODEL) читает каждый такой сюжет целиком и отмечает новости, которым в нём не место: чужие и отдельные
 события. Отчёт — в Telegram через приёмник жалоб (path="stories", как итоги команд): доля ошибок, откуда они пришли
 (раскладка, склейка, перепроверка…), готовые команды для бота и предложения по правилам. Итоги дня — в
@@ -15,7 +15,6 @@ from datetime import datetime
 import stories
 
 AUDIT_HOUR = 23  # по Белграду: поток новостей к этому времени уже небольшой
-AUDIT_CAMPS, AUDIT_HEAT = 3, 3.0  # топ: столько лагерей и такая горячесть хоть в одной сборке за день
 AUDIT_MODEL, AUDIT_EFFORT = "claude-opus-5-5", "medium"
 AUDIT_PRICE = (4.0, 20.0)  # вход / выход за 1M токенов, $
 AUDIT_BATCH = 200  # новостей в одном запросе: большой сюжет — один, мелкие — пачкой
@@ -63,7 +62,7 @@ AUDIT_SCHEMA = {
 }
 
 ADVICE_PROMPT = f"""Ты настраиваешь раскладку новостей по сюжетам в агрегаторе новостей о Сербии. Правила сюжета сейчас: {stories.RULES}
-Как новость попадает в сюжет: у видимого сюжета (от двух изданий) — карточка события, одна фраза, её пишет Haiku один раз; раскладка (Haiku решает по новости и похожим сюжетам с их карточками: join — в сюжет, new — новый сюжет; join с низким сходством и join в сюжет из топа перепроверяются), склейка дублей раз в два часа (Sonnet по паре сюжетов сравнивает их поводы — карточку, а у сюжета без неё называет повод сам — и решает, одна ли это история; одиночка — сюжет из одной новости — тоже идёт в склейку), выделение отдельных событий из больших сюжетов, ручные команды.
+Как новость попадает в сюжет: у видимого сюжета (от двух изданий) — карточка события, одна фраза, её пишет Haiku один раз; раскладка (Haiku решает по новости и похожим сюжетам с их карточками: join — в сюжет, new — новый сюжет; новость, почти дословно повторяющая уже разложенную, идёт за ней без модели; join с низким сходством и в сюжет с карточкой перепроверяет Haiku, в сюжет страницы (30 самых горячих) — Sonnet: называет повод новости и выбирает, как он связан с событием сюжета — то же событие, развитие, последствие, реакция (остаётся) или новый случай того же рода, общая тема, другое (уходит в свой сюжет)), склейка дублей раз в два часа — только пары, где хоть один сюжет на странице (Sonnet по паре сюжетов сравнивает их поводы — карточку, а у сюжета без неё называет повод сам — и выбирает тот же тип связи; одиночка — сюжет из одной новости — тоже идёт в склейку), выделение отдельных событий из больших сюжетов, ручные команды.
 Вход — JSON: errors — ошибки, найденные проверкой за день: what — новость, story — сюжет, в который она попала, why — почему ей там не место, path — как она туда попала.
 Верни advice — до трёх предложений: pattern — что повторяется в ошибках, change — что поменять и на каком шаге (правило, промпт раскладки или склейки, порог, перепроверка). Единичную ошибку без закономерности не обобщай. Закономерностей нет — пустой advice."""
 
@@ -86,19 +85,18 @@ ADVICE_SCHEMA = {
 
 PATHS = {"join": "раскладка", "same": "раскладка", "new": "раскладка", "alone": "раскладка", "unclear": "раскладка",
          "recheck": "перепроверка", "merge": "склейка", "line": "выделение", "move": "команда", "split": "команда",
-         "unmerge": "команда"}
-
-
-def camps(state: dict, sid: str) -> int:
-    return stories.camps(state, sid)
+         "unmerge": "команда", "copy": "копия"}
 
 
 def note_top(state: dict, day: str, heats: dict[str, float]) -> None:
-    """Каждая сборка: сюжеты, которые сейчас в топе, — в state["top"][день]. heats — горячесть видимых сюжетов."""
+    """Каждая сборка: сюжеты страницы (SHOW_TOP самых горячих) — в state["top"][день] с наибольшей горячестью за день.
+    heats — горячесть видимых сюжетов. До 16.11 там был список сюжетов: их горячесть — 0."""
     top = state.setdefault("top", {})
-    today = set(top.get(day, []))
-    today |= {sid for sid, h in heats.items() if h >= AUDIT_HEAT and camps(state, sid) >= AUDIT_CAMPS}
-    state["top"] = {d: v for d, v in top.items() if d >= day} | {day: sorted(today, key=lambda s: int(s[1:]))}
+    today = top.get(day, {})
+    today = dict.fromkeys(today, 0.0) if isinstance(today, list) else today
+    for sid in sorted(heats, key=heats.get, reverse=True)[:stories.SHOW_TOP]:
+        today[sid] = round(max(today.get(sid, 0.0), heats[sid]), 2)
+    state["top"] = {d: v for d, v in top.items() if d >= day} | {day: today}
 
 
 def due(state: dict, now: str, tz) -> str:
@@ -118,6 +116,8 @@ def _path(it: dict) -> tuple[str, str]:
         return "склейка", f"склейка: её сюжет {step.get('from')} влит" + (f", общее событие — {step['event']}" if step.get("event") else "")
     if why == "join":
         return "раскладка", f"раскладка: join, сходство {step.get('sim', 0):.3f}"
+    if why == "copy":
+        return "копия", f"копия: почти дословный пересказ новости №{step.get('of', '?')}, легла туда же без модели"
     return PATHS.get(why, why), PATHS.get(why, why) + f": {why}"
 
 
@@ -126,7 +126,9 @@ def todo(state: dict, day: str) -> tuple[list[str], list[list[str]]]:
     с прошлой проверки (state["audit_seen"] — сколько в сюжете было новостей, когда его проверили): в неизменном
     находки уже были в прошлом отчёте. Пачка — до AUDIT_BATCH новостей, большой сюжет — один."""
     seen = state.get("audit_seen", {})
-    sids = [sid for sid in state["top"][day] if sid in state["stories"]]
+    peaks = state["top"][day]
+    peaks = dict.fromkeys(peaks, 0.0) if isinstance(peaks, list) else peaks
+    sids = sorted((sid for sid in peaks if sid in state["stories"]), key=peaks.get, reverse=True)[:stories.SHOW_TOP]
     chunks, size = [], 0
     for sid in sorted(sids, key=lambda s: len(state["stories"][s]["urls"])):
         n = len(state["stories"][sid]["urls"])
@@ -293,8 +295,9 @@ def report(state: dict, day: str, result: dict) -> list[dict]:
             *([f"Откуда лишние: {', '.join(f'{k} — {v}' for k, v in paths)}."] if paths else []),
             "",
             "Как читать: дальше по сообщению на сюжет. У каждой находки — что не так, номера новостей (как на /plot/) "
-            "и что сделает её кнопка под сообщением. «Уверенно» — проверяющий не сомневается, «посмотри» — реши сам. "
-            + (f"Кнопка ниже убирает все {len(sure)} уверенных разом. " if sure else "")
+            "и что сделает её кнопка под сообщением. «Уверенно» — проверяющий не сомневается, «посмотри» — реши сам; так подписаны "
+            "и кнопки. "
+            + (f"Кнопка ниже убирает все {len(sure)} уверенных разом — тогда их отдельные кнопки пропадут. " if sure else "")
             + "Нажатие — команда боту: применится в ближайшей сборке, бот ответит, что вышло. В конце — советы, какие правила поменять.",
             "",
             f"Проверка стоила ≈ ${a['usd']:.2f}."]
@@ -311,7 +314,11 @@ def report(state: dict, day: str, result: dict) -> list[dict]:
             block = (f"{k}. {kind}, {'уверенно' if f['sure'] else 'посмотри'}: {f['why']} — {news}\n"
                      f"{'Как попала' if len(f['news']) == 1 else 'Как попали'}: {came}. "
                      f"Кнопка «Убрать {k}» {_remedy_text(state, f)}.")
-            blocks.append((block[:MESSAGE - 100], {"text": f"Убрать {k}", "data": f"fix:{day}:{f['id']}"}))
+            # у уверенной находки в данных кнопки «:s»: по «убрать все уверенные» worker снимает такие кнопки со всех
+            # сообщений отчёта
+            blocks.append((block[:MESSAGE - 100],
+                           {"text": f"Убрать {k} — {'уверенно' if f['sure'] else 'посмотри'}",
+                            "data": f"fix:{day}:{f['id']}" + (":s" if f["sure"] else "")}))
         cur, buttons = title, []
         for block, button in blocks:
             if len(cur) + len(block) + 2 > MESSAGE:
@@ -329,8 +336,8 @@ def report(state: dict, day: str, result: dict) -> list[dict]:
     return messages
 
 
-def _rows(buttons: list[dict]) -> list[list[dict]]:
-    return [buttons[k:k + 4] for k in range(0, len(buttons), 4)]
+def _rows(buttons: list[dict]) -> list[list[dict]]:  # по две: «Убрать 1 — посмотри» длинная, четыре в ряд не влезут
+    return [buttons[k:k + 2] for k in range(0, len(buttons), 2)]
 
 
 def _split(text: str) -> list[str]:
