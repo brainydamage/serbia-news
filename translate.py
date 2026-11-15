@@ -311,8 +311,10 @@ CYRILLIC_RE = re.compile(r"[\u0400-\u04ff]")
 
 def lost_text(original: dict, translated: dict) -> bool:
     """Модель выкинула почти весь текст: «Almost Vida Petrović Škero» вместо перевода длинного заголовка
-    или пустая подводка там, где в оригинале она была."""
-    return ((len(WORDS_RE.findall(original["title"])) >= 4 and not CYRILLIC_RE.search(translated["title"]))
+    или пустая подводка там, где в оригинале она была. Заголовок, оставленный как был, — не потеря: его решает
+    rejection (запрос Google Trends «Grand theft auto vi» — название игры)."""
+    return ((len(WORDS_RE.findall(original["title"])) >= 4 and not CYRILLIC_RE.search(translated["title"])
+             and translated["title"].strip() != original["title"].strip())
             or (bool(original.get("summary", "").strip()) and not translated["summary"].strip()))
 
 
@@ -343,6 +345,10 @@ def rejection(original: dict, translated: dict, strict: bool = True) -> str | No
     # в последней попытке (strict=False) такой принимаем
     same_in_russian = (len(title.split()) <= 3 and not re.search("[A-Za-z]", title)
                        and not SERBIAN_ONLY_LETTERS.search(title))
+    # запрос Google Trends (у него есть traffic) часто ищет название — сайт, игру, бренд: «Sportal.rs»,
+    # «Grand theft auto vi». Модель оставляет его латиницей, и 14–15.11 такие запросы приходили в Telegram как
+    # непереведённые. Латиница без сербских букв, оставленная и после подсказки, — название
+    same_in_russian |= bool(original.get("traffic")) and not re.search("[\u0400-\u04ffčćšžđČĆŠŽĐ]", title)
     if title == original["title"].strip() and WORDS_RE.search(title) and (strict or not same_in_russian):
         return "заголовок остался как в оригинале"
     if lost_text(original, translated):
