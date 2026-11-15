@@ -385,6 +385,12 @@ def _decide(state: dict, batch: list[tuple[str, dict]], now: str, vectors: dict,
         part = sim = None
         if verdict == "join" and target in by_alias:  # можно и чужого кандидата из той же пачки: модель видела его
             sid = by_alias[target]
+            # сюжет, выделенный из выбранного, похож на новость больше — значит, она о выделенном событии: 15.11
+            # «Вучич возглавил фракцию» (0.975 к выделенному, 0.891 к старому) модель положила в старый сюжет,
+            # потому что там осталась одна новость о том же
+            while child := max((c for c in candidates[n] if spun.get(c) == sid and candidates[n][c] > candidates[n].get(sid, 0)),
+                               key=candidates[n].get, default=None):
+                sid, target = child, aliases[child]
             part = _nearest_part(state, sid, vectors[url], vectors)
             sim = candidates[n].get(sid)
             if candidates[n].get(sid, 0) < RECHECK_SIM or sid in top:
