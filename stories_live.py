@@ -52,8 +52,9 @@ NOT_RULES = {"LINES_STEP", "MERGE_EVERY"}
 # прежние отпечатки, при которых раскладку не пересобираем — новые правила действуют на следующие новости:
 # 93f151fd03 — до 13.11, когда перепроверку больших сюжетов перевели с роста в 1.5 раза на LINES_STEP;
 # dfadd2988f — до 13.11, когда склейка стала называть общее событие пары (event);
-# 9e34e14300 — до 14.11, когда склейку перевели с раза в час на раз в два часа (MERGE_EVERY ушло из отпечатка)
-SAME_RULES = {"93f151fd03", "dfadd2988f", "9e34e14300"}
+# 9e34e14300 — до 14.11, когда склейку перевели с раза в час на раз в два часа (MERGE_EVERY ушло из отпечатка);
+# a0cbf341ea — до 15.11, когда повод сюжета с карточкой в склейке стал самой карточкой (пересборка с карточками стоила $6)
+SAME_RULES = {"93f151fd03", "dfadd2988f", "9e34e14300", "a0cbf341ea"}
 # сюжет, который не обновлялся дольше, убираем из состояния вместе с его новостями: архив их уже забыл
 # (ARCHIVE_DAYS в build.py — 4 дня), так что заново раскладывать их не придётся
 FORGET = timedelta(days=5)
@@ -348,7 +349,7 @@ def apply_merge(state: dict, now: str, sent: dict, answers: dict) -> int:
     todo = [tuple(pair) for pair in sent["todo"]]
     same, asked = {}, set()
     for k, answer in answers.items():
-        same |= stories.merge_answer(answer, k)
+        same |= stories.merge_answer(state, todo, answer, k)
         asked |= set(range(k * stories.MERGE_BATCH, min((k + 1) * stories.MERGE_BATCH, len(todo))))
     return stories.merge_apply(state, now, todo, same, asked)
 

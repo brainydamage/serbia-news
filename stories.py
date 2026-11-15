@@ -130,13 +130,16 @@ HEAT_HALF_LIFE = timedelta(hours=6)
 MERGE_PROMPT = f"""Ты проверяешь сюжеты агрегатора новостей о Сербии на дубли. {RULES}
 
 Вход — JSON: stories — сюжеты, id вида S…: event — событие сюжета, если уже определено, news — несколько новостей (дата время UTC · издание: что произошло); pairs — пары сюжетов, похожих по словам, id вида P…: a и b — сюжеты пары.
-Для каждой пары сначала event_a — повод сюжета a одной фразой: кто что сделал или что произошло и когда; есть у сюжета event — перескажи его. Потом так же event_b — повод сюжета b. Повод — одно действие: одно выступление, одна встреча, одно решение, одно происшествие. Не обобщай («реакции на…», «ситуация с…», «споры вокруг…») и не соединяй два повода через «и».
-Потом same: true, только если event_a и event_b — одно и то же событие или одно дело, либо одно из них — развитие, последствие или реакция именно на другое. Заявления с одного выступления, пресс-конференции или интервью — одно событие, даже если темы разные. Разные выступления, встречи, решения или происшествия одних и тех же участников — false, даже если тема общая. Если сомневаешься — false."""
+Для каждой пары сначала event_a — повод сюжета a. Есть у сюжета event — это и есть его повод, что бы сюжет ни набрал потом: оставь event_a пустой строкой. Нет event — назови повод одной фразой: кто что сделал или что произошло и когда. Повод — одно действие: одно выступление, одна встреча, одно решение, одно происшествие. Не обобщай («реакции на…», «ситуация с…», «споры вокруг…») и не соединяй два повода через «и» или запятую. Потом так же event_b — повод сюжета b.
+Потом same — сравни поводы (event сюжета, а нет его — названный тобой): true, только если это одно и то же событие или одно дело, либо один повод — развитие, последствие или реакция именно на другой. Новости сюжета не про его event ничего не доказывают: сюжет мог набрать и чужие. Заявления с одного выступления, пресс-конференции или интервью — одно событие, даже если темы разные. Разные выступления, встречи, решения или происшествия одних и тех же участников — false, даже если тема общая. Если сомневаешься — false."""
 
 # повод каждого сюжета пары модель называет отдельно (event_a, event_b), до same. С 13.11 она называла одно общее
 # событие — и 14.11 в 68 из 92 склеек соединяла через «и» два повода («обращение в соцсетях и выступление на TV Pink»),
 # так что склеек по общему участнику стало только больше. Сходство их не отличает: у неверных 0.87–0.91, у верных
-# столько же. Поводы пишутся в журнал склеек и на страницу
+# столько же. Поводы пишутся в журнал склеек и на страницу. Повод сюжета с карточкой — сама карточка (merge_answer),
+# модель его не пишет: 15.11 она «пересказала» карточку s5648 о решении пленума распустить БИА как «пленум решил…,
+# 15.11 Вучевич ответил…» — двумя поводами через запятую, по чужим новостям сюжета — и дважды приклеила к нему ответ
+# Вучевича Лазовичу. Заодно ответ вдвое короче: 20 пар с двумя поводами — 2 тыс. токенов
 MERGE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -466,11 +469,17 @@ def _recheck(state: dict, batch: list[tuple[str, dict]], weak: list[tuple[int, s
                                     "what": batch[n][1].get("what", "")} for n, a in weak]}, ensure_ascii=False)
     answer, usage = ask(RECHECK_PROMPT, content, RECHECK_SCHEMA, RECHECK_EFFORT, MODEL)
     drop = {d["id"] for d in answer["news"] if not d["keep"]}
+    checked = state.setdefault("checked", {})
     for n, _ in weak:
         if f"N{n}" in drop:
             url, item = batch[n]
-            state["stories"][state["items"][url]["story"]]["urls"].remove(url)
-            _add(state, _start(state, now), url, item, "recheck", now)
+            old = state["items"][url]["story"]
+            state["stories"][old]["urls"].remove(url)
+            _add(state, new := _start(state, now), url, item, "recheck", now)
+            # пара «откуда сняли — куда» для склейки уже проверена как разная, пока один из сюжетов не вырастет вдвое:
+            # 15.11 перепроверка сняла 18810 (Вучевич о запрете СНС) с сюжета о решении пленума распустить БИА,
+            # а склейка через полчаса вернула её туда вместе с новым сюжетом
+            checked[f"{old}|{new}"] = [len(state["stories"][old]["urls"]), 1]
     return usage
 
 
@@ -582,14 +591,18 @@ def merge_requests(state: dict, todo: list[tuple[str, str]], vectors: dict) -> l
     return contents
 
 
-def merge_answer(answer: dict, k: int) -> dict[int, str]:
-    """Ответ на k-ю пачку: номера пар в todo, которые модель считает одной историей, → поводы обоих сюжетов, как она
-    их назвала («a | b»; один, если совпали). Не назвала повод — не склеиваем."""
-    same = {}
+def merge_answer(state: dict, todo: list[tuple[str, str]], answer: dict, k: int) -> dict[int, str]:
+    """Ответ на k-ю пачку: номера пар в todo, которые модель считает одной историей, → поводы обоих сюжетов («a | b»;
+    один, если совпали). Повод сюжета с карточкой — карточка, без неё — как его назвала модель. Повода нет —
+    не склеиваем."""
+    same, cards = {}, state.get("cards", {})
     for p in answer["pairs"]:
-        a, b = p["event_a"].strip(), p["event_b"].strip()
-        if p["same"] and a and b and p["id"][1:].isdigit():
-            same[k * MERGE_BATCH + int(p["id"][1:])] = a if a == b else f"{a} | {b}"
+        n = k * MERGE_BATCH + int(p["id"][1:]) if p["id"][1:].isdigit() else -1
+        if not p["same"] or not 0 <= n < len(todo):
+            continue
+        a, b = (cards.get(sid) or event.strip() for sid, event in zip(todo[n], (p["event_a"], p["event_b"])))
+        if a and b:
+            same[n] = a if a == b else f"{a} | {b}"
     return same
 
 
@@ -661,7 +674,7 @@ def merge(state: dict, now: str, vectors: dict, ask) -> dict:
         answer, usage = ask(MERGE_PROMPT, content, MERGE_SCHEMA, MERGE_EFFORT, MERGE_MODEL)
         for key in ("in", "out", "usd"):
             total[key] += usage.get(key, 0)
-        same |= merge_answer(answer, k)
+        same |= merge_answer(state, todo, answer, k)
     total["asked"][MERGE_MODEL] = len(todo)
     total["merged"] = merge_apply(state, now, todo, same, set(range(len(todo))))
     return total
