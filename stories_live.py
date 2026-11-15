@@ -56,7 +56,8 @@ NOT_RULES = {"LINES_STEP", "MERGE_EVERY"}
 # a0cbf341ea — до 15.11, когда повод сюжета с карточкой в склейке стал самой карточкой (пересборка с карточками стоила $6);
 # 74b3c97a3d — до 16.11, когда копии пошли за оригиналом без модели, перепроверка и склейка стали выбирать тип связи
 # (LINKS) вместо «да / нет», а сильная модель — работать только на SHOW_TOP сюжетов страницы
-SAME_RULES = {"93f151fd03", "dfadd2988f", "9e34e14300", "a0cbf341ea", "74b3c97a3d"}
+# 37beed8aa5 — до 16.11, когда горячесть стала таять за 12 часов, а не за 6, и зарубежным сюжетам — вчетверо меньше
+SAME_RULES = {"93f151fd03", "dfadd2988f", "9e34e14300", "a0cbf341ea", "74b3c97a3d", "37beed8aa5"}
 # сюжет, который не обновлялся дольше, убираем из состояния вместе с его новостями: архив их уже забыл
 # (ARCHIVE_DAYS в build.py — 4 дня), так что заново раскладывать их не придётся
 FORGET = timedelta(days=5)
@@ -154,6 +155,7 @@ def forget_old(state: dict, vectors: dict, now: str) -> None:
     state["apart"] = [pair for pair in state.get("apart", []) if parts & set(pair[0]) and parts & set(pair[1])]
     # карточка склеенного сюжета живёт, пока жива его часть: unmerge вернёт сюжет с ней
     state["cards"] = {sid: c for sid, c in state.get("cards", {}).items() if sid in state["stories"] or sid in parts}
+    state["serbia"] = {sid: c for sid, c in state.get("serbia", {}).items() if sid in state["cards"]}
     for u in set(vectors) - set(state["items"]):
         del vectors[u]
 
@@ -716,7 +718,10 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
                  f'{local_time(story["created"])} — {local_time(story["updated"])} · {sid}'
                  f'{f" «{e(names[sid])}»" if sid in names else ""}'
                  f'{" · выделен из " + page_link(state["spun"][sid]) if sid in state.get("spun", {}) else ""}')
-        card = (f'<p class="meta">Событие сюжета: {e(state["cards"][sid])}</p>' if sid in state.get("cards", {}) else "")
+        mark = {"serbia": "в Сербии", "affects": "за рубежом, касается Сербии",
+                "foreign": f"за рубежом, без связи с Сербией — горячесть ×{stories.FOREIGN_HEAT}"}.get(state.get("serbia", {}).get(sid))
+        card = (f'<p class="meta">Событие сюжета: {e(state["cards"][sid])}{f" · {e(mark)}" if mark else ""}</p>'
+                if sid in state.get("cards", {}) else "")
         return headline(urls), about, card + lines_note(sid), body
 
     # у каждого видимого сюжета — своя страница /plot/sX/; у сюжетов, которые уже не на главной странице (старше
@@ -841,7 +846,8 @@ td{padding:2px 14px 2px 0}.what{color:#777;font-size:13px}
 {f'<details><summary>Новости этой сборки — что сделала каждая</summary>{rebuilt_note}<ul>{arrived}</ul></details>' if arrived else ""}
 {f'<p class="err">Сюжеты в этой сборке не обновились: {e(error)}</p>' if error else ""}
 <p class="meta">Сюжеты — по горячести: каждое издание даёт очко за свою последнюю новость в сюжете, очко вдвое тает
-за {int(stories.HEAT_HALF_LIFE.total_seconds() // 3600)} ч (час назад — почти 1, {int(stories.HEAT_HALF_LIFE.total_seconds() // 3600)} ч назад — 0.5, сутки назад — 0.06).
+за {int(stories.HEAT_HALF_LIFE.total_seconds() // 3600)} ч (час назад — почти 1, {int(stories.HEAT_HALF_LIFE.total_seconds() // 3600)} ч назад — 0.5, сутки назад — {0.5 ** (24 / (stories.HEAT_HALF_LIFE.total_seconds() / 3600)):.2f}).
+Сюжет о событии за рубежом без прямой связи с Сербией (так решает карточка) горяч в {1 / stories.FOREIGN_HEAT:.0f} раза меньше.
 Цифра у новости — сходство с самой похожей другой новостью сюжета (у одиночных — с новостью видимого сюжета).
 Модель видит новость с сюжетом, только если сходство не ниже {stories.CANDIDATE_SIM}; <span class="sim mid">жёлтые</span> — ниже
 {stories.RECHECK_SIM}, такое добавление (и любое в сюжет с карточкой) перепроверяет Haiku, в сюжет этой страницы — Sonnet; копии (сходство от {stories.COPY_SIM}) идут за оригиналом без модели; <span class="sim low">красные</span> — ниже {stories.CANDIDATE_SIM}.

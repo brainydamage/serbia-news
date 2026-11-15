@@ -156,8 +156,14 @@ SHOW_TOP = 30
 # склейка видит у сюжета с карточкой меньше новостей: его повод задан карточкой
 MERGE_SHOWN_CARD = 3
 # горячесть сюжета: каждое издание даёт очко за свою последнюю новость в нём, очко вдвое тает за HEAT_HALF_LIFE.
-# Свежий сюжет на 5 изданий выше вчерашнего на 25, одна реплика большой сюжет не поднимает
-HEAT_HALF_LIFE = timedelta(hours=6)
+# Свежий сюжет на 5 изданий выше вчерашнего на 15, одна реплика большой сюжет не поднимает
+# До 16.11 — 6 часов, и к ночи главная история дня выпадала со страницы: 15.11 экономический план «Студенческого
+# списка» (23 издания всех лагерей, почти все — вечером 14.11 и утром 15.11) днём был 3–7-м, а в 23:36 — 31-м,
+# ниже протеста в Праге (7 изданий вечером). С 12 часами — 12-й, Прага — 27-я
+HEAT_HALF_LIFE = timedelta(hours=12)
+# сюжет о событии за рубежом без прямой связи с Сербией (карточка: serbia — foreign) горяч вчетверо меньше: в топе
+# он только тогда, когда о нём пишут почти все. Касающееся Сербии (affects) — как сербское
+FOREIGN_HEAT = 0.25
 
 MERGE_PROMPT = f"""Ты проверяешь сюжеты агрегатора новостей о Сербии на дубли. {RULES}
 
@@ -242,8 +248,12 @@ LINES_EFFORT = "medium"
 # выступление на TV Pink — и новости о программе стали в нём чужими. Карточка — у сюжета с этим id и после склейки:
 # unmerge вернёт её вместе с сюжетом
 CARD_PROMPT = f"""Ты заводишь карточки событий для сюжетов агрегатора новостей о Сербии. {RULES}
-Вход — JSON: stories — новые сюжеты, id вида S…, news — их новости (дата время UTC · издание: что произошло).
-Для каждого верни event — событие сюжета одной фразой: кто что сделал или что произошло, где и когда (дата), по какому поводу. Одно событие: одно выступление, одна встреча, одно решение, одно происшествие, одно дело. Если новости сюжета о разных событиях — то, о котором первая новость. Без оценок и без подробностей, которых нет в новостях."""
+Вход — JSON: stories — сюжеты, id вида S…, news — их новости (дата время UTC · издание: что произошло); event — если у сюжета карточка уже есть.
+Для каждого верни event — событие сюжета одной фразой: кто что сделал или что произошло, где и когда (дата), по какому поводу. Одно событие: одно выступление, одна встреча, одно решение, одно происшествие, одно дело. Если новости сюжета о разных событиях — то, о котором первая новость. Без оценок и без подробностей, которых нет в новостях. Если event уже дан — верни его как есть.
+Потом serbia — связь события с Сербией:
+- serbia — событие в Сербии или в Косове и Метохии; или его участники — сербские государство, политики, партии, компании, клубы, сборные, граждане, где бы это ни было;
+- affects — событие за рубежом, которое прямо касается Сербии или сербов: решения ЕС, США, России, соседей о Сербии; сербы в Республике Сербской, Черногории, Хорватии; санкции, цены, перебои, эпидемия или кризис, которые доходят до Сербии;
+- foreign — событие за рубежом без прямой связи с Сербией, даже если о нём пишут сербские издания и даже если оно похоже на сербские дела: протесты, выборы, коррупция, происшествия в других странах."""
 CARD_SCHEMA = {
     "type": "object",
     "properties": {
@@ -251,8 +261,9 @@ CARD_SCHEMA = {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {"id": {"type": "string"}, "event": {"type": "string"}},
-                "required": ["id", "event"],
+                "properties": {"id": {"type": "string"}, "event": {"type": "string"},
+                               "serbia": {"type": "string", "enum": ["serbia", "affects", "foreign"]}},
+                "required": ["id", "event", "serbia"],
                 "additionalProperties": False,
             },
         }
@@ -459,7 +470,8 @@ def heat(state: dict, sid: str, now: str) -> float:
         it = state["items"][u]
         latest[it["source"]] = max(latest.get(it["source"], ""), it.get("published", it["seen"]))
     moment = datetime.fromisoformat(now)
-    return sum(0.5 ** ((moment - datetime.fromisoformat(t)) / HEAT_HALF_LIFE) for t in latest.values())
+    weight = FOREIGN_HEAT if state.get("serbia", {}).get(sid) == "foreign" else 1
+    return weight * sum(0.5 ** ((moment - datetime.fromisoformat(t)) / HEAT_HALF_LIFE) for t in latest.values())
 
 
 def hot(state: dict, now: str) -> list[str]:
@@ -474,19 +486,25 @@ def _when(iso: str) -> str:
     return f"{iso[8:10]}.{iso[5:7]} {iso[11:16]}"
 
 
-def cards(state: dict, vectors: dict, ask) -> int:
-    """Карточки событий видимым сюжетам, у которых их ещё нет (Haiku, пачками). Возвращает, скольким дали."""
-    have = state.setdefault("cards", {})
-    todo = [sid for sid in state["stories"] if sid not in have and visible(state, sid)]
+def cards(state: dict, vectors: dict, ask, now: str) -> int:
+    """Карточки событий видимым сюжетам, у которых их ещё нет, и связь сюжета с Сербией (state["serbia"]: serbia,
+    affects, foreign) — Haiku, пачками. Живым сюжетам с карточкой до 16.11 — только связь: карточка остаётся.
+    Возвращает, скольких спросили."""
+    have, marks = state.setdefault("cards", {}), state.setdefault("serbia", {})
+    cutoff = (datetime.fromisoformat(now) - LIVE).isoformat()
+    todo = [sid for sid, story in state["stories"].items() if visible(state, sid)
+            and (sid not in have or sid not in marks and story["updated"] >= cutoff)]
     for start in range(0, len(todo), CARD_BATCH):
         chunk = todo[start:start + CARD_BATCH]
-        content = json.dumps({"stories": [{"id": f"S{n}", "news": _shown(state, sid, vectors, CARD_SHOWN, detail=True)}
+        content = json.dumps({"stories": [{"id": f"S{n}"} | ({"event": have[sid]} if sid in have else {})
+                                          | {"news": _shown(state, sid, vectors, CARD_SHOWN, detail=True)}
                                           for n, sid in enumerate(chunk)]}, ensure_ascii=False)
         answer, _ = ask(CARD_PROMPT, content, CARD_SCHEMA, CARD_EFFORT, MODEL)
         for card in answer["cards"]:
             n = card["id"][1:]
             if n.isdigit() and int(n) < len(chunk) and card["event"].strip():
-                have[chunk[int(n)]] = card["event"].strip()
+                have.setdefault(chunk[int(n)], card["event"].strip())
+                marks[chunk[int(n)]] = card["serbia"]
     return len(todo)
 
 
@@ -879,5 +897,5 @@ def update(state: dict, items: list[tuple[str, dict]], now: str, vectors: dict, 
         usage = _decide(state, todo[start:start + BATCH], now, vectors, ask)
         total["in"] += usage["in"]
         total["out"] += usage["out"]
-    cards(state, vectors, ask)  # сюжеты, ставшие видимыми в этой сборке: следующая сверяет новости уже с карточкой
+    cards(state, vectors, ask, now)  # сюжеты, ставшие видимыми в этой сборке: следующая сверяет новости уже с карточкой
     return total
