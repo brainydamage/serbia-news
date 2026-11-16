@@ -551,8 +551,10 @@ def _recheck(state: dict, batch: list[tuple[str, dict]], weak: list[tuple[int, s
             state["items"][url]["history"][-1] |= {"link": drop[f"N{n}"]["link"], "event": drop[f"N{n}"]["event"].strip()}
             # пара «откуда сняли — куда» для склейки уже проверена как разная, пока один из сюжетов не вырастет вдвое:
             # 15.11 перепроверка сняла 18810 (Вучевич о запрете СНС) с сюжета о решении пленума распустить БИА,
-            # а склейка через полчаса вернула её туда вместе с новым сюжетом
-            checked[f"{old}|{new}"] = [len(state["stories"][old]["urls"]), 1]
+            # а склейка через полчаса вернула её туда вместе с новым сюжетом. Рост нового сюжета пару не открывает (0):
+            # он растёт копиями того же повода, и с 1 новости «вдвое» — это вторая. 16.11 перепроверка сняла протест
+            # SMER (19866) с сюжета о назначении Ускоковича как topic, а склейка через полтора часа вернула его туда
+            checked[f"{old}|{new}"] = [len(state["stories"][old]["urls"]), 0]
     return usage
 
 
@@ -640,7 +642,7 @@ def merge_todo(state: dict, now: str, vectors: dict) -> list[tuple[str, str]]:
         if not grew or _apart(state, a, b):
             continue
         old = checked.get(f"{a}|{b}")
-        if old and len(stories[a]["urls"]) < 2 * old[0] and len(stories[b]["urls"]) < 2 * old[1]:
+        if old and len(stories[a]["urls"]) < 2 * old[0] and (not old[1] or len(stories[b]["urls"]) < 2 * old[1]):
             continue
         if sim >= MERGE_SURE_SIM or _share_entities(state, a, b):
             todo.append((a, b))
@@ -666,9 +668,9 @@ def merge_requests(state: dict, todo: list[tuple[str, str]], vectors: dict) -> l
     return contents
 
 
-def merge_answer(state: dict, todo: list[tuple[str, str]], answer: dict, k: int) -> dict[int, str]:
-    """Ответ на k-ю пачку: номера пар в todo, чья связь — из KEEP_LINKS, → поводы обоих сюжетов («a | b»;
-    один, если совпали). Повод сюжета с карточкой — карточка, без неё — как его назвала модель. Повода нет —
+def merge_answer(state: dict, todo: list[tuple[str, str]], answer: dict, k: int) -> dict[int, tuple[str, str]]:
+    """Ответ на k-ю пачку: номера пар в todo, чья связь — из KEEP_LINKS, → (поводы обоих сюжетов «a | b» — один,
+    если совпали; связь). Повод сюжета с карточкой — карточка, без неё — как его назвала модель. Повода нет —
     не склеиваем."""
     same, cards = {}, state.get("cards", {})
     for p in answer["pairs"]:
@@ -677,7 +679,7 @@ def merge_answer(state: dict, todo: list[tuple[str, str]], answer: dict, k: int)
             continue
         a, b = (cards.get(sid) or event.strip() for sid, event in zip(todo[n], (p["event_a"], p["event_b"])))
         if a and b:
-            same[n] = a if a == b else f"{a} | {b}"
+            same[n] = (a if a == b else f"{a} | {b}", p["link"])
     return same
 
 
@@ -711,18 +713,21 @@ def merge_apply(state: dict, now: str, todo: list[tuple[str, str]], same: dict[i
             checked[f"{a}|{b}"] = [len(stories[a]["urls"]), len(stories[b]["urls"])]
 
     moved = {}  # склеенный сюжет → куда ушёл: видимый мог принять обрывки и сам уйти в другой видимый
-    for keep, gone, event in merges:
+    for keep, gone, (event, link) in merges:
         while keep in moved:
             keep = moved[keep]
         moved[gone] = keep
+        # связь — в журнал и в историю: 16.11 из 16 склеек три соединили разные события (обыск в фонде PIO — с задержанием
+        # декана, протест SMER — со словами Ракич, пробки после каникул — с возвращением в школу), а какую связь
+        # модель назвала, видно не было
         state.setdefault("merges", []).append(
             {"t": now, "keep": keep, "gone": gone, "parts": sorted({state["items"][u]["part"] for u in stories[gone]["urls"]}),
-             "event": event})
+             "event": event, "link": link})
         for u in stories[gone]["urls"]:
             it = state["items"][u]
             it["story"] = keep
             it.setdefault("history", []).append({"t": now, "why": "merge", "story": keep, "part": it["part"], "from": gone,
-                                                    "event": event})
+                                                    "event": event, "link": link})
         stories[keep]["urls"] = sorted(stories[keep]["urls"] + stories[gone]["urls"],
                                        key=lambda u: state["items"][u]["seen"])
         stories[keep]["updated"] = max(stories[keep]["updated"], stories[gone]["updated"])
