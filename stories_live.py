@@ -58,7 +58,10 @@ NOT_RULES = {"LINES_STEP", "MERGE_EVERY"}
 # (LINKS) вместо «да / нет», а сильная модель — работать только на SHOW_TOP сюжетов страницы
 # 37beed8aa5 — до 16.11, когда горячесть стала таять за 12 часов, а не за 6, и зарубежным сюжетам — вчетверо меньше
 # 842ae523cb — до 16.11, когда Косово и сербские организации и СМИ стали связью с Сербией (SERBIA_MARKS)
-SAME_RULES = {"93f151fd03", "dfadd2988f", "9e34e14300", "a0cbf341ea", "74b3c97a3d", "37beed8aa5", "842ae523cb"}
+# a4183da04a — до 17.11, когда Sonnet стал перепроверять только join ниже RECHECK_SONNET_MAX, а склейку — только пары,
+# которые Haiku не назвал несвязанными (MERGE_FILTER_DROP)
+SAME_RULES = {"93f151fd03", "dfadd2988f", "9e34e14300", "a0cbf341ea", "74b3c97a3d", "37beed8aa5", "842ae523cb",
+              "a4183da04a"}
 # сюжет, который не обновлялся дольше, убираем из состояния вместе с его новостями: архив их уже забыл
 # (ARCHIVE_DAYS в build.py — 4 дня), так что заново раскладывать их не придётся
 FORGET = timedelta(days=5)
@@ -73,7 +76,7 @@ HEADLINE_RECENT = timedelta(hours=6)
 # пришли; пока пакет у модели, нового того же вида не шлём. Раскладка заново — сразу: она идёт по сборкам подряд,
 # и каждой нужны склейки предыдущей
 BATCH_DISCOUNT = 0.5
-BATCH_KINDS = {"merge": "склейка", "lines": "деление", "audit": "проверка дня"}
+BATCH_KINDS = {"merge": "склейка", "lines": "деление", "audit": "проверка дня", "recheck": "перепроверка"}
 BATCH_GIVE_UP = timedelta(days=2)  # пакет, который столько не удаётся проверить, забываем: модель держит его сутки
 PROGRESS_FROM = 200  # с стольких новостей за сборку (раскладка заново) — прогресс в лог
 LOCAL_TZ = ZoneInfo("Europe/Belgrade")
@@ -343,11 +346,31 @@ def cancel(client, state: dict) -> None:
 def merge_later(client, state: dict, now: str, vectors: dict, ask) -> int:
     """Склейка пакетом: пары — к модели, ответы применит сборка, в которую они придут. Сколько склеено сразу (пакет
     не ушёл)."""
-    todo = stories.merge_todo(state, now, vectors)
+    asked = stories.merge_todo(state, now, vectors)
+    todo, haiku = stories.merge_filter(state, now, asked, vectors, ask)
+    print(f"Сюжеты: склейка — пар {len(asked)}, Haiku отсеял {len(asked) - len(todo)}, Sonnet — {len(todo)}", file=sys.stderr)
     calls = [(stories.MERGE_PROMPT, c, stories.MERGE_SCHEMA, stories.MERGE_EFFORT, stories.MERGE_MODEL, None)
              for c in stories.merge_requests(state, todo, vectors)]
-    got = send(client, state, "merge", calls, {"todo": todo}, now, ask)
-    return 0 if got is None else apply_merge(state, now, {"todo": todo}, got[0])
+    sent = {"todo": todo, "haiku": haiku}
+    got = send(client, state, "merge", calls, sent, now, ask)
+    return 0 if got is None else apply_merge(state, now, sent, got[0])
+
+
+def recheck_later(client, state: dict, now: str, ask) -> None:
+    """Перепроверка пакетом: запросы, накопленные раскладкой (state["recheck_queue"]), — к модели одним пакетом,
+    если прежний уже вернулся; ответы применит сборка, в которую они придут. Пакет не ушёл — ответы сразу."""
+    if not state.get("recheck_queue") or "recheck" in state.get("batches", {}):
+        return
+    queue = state.pop("recheck_queue")
+    calls = [(stories.RECHECK_PROMPT, r["content"], stories.RECHECK_SCHEMA, stories.RECHECK_EFFORT, r["model"], None)
+             for r in queue]
+    sent = {"news": [r["news"] for r in queue]}
+    if got := send(client, state, "recheck", calls, sent, now, ask):
+        apply_recheck(state, now, sent, got[0])
+
+
+def apply_recheck(state: dict, now: str, sent: dict, answers: dict) -> int:
+    return sum(stories.recheck_apply(state, sent["news"][k], answer, now) for k, answer in answers.items())
 
 
 def apply_merge(state: dict, now: str, sent: dict, answers: dict) -> int:
@@ -356,6 +379,7 @@ def apply_merge(state: dict, now: str, sent: dict, answers: dict) -> int:
     for k, answer in answers.items():
         same |= stories.merge_answer(state, todo, answer, k)
         asked |= set(range(k * stories.MERGE_BATCH, min((k + 1) * stories.MERGE_BATCH, len(todo))))
+    stories.merge_note(state, now, todo, sent.get("haiku", []), answers)
     return stories.merge_apply(state, now, todo, same, asked)
 
 
@@ -456,6 +480,8 @@ def run(archive: dict, sections: dict) -> None:
     merged = apply_merge(state, now, *arrived["merge"][:2]) if "merge" in arrived else 0
     if "lines" in arrived:
         checked, found = apply_lines(state, now, *arrived["lines"][:2])
+    if "recheck" in arrived:
+        apply_recheck(state, now, *arrived["recheck"][:2])
     # по сборкам, в которых новости впервые появились (seen), как в прогонах на снимках: при старте с нуля так
     # время сюжетов настоящее, а не время этой сборки. Новость, ждавшая перевода, идёт со временем прошлой сборки
     builds = {}
@@ -464,7 +490,7 @@ def run(archive: dict, sections: dict) -> None:
     decided = laid = 0
     started, step = time.monotonic(), max(len(items) // 10, 1)  # большая раскладка — в лог примерно каждые 10%
     for seen, group in sorted(builds.items()):
-        decided += stories.update(state, group, seen, vectors, ask)["decided"]
+        decided += stories.update(state, group, seen, vectors, ask, later=not rebuilt)["decided"]
         if stories.merge_due(state, seen) and "merge" not in state.get("batches", {}):
             merged += (stories.merge(state, seen, vectors, ask)["merged"] if rebuilt
                        else merge_later(client, state, seen, vectors, ask))
@@ -477,6 +503,7 @@ def run(archive: dict, sections: dict) -> None:
     if len(items) >= PROGRESS_FROM:
         print(f"Сюжеты: разложено всё за {(time.monotonic() - started) / 60:.0f} мин; "
               "имена и поиск отдельных событий в больших сюжетах…", file=sys.stderr)
+    recheck_later(client, state, now, ask)
     name_stories(state, vectors, ask)
     # сюжеты, которые сейчас в топе, — для вечерней проверки и деления: на отдельные события проверяем только топ
     # (сюжеты за день, хоть раз бывшие в нём), остальные читатель почти не открывает
@@ -851,7 +878,7 @@ td{padding:2px 14px 2px 0}.what{color:#777;font-size:13px}
 Сюжет о событии за рубежом без прямой связи с Сербией (так решает карточка) горяч в {1 / stories.FOREIGN_HEAT:.0f} раза меньше.
 Цифра у новости — сходство с самой похожей другой новостью сюжета (у одиночных — с новостью видимого сюжета).
 Модель видит новость с сюжетом, только если сходство не ниже {stories.CANDIDATE_SIM}; <span class="sim mid">жёлтые</span> — ниже
-{stories.RECHECK_SIM}, такое добавление (и любое в сюжет с карточкой) перепроверяет Haiku, в сюжет этой страницы — Sonnet; копии (сходство от {stories.COPY_SIM}) идут за оригиналом без модели; <span class="sim low">красные</span> — ниже {stories.CANDIDATE_SIM}.
+{stories.RECHECK_SIM}, такое добавление (и любое в сюжет с карточкой) перепроверяет Haiku, в сюжет этой страницы со сходством ниже {stories.RECHECK_SONNET_MAX} — Sonnet (пакетом: снятая новость уходит через сборку); копии (сходство от {stories.COPY_SIM}) идут за оригиналом без модели; <span class="sim low">красные</span> — ниже {stories.CANDIDATE_SIM}.
 Серым под заголовком — «что произошло» (what): по нему считается сходство.</p>
 <p><button onclick="{toggle % 'true'}">Раскрыть все</button> <button onclick="{toggle % 'false'}">Свернуть все</button>
 <span class="meta">· клавиши j / k — следующий / предыдущий сюжет</span></p>

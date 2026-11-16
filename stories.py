@@ -150,6 +150,11 @@ RECHECK_SIM = 0.9
 # с карточкой стоил бы $1.5–2 в день, на сюжеты страницы — около половины
 RECHECK_MODEL = "claude-sonnet-5-5"
 RECHECK_EFFORT = "medium"
+# Sonnet перепроверяет join в сюжет страницы только со сходством ниже этого, выше — Haiku: перепроверка Sonnet стоила
+# 16.11 $0.82 из $2.76 дня при бюджете $1.5. Из 414 join от 0.95 в сюжеты топа Sonnet снял 7 (1.7%), из 476 ниже — 34.
+# Перепроверка в живой сборке — пакетом (stories_live): вдвое дешевле, снятая новость видна в чужом сюжете до сборки,
+# в которую придёт ответ
+RECHECK_SONNET_MAX = 0.95
 # на странице — SHOW_TOP самых горячих видимых сюжетов (hot), и сильная модель работает на них: перепроверка Sonnet,
 # склейка, вечерняя проверка. 15.11 в 30 самых больших сюжетах дня — 32% новостей и 45% добавлений в сюжет
 SHOW_TOP = 30
@@ -209,9 +214,16 @@ MERGE_SIM = 0.865  # пары сюжетов с лучшей парой ново
 # сюжета, проверяется так же, как пришедшая после. 12.11 ремонт JANAF (0.864) остался одиночкой рядом с сюжетом о нём
 MERGE_FRAGMENT_SIM = CANDIDATE_SIM
 MERGE_BATCH = 20  # пар в одном запросе
-# склейку решает Sonnet. Фильтра Haiku перед ним больше нет: с крупными сюжетами (12.11) Haiku стал строже Sonnet —
-# из 139 пар, которые Sonnet склеил из 357 прежних отказов, пропустил бы только 78
+# склейку решает Sonnet. Фильтр Haiku перед ним с 12.11 до 16.11 не стоял: с крупными сюжетами Haiku стал строже
+# Sonnet — из 139 пар, которые Sonnet склеил из 357 прежних отказов, пропустил бы только 78 (тогда Haiku отвечал
+# «да / нет»). С 17.11 он снова первый, но отсеивает только пары, которые назвал не связанными (MERGE_FILTER_DROP):
+# 16.11 Sonnet спросили о 1992 парах, 834 он назвал other, 847 — topic, и склейка стоила $0.92 из $2.76 дня.
+# Каждую MERGE_CONTROL-ю отсеянную пару Sonnet всё равно видит: state["merge_stats"] — как ответили оба, «other>same» —
+# склейки, которые фильтр теряет. Теряет мало — можно отсеивать и topic
 MERGE_MODEL = "claude-sonnet-5-5"
+MERGE_FILTER_MODEL = MODEL
+MERGE_FILTER_DROP = ("other",)
+MERGE_CONTROL = 10
 MERGE_EFFORT = "medium"
 MERGE_SHOWN = 5  # сколько новостей каждого сюжета видит модель при склейке
 MERGE_SURE_SIM = 0.9  # пары похожее этого идут к модели и без общих участников (у MiniLM было 0.7)
@@ -242,7 +254,8 @@ LINES_SCHEMA = {
 LINES_MIN = 15  # сюжет проверяем, когда в нём столько новостей,
 # и снова — когда в нём прибавилось столько новостей (до 13.11 — когда вырос в 1.5 раза: 156 новостей s3868
 # ждали проверки до 234). Когда проверять — не правило раскладки, в отпечаток не входит (stories_live.fingerprint)
-LINES_STEP = 15
+# 15 до 17.11: деление стоило $0.28 в день, а бюджет сюжетов — $1.5
+LINES_STEP = 30
 LINES_NEWS, LINES_OUTLETS = 3, 2  # отдельное событие — не меньше стольких новостей и изданий; и столько же остаётся
 LINES_EFFORT = "medium"
 
@@ -377,8 +390,9 @@ def _live(state: dict, now: str) -> tuple[list[str], list[str]]:
     return urls, owners
 
 
-def _decide(state: dict, batch: list[tuple[str, dict]], now: str, vectors: dict, ask) -> dict:
-    """Одна пачка новых новостей: кандидаты, запрос к модели, решения в состояние. Возвращает токены."""
+def _decide(state: dict, batch: list[tuple[str, dict]], now: str, vectors: dict, ask, later: bool = False) -> dict:
+    """Одна пачка новых новостей: кандидаты, запрос к модели, решения в состояние. later — перепроверку не спрашивать
+    сразу, а сложить в state["recheck_queue"]. Возвращает токены."""
     live_urls, owners = _live(state, now)
     new_vecs = np.stack([vectors[url] for url, _ in batch])
     candidates = [{} for _ in batch]  # {id сюжета: лучшее сходство с его новостями}
@@ -454,7 +468,8 @@ def _decide(state: dict, batch: list[tuple[str, dict]], now: str, vectors: dict,
             part = _nearest_part(state, sid, vectors[url], vectors)
             sim = candidates[n].get(sid)
             if candidates[n].get(sid, 0) < RECHECK_SIM or sid in page or sid in state.get("cards", {}):
-                weak.append((n, target, RECHECK_MODEL if sid in page else MODEL))
+                strong = sid in page and candidates[n].get(sid, 0) < RECHECK_SONNET_MAX
+                weak.append((n, target, RECHECK_MODEL if strong else MODEL))
         elif verdict == "same" and target.startswith("N") and target[1:].isdigit() \
                 and batch[int(target[1:])][0] in state["items"] and state["items"][batch[int(target[1:])][0]]["story"]:
             sid = state["items"][batch[int(target[1:])][0]]["story"]
@@ -464,7 +479,14 @@ def _decide(state: dict, batch: list[tuple[str, dict]], now: str, vectors: dict,
             sid = _start(state, now)
         _add(state, sid, url, item, verdict, now, part, sim)
     if weak:
-        usage = {k: usage.get(k, 0) + v for k, v in _recheck(state, batch, weak, stories, now, ask).items()}
+        requests = _recheck_requests(state, batch, weak, stories, now)
+        if later:  # пакетом — отправит и применит stories_live
+            state.setdefault("recheck_queue", []).extend(requests)
+        else:
+            for r in requests:
+                answer, used = ask(RECHECK_PROMPT, r["content"], RECHECK_SCHEMA, RECHECK_EFFORT, r["model"])
+                recheck_apply(state, r["news"], answer, now)
+                usage = {k: usage.get(k, 0) + v for k, v in used.items()}
     return usage
 
 
@@ -525,37 +547,53 @@ def _nearest_part(state: dict, sid: str, vector: np.ndarray, vectors: dict) -> s
     return nearest.get("part") or nearest["story"]
 
 
-def _recheck(state: dict, batch: list[tuple[str, dict]], weak: list[tuple[int, str, str]], stories: list[dict],
-             now: str, ask) -> dict:
-    """Перепроверка join со слабым сходством, в сюжет страницы и в сюжет с карточкой: сюжет — те же новости, что модель
-    видела при раскладке; weak — (номер новости, сюжет, какая модель проверяет), запрос — на каждую модель. Модель
-    называет повод новости и как он связан с событием сюжета (LINKS); связь не из KEEP_LINKS — новость уходит в свой
-    сюжет (verdict recheck, в истории — повод и связь); новости пачки, легшие к ней через same, остаются где были."""
+def _recheck_requests(state: dict, batch: list[tuple[str, dict]], weak: list[tuple[int, str, str]],
+                      stories: list[dict], now: str) -> list[dict]:
+    """Запросы перепроверки join со слабым сходством, в сюжет страницы и в сюжет с карточкой: сюжет — те же новости,
+    что модель видела при раскладке; weak — (номер новости, сюжет, какая модель проверяет). Запрос — на каждую модель:
+    {"model", "content", "news": [[id N… в запросе, адрес новости, сюжет, в который она легла]]}."""
     shown = {s["id"]: s for s in stories}
-    drop, usage = {}, {}
+    requests = []
     for model in dict.fromkeys(m for *_, m in weak):
         mine = [(n, a) for n, a, m in weak if m == model]
         content = json.dumps({"stories": [shown[a] for a in dict.fromkeys(a for _, a in mine)],
                               "news": [{"id": f"N{n}", "story": a, "time": _when(now), "title": state["items"][batch[n][0]]["title"],
                                         "what": batch[n][1].get("what", "")} for n, a in mine]}, ensure_ascii=False)
-        answer, used = ask(RECHECK_PROMPT, content, RECHECK_SCHEMA, RECHECK_EFFORT, model)
-        drop |= {d["id"]: d for d in answer["news"] if d["link"] not in KEEP_LINKS}
-        usage = {k: usage.get(k, 0) + v for k, v in used.items()}
-    checked = state.setdefault("checked", {})
-    for n, *_ in weak:
-        if f"N{n}" in drop:
-            url, item = batch[n]
-            old = state["items"][url]["story"]
-            state["stories"][old]["urls"].remove(url)
-            _add(state, new := _start(state, now), url, item, "recheck", now)
-            state["items"][url]["history"][-1] |= {"link": drop[f"N{n}"]["link"], "event": drop[f"N{n}"]["event"].strip()}
-            # пара «откуда сняли — куда» для склейки уже проверена как разная, пока один из сюжетов не вырастет вдвое:
-            # 15.11 перепроверка сняла 18810 (Вучевич о запрете СНС) с сюжета о решении пленума распустить БИА,
-            # а склейка через полчаса вернула её туда вместе с новым сюжетом. Рост нового сюжета пару не открывает (0):
-            # он растёт копиями того же повода, и с 1 новости «вдвое» — это вторая. 16.11 перепроверка сняла протест
-            # SMER (19866) с сюжета о назначении Ускоковича как topic, а склейка через полтора часа вернула его туда
+        requests.append({"model": model, "content": content,
+                         "news": [[f"N{n}", batch[n][0], state["items"][batch[n][0]]["story"]] for n, _ in mine]})
+    return requests
+
+
+def recheck_apply(state: dict, news: list[list[str]], answer: dict, now: str) -> int:
+    """Ответ на запрос перепроверки (news — его новости, как в _recheck_requests). Модель называет повод новости
+    и как он связан с событием сюжета (LINKS); связь не из KEEP_LINKS — новость уходит в свой сюжет (verdict recheck,
+    в истории — повод и связь), если она всё ещё там, куда её положила раскладка: ответ пакета приходит через сборку,
+    а за это время её могли склеить или перенести руками. Копии, пришедшие за ней тем временем, уходят с ней; новости,
+    легшие к ней через same, остаются где были. Возвращает, сколько снято."""
+    drop = {d["id"]: d for d in answer["news"] if d["link"] not in KEEP_LINKS}
+    checked, items = state.setdefault("checked", {}), state["items"]
+    taken = 0
+    for nid, url, old in news:
+        it = items.get(url)
+        if nid not in drop or not it or it["story"] != old:
+            continue
+        copies = [u for u in state["stories"][old]["urls"]
+                  if items[u].get("history") and items[u]["history"][-1]["why"] == "copy" and items[u]["history"][-1].get("of") == it["n"]]
+        new = move(state, url, None, now, why="recheck")
+        it["verdict"] = "recheck"
+        it["history"][-1] |= {"link": drop[nid]["link"], "event": drop[nid]["event"].strip()}
+        for u in copies:
+            move(state, u, new, now, part=new, why="copy")
+            items[u]["history"][-1]["of"] = it["n"]
+        taken += 1
+        # пара «откуда сняли — куда» для склейки уже проверена как разная, пока один из сюжетов не вырастет вдвое:
+        # 15.11 перепроверка сняла 18810 (Вучевич о запрете СНС) с сюжета о решении пленума распустить БИА,
+        # а склейка через полчаса вернула её туда вместе с новым сюжетом. Рост нового сюжета пару не открывает (0):
+        # он растёт копиями того же повода, и с 1 новости «вдвое» — это вторая. 16.11 перепроверка сняла протест
+        # SMER (19866) с сюжета о назначении Ускоковича как topic, а склейка через полтора часа вернула его туда
+        if old in state["stories"]:
             checked[f"{old}|{new}"] = [len(state["stories"][old]["urls"]), 0]
-    return usage
+    return taken
 
 
 def _shown(state: dict, sid: str, vectors: dict, count: int = SHOWN_ITEMS, detail: bool = False,
@@ -642,11 +680,71 @@ def merge_todo(state: dict, now: str, vectors: dict) -> list[tuple[str, str]]:
         if not grew or _apart(state, a, b):
             continue
         old = checked.get(f"{a}|{b}")
-        if old and len(stories[a]["urls"]) < 2 * old[0] and (not old[1] or len(stories[b]["urls"]) < 2 * old[1]):
+        if old and (old[2:] == [1] or len(stories[a]["urls"]) < 2 * old[0]
+                    and (not old[1] or len(stories[b]["urls"]) < 2 * old[1])):
             continue
         if sim >= MERGE_SURE_SIM or _share_entities(state, a, b):
             todo.append((a, b))
     return todo
+
+
+def _mark_checked(state: dict, a: str, b: str) -> None:
+    """Пара признана разной: state["checked"]["a|b"] — [размер a, размер b, 1 — если у обоих карточки]. Пару сюжетов
+    с карточками склейка больше не спрашивает: их поводы — карточки, а карточка не меняется, сколько бы сюжет ни вырос.
+    16.11 повторные вопросы о таких парах — около 500 из 1992. Остальные — снова, когда один из сюжетов вырос вдвое."""
+    stories, cards = state["stories"], state.get("cards", {})
+    state.setdefault("checked", {})[f"{a}|{b}"] = [len(stories[a]["urls"]), len(stories[b]["urls"]),
+                                                   int(a in cards and b in cards)]
+
+
+def _pair_answers(todo: list[tuple[str, str]], answers: dict[int, dict]) -> dict[int, str]:
+    """Связь по каждой паре todo из ответов на пачки (номер пачки → ответ): номер пары → link."""
+    links = {}
+    for k, answer in answers.items():
+        for p in answer["pairs"]:
+            n = k * MERGE_BATCH + int(p["id"][1:]) if p["id"][1:].isdigit() else -1
+            if 0 <= n < len(todo):
+                links[n] = p["link"]
+    return links
+
+
+def merge_filter(state: dict, now: str, todo: list[tuple[str, str]], vectors: dict, ask) -> tuple[list, list]:
+    """Пары склейки сначала — Haiku (MERGE_FILTER_MODEL), сразу. Пары, которые он назвал не связанными
+    (MERGE_FILTER_DROP), — признаны разными, кроме каждой MERGE_CONTROL-й: её Sonnet видит для контроля.
+    Возвращает (пары для Sonnet, что о каждой из них ответил Haiku: "" — не ответил)."""
+    answers = {k: ask(MERGE_PROMPT, content, MERGE_SCHEMA, MERGE_EFFORT, MERGE_FILTER_MODEL)[0]
+               for k, content in enumerate(merge_requests(state, todo, vectors))}
+    links = _pair_answers(todo, answers)
+    stats = _merge_stats(state, now)
+    keep, haiku = [], []
+    for n, (a, b) in enumerate(todo):
+        link = links.get(n, "")
+        if link in MERGE_FILTER_DROP and (int(a[1:]) + int(b[1:])) % MERGE_CONTROL:
+            _mark_checked(state, a, b)
+            stats["dropped"] = stats.get("dropped", 0) + 1
+        else:
+            keep.append((a, b))
+            haiku.append(link)
+    return keep, haiku
+
+
+def _merge_stats(state: dict, now: str) -> dict:
+    """Сводка склейки за день (UTC) — state["merge_stats"][день]: dropped — сколько пар отсеял Haiku,
+    «haiku>sonnet» — сколько пар оба видели и как ответили (other>same — склейка, которую фильтр потерял бы)."""
+    days = state.setdefault("merge_stats", {})
+    stats = days.setdefault(now[:10], {})
+    for d in sorted(days)[:-14]:
+        del days[d]
+    return stats
+
+
+def merge_note(state: dict, now: str, todo: list[tuple[str, str]], haiku: list[str], answers: dict[int, dict]) -> None:
+    """Ответы Sonnet на пары, которые видел и Haiku, — в сводку дня (_merge_stats)."""
+    stats = _merge_stats(state, now)
+    for n, link in _pair_answers(todo, answers).items():
+        if n < len(haiku):
+            key = f"{haiku[n] or '?'}>{link}"
+            stats[key] = stats.get(key, 0) + 1
 
 
 def merge_requests(state: dict, todo: list[tuple[str, str]], vectors: dict) -> list[str]:
@@ -688,7 +786,7 @@ def merge_apply(state: dict, now: str, todo: list[tuple[str, str]], same: dict[i
     Ответ мог прийти позже (пакетный режим): пары, чьих сюжетов уже нет или которые с тех пор разделили руками, —
     мимо. Каждая склейка — в журнал state["merges"] с частями, которые принёс склеенный сюжет: по нему unmerge её
     отменяет. Возвращает, сколько склеено."""
-    stories, checked = state["stories"], state.setdefault("checked", {})
+    stories = state["stories"]
     todo = [(a, b) if a in stories and b in stories and not _apart(state, a, b) else None for a, b in todo]
     shown = {s for pair in todo if pair for s in pair if visible(state, s)}
     # за проход сюжет склеивается не больше одного раза: цепочки a ← b ← c на первом прогоне стянули аварию,
@@ -709,8 +807,7 @@ def merge_apply(state: dict, now: str, todo: list[tuple[str, str]], same: dict[i
                 merges.append((b if gone == a else a, gone, same[n]))
     for n, pair in enumerate(todo):
         if pair and n in asked and not {pair, pair[::-1]} & {m[:2] for m in merges} and not set(pair) & used:
-            a, b = pair
-            checked[f"{a}|{b}"] = [len(stories[a]["urls"]), len(stories[b]["urls"])]
+            _mark_checked(state, *pair)
 
     moved = {}  # склеенный сюжет → куда ушёл: видимый мог принять обрывки и сам уйти в другой видимый
     for keep, gone, (event, link) in merges:
@@ -745,16 +842,18 @@ def merge_apply(state: dict, now: str, todo: list[tuple[str, str]], same: dict[i
 
 
 def merge(state: dict, now: str, vectors: dict, ask) -> dict:
-    """Склейка дублей — сюжетов, на которые распалось одно событие (merge_todo), сразу: решает Sonnet.
+    """Склейка дублей — сюжетов, на которые распалось одно событие (merge_todo), сразу: Haiku отсеивает несвязанные
+    пары (merge_filter), решает Sonnet.
     Возвращает {"in", "out", "usd", "asked": {модель: пар}, "merged"}."""
     total = {"in": 0, "out": 0, "usd": 0.0, "asked": {}, "merged": 0}
-    todo = merge_todo(state, now, vectors)
-    same = {}
+    todo, haiku = merge_filter(state, now, merge_todo(state, now, vectors), vectors, ask)
+    same, answers = {}, {}
     for k, content in enumerate(merge_requests(state, todo, vectors)):
-        answer, usage = ask(MERGE_PROMPT, content, MERGE_SCHEMA, MERGE_EFFORT, MERGE_MODEL)
+        answers[k], usage = ask(MERGE_PROMPT, content, MERGE_SCHEMA, MERGE_EFFORT, MERGE_MODEL)
         for key in ("in", "out", "usd"):
             total[key] += usage.get(key, 0)
-        same |= merge_answer(state, todo, answer, k)
+        same |= merge_answer(state, todo, answers[k], k)
+    merge_note(state, now, todo, haiku, answers)
     total["asked"][MERGE_MODEL] = len(todo)
     total["merged"] = merge_apply(state, now, todo, same, set(range(len(todo))))
     return total
@@ -899,15 +998,16 @@ def merge_due(state: dict, now: str) -> bool:
     return not last or datetime.fromisoformat(now) - datetime.fromisoformat(last) >= MERGE_EVERY
 
 
-def update(state: dict, items: list[tuple[str, dict]], now: str, vectors: dict, ask) -> dict:
+def update(state: dict, items: list[tuple[str, dict]], now: str, vectors: dict, ask, later: bool = False) -> dict:
     """Раскладывает новости одной сборки: items — [(адрес, новость из архива)], now — время сборки (ISO),
     vectors — {адрес: вектор} для новых и для новостей живых сюжетов, ask(system, content, schema) → (ответ, токены).
     Новости, уже решённые раньше, и не-события пропускаются; сюжетам, ставшим видимыми, — карточки (cards).
+    later — перепроверка пакетом: запросы копятся в state["recheck_queue"], ответы применяет recheck_apply.
     Возвращает {"in", "out", "decided"}."""
     todo = [(url, item) for url, item in items if url not in state["items"] and eligible(item)]
     total = {"in": 0, "out": 0, "decided": len(todo)}
     for start in range(0, len(todo), BATCH):
-        usage = _decide(state, todo[start:start + BATCH], now, vectors, ask)
+        usage = _decide(state, todo[start:start + BATCH], now, vectors, ask, later)
         total["in"] += usage["in"]
         total["out"] += usage["out"]
     cards(state, vectors, ask, now)  # сюжеты, ставшие видимыми в этой сборке: следующая сверяет новости уже с карточкой
