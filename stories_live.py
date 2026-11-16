@@ -592,6 +592,7 @@ def count(n: int, one: str, few: str, many: str) -> str:
 
 
 NEWS, OUTLETS = ("новость", "новости", "новостей"), ("издание", "издания", "изданий")
+LINK_NAMES = {"same": "то же событие", "development": "развитие", "consequence": "последствие", "reaction": "реакция"}
 
 
 def heat(state: dict, sid: str, now: str) -> float:
@@ -718,6 +719,76 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
             return f'<p class="meta">Отдельных событий внутри не нашлось: {checked}.</p>'
         return ""
 
+    came = {}  # часть → склейка, которой она пришла: своя склейка сюжета-части важнее той, что принесла её в составе другого
+    for m in state.get("merges", []):
+        for p in m["parts"]:
+            if p == m["gone"] or p not in came:
+                came[p] = m
+
+    def chain(sid: str) -> list[dict]:
+        """Сюжет как цепочка событий — проба двух уровней (заметка «Событие и цепочка»): событие — часть сюжета
+        (stories.py: сюжет, в котором новость появилась), связь — та, что назвала склейка (журнал state["merges"]).
+        Часть, пришедшая как same, — то же событие, что и то, в которое её влили. По времени первой новости;
+        у события: urls, link, event (общее по словам склейки), parent — к какому событию связь, t — когда влито."""
+        by_part = {}
+        for u in state["stories"][sid]["urls"]:
+            by_part.setdefault(state["items"][u]["part"], []).append(u)
+
+        def first(urls: list[str]) -> str:
+            return min(state["items"][u].get("published", state["items"][u]["seen"]) for u in urls)
+
+        root = sid if sid in by_part else min(by_part, key=lambda p: first(by_part[p]))
+
+        def parent(p: str) -> str:
+            keep = came[p]["keep"] if p in came else root
+            return keep if keep in by_part and keep != p else root
+
+        def event_of(p: str) -> str:  # same — в то же событие; круг (склеили, отменили, склеили иначе) обрываем
+            seen = set()
+            while p != root and p not in seen and came.get(p, {}).get("link") == "same":
+                seen.add(p)
+                p = parent(p)
+            return p
+
+        events = {}
+        for p, urls in by_part.items():
+            events.setdefault(event_of(p), []).extend(urls)
+        out = [{"part": p, "urls": urls, "first": first(urls), "main": p == root,
+                **({"link": came[p].get("link"), "event": came[p].get("event"), "t": came[p]["t"],
+                    "parent": event_of(parent(p))} if p in came and p != root else {})}
+               for p, urls in events.items()]
+        return sorted(out, key=lambda ev: ev["first"])
+
+    chains = {}
+
+    def chain_note(sid: str) -> str:
+        """Цепочка событий сюжета, если их больше одного: строка на событие. Новости ниже — по-прежнему общим списком."""
+        chains[sid] = events = chain(sid)
+        if len(events) < 2:
+            return ""
+        titles = {ev["part"]: headline(ev["urls"]) for ev in events}
+        root = next(ev["part"] for ev in events if ev["main"])
+
+        def short(text: str) -> str:
+            return text if len(text) <= 60 else text[:60].rsplit(" ", 1)[0] + "…"
+
+        def row(ev: dict) -> str:
+            numbers = sorted(state["items"][u]["n"] for u in ev["urls"])
+            if ev["main"]:
+                link = "основное событие"
+            elif "t" not in ev:
+                link = "новости перенесены из другого сюжета (перепроверка или команда), связь не названа"
+            else:
+                link = (f'{LINK_NAMES.get(ev["link"], ev["link"]) if ev["link"] else "связь не записана (склейка до 16.11)"}'
+                        + (f' к «{e(short(titles[ev["parent"]]))}»' if ev["parent"] != root and ev["parent"] in titles else "")
+                        + (f': {e(ev["event"])}' if ev.get("event") else "") + f' · влито {e(local_time(ev["t"]))}')
+            return (f'<li>{e(local_time(ev["first"]))} · <b>{e(titles[ev["part"]])}</b><br><span class="meta">{link} · '
+                    f'{count(len(ev["urls"]), *NEWS)} · {count(len({state["items"][u]["source"] for u in ev["urls"]}), *OUTLETS)}'
+                    f' · {", ".join(f"№{n}" for n in numbers[:10])}{" …" if len(numbers) > 10 else ""}</span></li>')
+
+        return ('<div class="lines">Цепочка событий — проба: события — части сюжета, связи назвала склейка. '
+                f'Новости ниже — общим списком.<ul>{"".join(row(ev) for ev in events)}</ul></div>')
+
     def story_parts(sid: str) -> tuple[str, str, str, str]:
         """Сюжет: (заголовок, строка о нём, что можно выделить, список новостей)."""
         story = state["stories"][sid]
@@ -737,8 +808,8 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
                            for u in sorted(part_urls, key=lambda u: (state["items"][u].get("published", state["items"][u]["seen"]),
                                                                      state["items"][u]["n"]), reverse=True))
 
-        # части (stories.py) на странице пока не показываем: 12.11 они делили сюжеты случайно, по тому, где новость
-        # оказалась первой. Откуда новость пришла склейкой, видно по её пути
+        # новости по частям (stories.py) не делим: 12.11 части делили сюжеты случайно, по тому, где новость оказалась
+        # первой. Части со связями склейки — отдельной строкой над списком (chain_note), список общий
         body = rows(urls)
         about = (f'{f"горячесть {heats[sid]:.1f} · " if sid in heats else ""}'
                  f'{count(len(urls), *NEWS)} · {count(len(sources(sid)), *OUTLETS)} · '
@@ -750,7 +821,7 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
                 "foreign": f"за рубежом, без связи с Сербией — горячесть ×{stories.FOREIGN_HEAT}"}.get(state.get("serbia", {}).get(sid))
         card = (f'<p class="meta">Событие сюжета: {e(state["cards"][sid])}{f" · {e(mark)}" if mark else ""}</p>'
                 if sid in state.get("cards", {}) else "")
-        return headline(urls), about, card + lines_note(sid), body
+        return headline(urls), about, card + chain_note(sid) + lines_note(sid), body
 
     # у каждого видимого сюжета — своя страница /plot/sX/; у сюжетов, которые уже не на главной странице (старше
     # PAGE_WINDOW), тоже: на них ведут ссылки, отправленные раньше
@@ -869,7 +940,8 @@ td{padding:2px 14px 2px 0}.what{color:#777;font-size:13px}
 <p class="meta">Сборка {e(local_time(now))} · видимых сюжетов (от двух изданий) за сутки: {visible_count}, на странице {stories.SHOW_TOP} самых горячих · всего в памяти: {total}.
 Новости с {e(local_time(START))}; правила {e(state.get("fingerprint", ""))}, по ним разложено с {e(local_time(state.get("rebuilt", now)))}:
 поменялись правила — страница раскладывается заново целиком. Прежняя страница сюжетов-тем — <a href="/plot1/">/plot1/</a>.
-Страница не индексируется и на сайте нигде не упомянута.</p>
+Страница не индексируется и на сайте нигде не упомянута.
+Цепочки событий (проба): из {len(shown)} сюжетов страницы больше одного события в {sum(len(chains[sid]) > 1 for sid in shown)}.</p>
 {f'<p>В этой сборке: {summary}.</p>' if summary else ""}
 {f'<details><summary>Новости этой сборки — что сделала каждая</summary>{rebuilt_note}<ul>{arrived}</ul></details>' if arrived else ""}
 {f'<p class="err">Сюжеты в этой сборке не обновились: {e(error)}</p>' if error else ""}
