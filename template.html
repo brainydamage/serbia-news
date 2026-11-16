@@ -172,12 +172,17 @@ main { max-width: 1300px; margin: 0 auto; padding: 0 0 40px; }
 .camps-legend > span { display: inline-flex; align-items: center; gap: 5px; margin-right: 12px; white-space: nowrap; }
 .camp-name { font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; margin-bottom: 8px; }
 .camp-name .dot { width: 8px; height: 8px; margin: -2px 7px 0 0; vertical-align: middle; }
+/* макет: строка — одна история, в колонках её подача каждым лагерем */
+.common-head { grid-column: 1 / -1 !important; margin: 6px 0 10px; padding-top: 12px; border-top: 1px solid var(--soft); color: var(--muted); font-size: 14px; line-height: 1.35; }
+.common-head:first-of-type, .camp-name + .common-head { border-top: 0; padding-top: 0; }
+.common-head b { color: var(--text); font-weight: 700; }
 /* две колонки не годятся: слева всегда были бы лагеря 1 и 3, справа 2 и 4 — как будто пары */
 @media (max-width: 1100px) {
   .camps-grid { grid-template-columns: 1fr; }
   .camps-grid > li { grid-column: auto; grid-row: auto; }
   .camps-grid > .camp-name { display: none; }
   .camps-legend { display: block; }
+  .common-head { grid-column: auto !important; }
 }
 @media (max-width: 640px) {
   .camps-grid > [data-round="3"] { display: none; }  /* на телефоне два круга — блок не длиннее экрана */
@@ -438,6 +443,8 @@ const UI = {
   pageTitle: "Srbija: vesti iz svih medija — Vestomat",
   bySource: "Po medijima",
   camps: "Najnovije sa svih strana",
+  common: "Jedan događaj — četiri ugla",
+  outlets: "medija",
   campsChip: "Najnovije",
   all: "Sve",
   feed: "Sve vesti",
@@ -487,6 +494,8 @@ const UI_RU = {
   pageTitle: "Новости Сербии на русском — Vestomat",
   bySource: "По изданиям",
   camps: "Последнее с каждой стороны",
+  common: "Одно событие — четыре подачи",
+  outlets: "изд.",
   campsChip: "Самое новое",
   all: "Все",
   feed: "Общая лента",
@@ -810,7 +819,40 @@ function matches(item) {
 // На широком экране те же строки расставлены колонками по лагерям: --col и --row в .camps-grid.
 const CAMPS = ["independent", "state", "mainstream", "progov"];
 const CAMP_ITEMS = 3;
+function renderCommon() {
+  const byUrl = new Map(DATA.sources.flatMap(src => src.items.map(i => [i.url, [i, src]])));
+  const srcByName = new Map(DATA.sources.map(s => [s.name, s]));
+  const camps = CAMPS.filter(id => sectionById[id] && state.sections.has(id));
+  if (!camps.length) return [];
+  const day = Math.round(Date.parse(dayKey(new Date(now))) / 864e5);
+  const shift = day % camps.length;
+  const order = [...camps.slice(shift), ...camps.slice(0, shift)];
+  const rows = order.map((id, k) => h("li", { class: "camp-name", style: `--col:${k + 1};--row:1` },
+    h("span", { class: "dot", style: `background:var(--c-${id})` }), label(sectionById[id], "title")));
+  let row = 2;
+  for (const story of DATA.common) {
+    rows.push(h("li", { class: "common-head", style: `--row:${row++}` }, story.title, ` · ${story.outlets} ${t("outlets")}`));
+    order.forEach((id, k) => {
+      const n = story.news[id];
+      if (!n) return;
+      let [item, src] = byUrl.get(n.url) || [];
+      if (!item) {  // новости уже нет в ленте страницы — показываем, что знает история
+        src = srcByName.get(n.source) || { name: n.source, section: id, lang: "ru" };
+        item = { title: n.title, url: n.url, date: n.date, ru: { title: n.title } };
+      }
+      const li = renderItem(item, src, { showSource: true });
+      li.style.cssText = `--col:${k + 1};--row:${row}`;
+      rows.push(li);
+    });
+    row++;
+  }
+  const legend = h("p", { class: "camps-legend" }, order.map(id =>
+    h("span", {}, h("span", { class: "dot", style: `background:var(--c-${id})` }), label(sectionById[id], "title"))));
+  return [h("div", { class: "camps", "data-id": "camps" }, h("h2", {}, t("common")), legend, h("ul", { class: "items camps-grid" }, rows))];
+}
+
 function renderCamps() {
+  if (DATA.common?.length) return renderCommon();
   const camps = [];
   for (const id of CAMPS) {
     const sec = sectionById[id];
