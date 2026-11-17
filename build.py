@@ -722,12 +722,16 @@ def collect(source: dict, section: dict, previous: dict, skip: set[str]) -> dict
         # «exclude_category» — то же по рубрикам ленты (<category>), у кого рубрики нет в адресе: Beta, Serbian Times
         skip = {c.lower() for c in source.get("exclude_category", [])}
         items = [i for i in items if not skip & {c.lower() for c in i.get("categories", [])}]
+        # «exclude_title» — куски заголовков, без учёта регистра: у подборки Google News по многим изданиям ни адреса
+        # раздела, ни рубрики не видно, а спорт о Сербии иначе забивает колонку
+        words = [w.lower() for w in source.get("exclude_title", [])]
+        items = [i for i in items if not any(w in i["title"].lower() for w in words)]
         # ссылка из чужой ленты попадает в href: «javascript:…» выполнился бы на нашей странице по клику
         items = [i for i in items if i["url"].startswith(("https://", "http://"))]
         if "news.google.com" in source["feed"]:
             items = tidy_google_news(items)
-            if "site:" in source["feed"]:
-                # лента одного сайта через Google News (у 021.rs, RTV и др. своей RSS нет): издание и так в заголовке
+            if "site:" in source["feed"] and "+OR+site:" not in source["feed"]:
+                # лента одного сайта через Google News (подборка по многим сайтам — нет: там издание в «via») (у 021.rs, RTV и др. своей RSS нет): издание и так в заголовке
                 # карточки, а заголовки из одного-двух слов — это страницы рубрик («Srem», «Kategorija Hronika»),
                 # как и страницы авторов, архивы по дням и «Novi Sad vesti»
                 items = [i for i in items if len(i["title"].split()) >= 3 and not SECTION_PAGE_RE.search(i["title"])]
