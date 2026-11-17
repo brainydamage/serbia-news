@@ -1133,10 +1133,14 @@ h1{margin:14px 0 4px;font-size:32px;font-weight:900;color:var(--strong);line-hei
 .story h2 a{text-decoration:none}.story h2 a:hover{color:var(--hover)}
 .rank{flex:none;min-width:22px;color:var(--faint);font-weight:900}
 .meta{margin:6px 0 10px;color:var(--muted);font-size:13px}
-.bar{display:flex;gap:2px;height:6px;border-radius:3px;overflow:hidden}
-.legend{margin:6px 0 14px;color:var(--muted);font-size:12px;line-height:1.7}
-.legend .what{font-weight:700}
-.legend>span{display:inline-flex;align-items:center;gap:5px;margin-right:12px;white-space:nowrap}
+.cov{margin:4px 0 14px;color:var(--muted);font-size:12px;line-height:1.9}
+.cov>span{display:inline-flex;align-items:center;gap:5px;margin-right:14px;white-space:nowrap}
+.cov .what{font-weight:700}
+.cov .fill{width:36px;height:5px;border-radius:3px;background:var(--soft);overflow:hidden;display:inline-block}
+.cov .fill i{display:block;height:100%}
+.cov b{color:var(--text);font-weight:700;font-variant-numeric:tabular-nums}
+.cov .none{opacity:.55}
+.cov .rest{display:block}
 .dot{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block}
 .items{list-style:none;margin:0;padding:0}
 .row{display:flex;gap:10px;margin-bottom:9px}
@@ -1166,8 +1170,8 @@ SR_HEAD = """<!doctype html><html lang="sr-Latn"><head><meta charset="utf-8">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;900&display=swap">
 <style>{style}</style></head><body><div class="wrap">"""
-# время новости — как на главной: «5 min», «3 h», старше суток — дата. Переключатель на странице сюжета — по сторонам
-# (разделам) или по времени (по дням)
+# время новости — как на главной: «5 min», «3 h», старше суток — дата. Переключатель на странице сюжета — по времени
+# (по дням) или по сторонам (разделам)
 SR_SCRIPT = """<script>
 const now = Date.now();
 document.querySelectorAll('time.time').forEach(t => {
@@ -1186,8 +1190,9 @@ document.querySelectorAll('.seg button').forEach(b => b.addEventListener('click'
 
 def _write_sr_page(state: dict, vectors: dict, archive: dict) -> None:
     """Оформление — как у главной (template.html): Nunito, те же цвета и строки новостей «время · издание заголовок».
-    Главная /sr/plot/: сюжет — номер, заголовок, полоса лагерей (доля новостей каждого раздела), SR_FIRST свежих
-    новостей и ссылка на его страницу /sr/plot/sX/: там все новости — по сторонам (разделам) или по времени (по дням).
+    Главная /sr/plot/: сюжет — номер, заголовок, покрытие сторон (сколько изданий каждой стороны написали из всех её
+    изданий), SR_FIRST свежих новостей и ссылка на его страницу /sr/plot/sX/: там все новости — по времени (по дням)
+    или по сторонам (разделам).
     Состав и порядок — как на /plot/."""
     e = html.escape
     config = json.loads(SOURCES_FILE.read_text("utf-8"))
@@ -1199,6 +1204,7 @@ def _write_sr_page(state: dict, vectors: dict, archive: dict) -> None:
     core = [c for c in SR_CAMPS if c in camp_names]
     shift = (datetime.fromisoformat(now).astimezone(LOCAL_TZ).date() - datetime(1970, 1, 1).date()).days % len(core)
     camp_order = core[shift:] + core[:shift] + [s["id"] for s in config["sections"] if s["id"] not in core]
+    camp_size = {s["id"]: len(s["sources"]) for s in config["sections"]}
     shown, _, _ = page_stories(state, now)
     sr_heads = state.get("sr_heads", {})
     days = ["ponedeljak", "utorak", "sreda", "četvrtak", "petak", "subota", "nedelja"]
@@ -1238,38 +1244,36 @@ def _write_sr_page(state: dict, vectors: dict, archive: dict) -> None:
         urls = story["urls"]
         items = [state["items"][u] for u in urls]
         title = sr_heads.get(headline_of(state, vectors, urls)) or orig(headline_url(state, vectors, urls))
-        # стороны — по числу изданий, а не новостей: «Bliski SNS-u» пишут одно и то же десятком заметок и иначе
-        # всегда наверху. Порядок сторон — camp_order: один на все сюжеты дня, чтобы полосы сравнивались
+        # стороны — доля изданий стороны, которые написали (9/9, 10/11): не зависит от того, сколько изданий в разделе,
+        # и показывает, кто молчит. Не полоса «кто больше»: при равном покрытии в ней всегда выигрывала бы сторона, где
+        # больше изданий. Дроби — только у четырёх основных сторон (SR_CAMPS); остальные разделы — числом изданий.
+        # Порядок — camp_order: один на все сюжеты дня
         per_camp = Counter(c for c, _ in {(it["section"], it["source"]) for it in items})
         camps = sorted(per_camp.items(), key=lambda cn: camp_order.index(cn[0]) if cn[0] in camp_order else 99)
-        bar = "".join(f'<span style="flex:{n};background:var(--c-{e(c)})" title="{e(camp_names.get(c, c))}: {n}"></span>'
-                      for c, n in camps)
-        legend = "".join(f'<span>{dot(c)}{e(camp_names.get(c, c))}: {count(n, *SR_OUTLETS)}</span>' for c, n in camps)
+
+        def side(c: str) -> str:
+            n, total = per_camp.get(c, 0), camp_size[c]
+            name = e(camp_names.get(c, c))
+            if not n:
+                return f'<span class="none">{dot(c)}{name}: nisu pisali</span>'
+            return (f'<span title="{name}: {n} od {total}">{dot(c)}{name} <span class="fill"><i style="width:'
+                    f'{round(100 * n / total)}%;background:var(--c-{e(c)})"></i></span><b>{n}/{total}</b></span>')
+
+        others = [f'{e(camp_names.get(c, c))} {n}' for c, n in camps if c not in core]
+        balance = (f'<p class="cov"><span class="what">Pisali su:</span>{"".join(side(c) for c in camp_order if c in core)}'
+                   + (f'<span class="rest">Ostali mediji: {" · ".join(others)}</span>' if others else "") + '</p>')
         news = sorted(urls, key=lambda u: (when(u), state["items"][u]["n"]), reverse=True)
         outlets = len({it["source"] for it in items})
         meta = (f'{count(len(urls), *SR_NEWS)} · {count(outlets, *SR_OUTLETS)} · od {local(story["created"], "%d.%m.")}')
-        balance = (f'<div class="bar" role="img" aria-label="{e(", ".join(f"{camp_names.get(c, c)} {n}" for c, n in camps))}">'
-                   f'{bar}</div><p class="legend"><span class="what">Pisali su:</span> {legend}</p>')
         more = (f'<a class="all" href="{sid}/">Sve {count(len(urls), *SR_NEWS)} →</a>' if len(news) > SR_FIRST
                 else f'<a class="all" href="{sid}/">Stranica teme →</a>')
-        # на главной — SR_FIRST новостей сторон по очереди: последняя новость каждого издания, стороны в постоянном
-        # порядке, круг за кругом (как блок «с каждой стороны» на главной сайта); показываем по времени
-        latest = {}
-        for u in news:
-            latest.setdefault(state["items"][u]["source"], u)
-        queues = {c: [u for u in latest.values() if state["items"][u]["section"] == c] for c, _ in camps}
-        preview = []
-        while len(preview) < SR_FIRST and any(queues.values()):
-            for c, _ in camps:
-                if queues[c] and len(preview) < SR_FIRST:
-                    preview.append(queues[c].pop(0))
-        preview.sort(key=lambda u: (when(u), state["items"][u]["n"]), reverse=True)
+        preview = news[:SR_FIRST]  # на главной — просто самые свежие
         cards.append(
             f'<article class="story" id="{sid}"><h2><span class="rank">{k}</span><a href="{sid}/">{e(title)}</a></h2>'
             f'<div class="indent"><p class="meta">{meta}</p>{balance}'
             f'<ul class="items">{"".join(row(u) for u in preview)}</ul>{more}</div></article>')
 
-        # страница сюжета: по сторонам — в постоянном порядке, внутри свежие сверху; по времени — по дням
+        # страница сюжета: по времени (по дням) — первой вкладкой; по сторонам — в порядке camp_order, свежие сверху
         def camp_block(c: str, n: int) -> str:  # SR_CAMP_FIRST свежих, остальные стороны — раскрываются на месте
             mine = [u for u in news if state["items"][u]["section"] == c]
             rest = mine[SR_CAMP_FIRST:]
@@ -1295,9 +1299,9 @@ def _write_sr_page(state: dict, vectors: dict, archive: dict) -> None:
 <h1>{e(title)}</h1>
 <p class="meta">{k}. tema dana · {meta} · poslednja {local(story["updated"], "%d.%m. u %H:%M")}</p>
 {balance}
-<div class="seg" role="group"><button data-show="camps" aria-pressed="true">Po stranama</button><button data-show="time" aria-pressed="false">Po vremenu</button></div>
-<div data-view="camps">{by_camp}</div>
-<div data-view="time" hidden>{"".join(by_day)}</div>
+<div class="seg" role="group"><button data-show="time" aria-pressed="true">Po vremenu</button><button data-show="camps" aria-pressed="false">Po stranama</button></div>
+<div data-view="time">{"".join(by_day)}</div>
+<div data-view="camps" hidden>{by_camp}</div>
 <nav class="nav">{prev}{after}</nav>
 </div>{SR_SCRIPT}</body></html>"""
 
@@ -1305,7 +1309,7 @@ def _write_sr_page(state: dict, vectors: dict, archive: dict) -> None:
 {brand}
 <h1>Teme dana</h1>
 <p class="lead">O čemu piše najviše medija u poslednja 24 sata · ažurirano {local(now, "%d.%m. u %H:%M")} · naslovi vesti su originalni ·
-traka pokazuje koliko je medija sa svake strane pisalo o temi</p>
+„9/9“ znači da je o temi pisalo 9 od 9 medija te strane</p>
 {"".join(cards) or "<p>Još nema tema.</p>"}
 </div>{SR_SCRIPT}</body></html>"""
     SR_PAGE_DIR.mkdir(parents=True, exist_ok=True)
