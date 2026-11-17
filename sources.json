@@ -94,7 +94,6 @@
       "note": "Tekstovi na engleskom", "note_ru": "Публикации на английском",
       "sources": [
         {"name": "Balkan Insight", "site": "https://balkaninsight.com", "feed": "https://balkaninsight.com/category/serbia/feed/", "lang": "en", "note": "BIRN, na engleskom", "note_ru": "BIRN, по-английски"},
-        {"name": "Google News (EN)", "site": "https://news.google.com", "feed": "https://news.google.com/rss/search?q=Serbia+when:3d&hl=en-US&gl=US&ceid=US:en", "lang": "en", "note": "mediji na engleskom", "note_ru": "англоязычные СМИ"},
         {"name": "Svetski mediji", "site": "https://news.google.com", "feed": "https://news.google.com/rss/search?q=when:3d+(intitle:Serbia+OR+intitle:Serbian+OR+intitle:Belgrade+OR+intitle:Vucic)+(site:reuters.com+OR+site:apnews.com+OR+site:bbc.com+OR+site:bbc.co.uk+OR+site:theguardian.com+OR+site:ft.com+OR+site:politico.eu+OR+site:nytimes.com+OR+site:washingtonpost.com+OR+site:economist.com+OR+site:bloomberg.com+OR+site:euronews.com+OR+site:dw.com+OR+site:france24.com+OR+site:aljazeera.com)&hl=en-US&gl=US&ceid=US:en", "lang": "en", "note": "Reuters, AP, BBC, Guardian, FT i drugi, na engleskom", "note_ru": "Reuters, AP, BBC, Guardian, FT и другие, по-английски", "exclude_title": ["football", "soccer", "nations league", "uefa", "fifa", "rangers", "coach", "tennis", "basketball", "euroleague", "olympic", "world cup", "head-to-head"]}
       ]
     },
