@@ -1114,8 +1114,8 @@ def write_sr_page(state: dict, vectors: dict, archive: dict) -> None:
 
 SR_FIRST = 5  # сколько свежих новостей сюжета видно на главной; все — на странице сюжета
 SR_CAMP_FIRST = 8  # на странице сюжета — сколько новостей каждой стороны видно сразу
-SR_COLORS = {"independent": "#2563eb", "investigations": "#0d9488", "progov": "#dc2626", "state": "#db2777",
-             "mainstream": "#6b7280", "economy": "#ca8a04", "foreign-sr": "#7c3aed", "foreign": "#d97706",
+SR_COLORS = {"independent": "#2563eb", "investigations": "#0d9488", "progov": "#dc2626", "state": "#7c3aed",
+             "mainstream": "#6b7280", "economy": "#ca8a04", "foreign-sr": "#92400e", "foreign": "#d97706",
              "reddit": "#ff4500", "trends": "#1a73e8", "regional": "#65a30d"}  # как --c-* в template.html
 SR_STYLE = """:root{--bg:#fff;--text:#333;--strong:#000;--muted:#8a8a8a;--faint:#a8a8a8;--soft:#ececec;--hover:#9b9b9b;COLORS}
 @media (prefers-color-scheme:dark){:root{--bg:#282c35;--text:#ddd;--strong:#fff;--muted:#9a9ca3;--faint:#7c7f87;--soft:#383d49}}
