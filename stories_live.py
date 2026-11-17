@@ -1112,6 +1112,7 @@ def write_sr_page(state: dict, vectors: dict, archive: dict) -> None:
         print("Сюжеты: сербская страница не обновилась", file=sys.stderr)
 
 
+SR_CAMPS = ["independent", "state", "mainstream", "progov"]  # основные стороны — как CAMPS в template.html и build.py
 SR_FIRST = 5  # сколько свежих новостей сюжета видно на главной; все — на странице сюжета
 SR_CAMP_FIRST = 8  # на странице сюжета — сколько новостей каждой стороны видно сразу
 SR_COLORS = {"independent": "#2563eb", "investigations": "#0d9488", "progov": "#dc2626", "state": "#7c3aed",
@@ -1134,6 +1135,7 @@ h1{margin:14px 0 4px;font-size:32px;font-weight:900;color:var(--strong);line-hei
 .meta{margin:6px 0 10px;color:var(--muted);font-size:13px}
 .bar{display:flex;gap:2px;height:6px;border-radius:3px;overflow:hidden}
 .legend{margin:6px 0 14px;color:var(--muted);font-size:12px;line-height:1.7}
+.legend .what{font-weight:700}
 .legend>span{display:inline-flex;align-items:center;gap:5px;margin-right:12px;white-space:nowrap}
 .dot{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block}
 .items{list-style:none;margin:0;padding:0}
@@ -1190,8 +1192,13 @@ def _write_sr_page(state: dict, vectors: dict, archive: dict) -> None:
     e = html.escape
     config = json.loads(SOURCES_FILE.read_text("utf-8"))
     camp_names = {s["id"]: s["title"] for s in config["sections"]}
-    camp_order = [s["id"] for s in config["sections"]]
     now = state.get("built") or datetime.now(timezone.utc).isoformat(timespec="seconds")
+    # порядок сторон — как на главной сайта (template.html, CAMPS): четыре основные стороны по кругу, кто первый — меняется
+    # раз в день по белградскому календарю (тот же сдвиг); за ними остальные разделы, как в sources.json. Постоянный
+    # порядок ставил бы одну сторону первой всегда
+    core = [c for c in SR_CAMPS if c in camp_names]
+    shift = (datetime.fromisoformat(now).astimezone(LOCAL_TZ).date() - datetime(1970, 1, 1).date()).days % len(core)
+    camp_order = core[shift:] + core[:shift] + [s["id"] for s in config["sections"] if s["id"] not in core]
     shown, _, _ = page_stories(state, now)
     sr_heads = state.get("sr_heads", {})
     days = ["ponedeljak", "utorak", "sreda", "četvrtak", "petak", "subota", "nedelja"]
@@ -1232,17 +1239,17 @@ def _write_sr_page(state: dict, vectors: dict, archive: dict) -> None:
         items = [state["items"][u] for u in urls]
         title = sr_heads.get(headline_of(state, vectors, urls)) or orig(headline_url(state, vectors, urls))
         # стороны — по числу изданий, а не новостей: «Bliski SNS-u» пишут одно и то же десятком заметок и иначе
-        # всегда наверху. Порядок сторон — постоянный (как в sources.json), чтобы полосы сюжетов сравнивались
+        # всегда наверху. Порядок сторон — camp_order: один на все сюжеты дня, чтобы полосы сравнивались
         per_camp = Counter(c for c, _ in {(it["section"], it["source"]) for it in items})
         camps = sorted(per_camp.items(), key=lambda cn: camp_order.index(cn[0]) if cn[0] in camp_order else 99)
         bar = "".join(f'<span style="flex:{n};background:var(--c-{e(c)})" title="{e(camp_names.get(c, c))}: {n}"></span>'
                       for c, n in camps)
-        legend = "".join(f'<span>{dot(c)}{e(camp_names.get(c, c))} {n}</span>' for c, n in camps)
+        legend = "".join(f'<span>{dot(c)}{e(camp_names.get(c, c))}: {count(n, *SR_OUTLETS)}</span>' for c, n in camps)
         news = sorted(urls, key=lambda u: (when(u), state["items"][u]["n"]), reverse=True)
         outlets = len({it["source"] for it in items})
         meta = (f'{count(len(urls), *SR_NEWS)} · {count(outlets, *SR_OUTLETS)} · od {local(story["created"], "%d.%m.")}')
         balance = (f'<div class="bar" role="img" aria-label="{e(", ".join(f"{camp_names.get(c, c)} {n}" for c, n in camps))}">'
-                   f'{bar}</div><p class="legend">{legend}</p>')
+                   f'{bar}</div><p class="legend"><span class="what">Pisali su:</span> {legend}</p>')
         more = (f'<a class="all" href="{sid}/">Sve {count(len(urls), *SR_NEWS)} →</a>' if len(news) > SR_FIRST
                 else f'<a class="all" href="{sid}/">Stranica teme →</a>')
         # на главной — SR_FIRST новостей сторон по очереди: последняя новость каждого издания, стороны в постоянном
