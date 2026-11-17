@@ -1112,22 +1112,91 @@ def write_sr_page(state: dict, vectors: dict, archive: dict) -> None:
         print("Сюжеты: сербская страница не обновилась", file=sys.stderr)
 
 
-SR_FIRST = 5  # сколько свежих новостей сюжета видно сразу, остальные — под «Još N»
+SR_FIRST = 5  # сколько свежих новостей сюжета видно на главной; все — на странице сюжета
+SR_CAMP_FIRST = 8  # на странице сюжета — сколько новостей каждой стороны видно сразу
 SR_COLORS = {"independent": "#2563eb", "investigations": "#0d9488", "progov": "#dc2626", "state": "#db2777",
              "mainstream": "#6b7280", "economy": "#ca8a04", "foreign-sr": "#7c3aed", "foreign": "#d97706",
              "reddit": "#ff4500", "trends": "#1a73e8", "regional": "#65a30d"}  # как --c-* в template.html
+SR_STYLE = """:root{--bg:#fff;--text:#333;--strong:#000;--muted:#8a8a8a;--faint:#a8a8a8;--soft:#ececec;--hover:#9b9b9b;COLORS}
+@media (prefers-color-scheme:dark){:root{--bg:#282c35;--text:#ddd;--strong:#fff;--muted:#9a9ca3;--faint:#7c7f87;--soft:#383d49}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.3 "Nunito",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}
+a{color:inherit}
+.wrap{max-width:820px;margin:0 auto;padding:18px 20px 40px}
+.brand{display:inline-flex;align-items:center;gap:10px;text-decoration:none;color:var(--muted);font-weight:700;font-size:14px}
+.brand img{width:22px;height:22px}.brand:hover{color:var(--strong)}
+h1{margin:14px 0 4px;font-size:32px;font-weight:900;color:var(--strong);line-height:1.15}
+.lead{margin:0 0 8px;color:var(--muted);font-size:14px}
+.story{padding:26px 0 12px;border-bottom:1.5px solid var(--soft)}
+.story h2{margin:0;font-size:22px;line-height:1.25;font-weight:700;color:var(--strong);display:flex;gap:12px}
+.story h2 a{text-decoration:none}.story h2 a:hover{color:var(--hover)}
+.rank{flex:none;min-width:22px;color:var(--faint);font-weight:900}
+.meta{margin:6px 0 10px;color:var(--muted);font-size:13px}
+.bar{display:flex;gap:2px;height:6px;border-radius:3px;overflow:hidden}
+.legend{margin:6px 0 14px;color:var(--muted);font-size:12px;line-height:1.7}
+.legend>span{display:inline-flex;align-items:center;gap:5px;margin-right:12px;white-space:nowrap}
+.dot{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block}
+.items{list-style:none;margin:0;padding:0}
+.row{display:flex;gap:10px;margin-bottom:9px}
+.time{flex:none;width:44px;white-space:nowrap;color:var(--faint);font-size:12px;padding-top:2px;font-variant-numeric:tabular-nums}
+.head{flex:1;min-width:0;text-decoration:none;overflow-wrap:anywhere}
+.head:hover{color:var(--hover)}
+.src{font-size:13px;font-weight:700;color:var(--muted);display:inline-flex;align-items:center;gap:5px;margin-right:6px;white-space:nowrap}
+.all{display:inline-block;margin:2px 0 8px;color:var(--muted);font-size:14px;font-weight:700;text-decoration:none}
+.all:hover{color:var(--strong)}
+.indent{margin-left:34px}
+.seg{display:inline-flex;background:var(--soft);border-radius:20px;padding:3px;margin:18px 0 6px}
+.seg button{border:0;background:none;padding:5px 14px;border-radius:20px;cursor:pointer;font:inherit;font-size:14px;color:var(--muted)}
+.seg button[aria-pressed=true]{background:var(--strong);color:var(--bg);font-weight:700}
+.group{margin:22px 0 4px;font-size:17px;font-weight:700;color:var(--strong);display:flex;align-items:center;gap:8px}
+.group .n{color:var(--faint);font-weight:400;font-size:14px}
+.more summary{cursor:pointer;color:var(--muted);font-size:14px;font-weight:700;padding:2px 0 8px;list-style:none}
+.more summary::-webkit-details-marker{display:none}.more summary::after{content:" ↓"}.more[open] summary::after{content:" ↑"}
+.more summary:hover{color:var(--strong)}
+.nav{display:flex;justify-content:space-between;gap:16px;margin-top:28px;font-size:14px;font-weight:700;color:var(--muted)}
+.nav a{text-decoration:none}.nav a:hover{color:var(--strong)}
+@media (max-width:600px){.wrap{padding:14px 16px 32px}h1{font-size:26px}.story h2{font-size:19px;gap:8px}.indent{margin-left:0}.head{font-size:15px}}
+""".replace("COLORS", "".join(f"--c-{c}:{v};" for c, v in SR_COLORS.items()))
+SR_HEAD = """<!doctype html><html lang="sr-Latn"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
+<title>{title}</title>
+<link rel="icon" href="/favicon.ico" sizes="32x32"><link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;900&display=swap">
+<style>{style}</style></head><body><div class="wrap">"""
+# время новости — как на главной: «5 min», «3 h», старше суток — дата. Переключатель на странице сюжета — по сторонам
+# (разделам) или по времени (по дням)
+SR_SCRIPT = """<script>
+const now = Date.now();
+document.querySelectorAll('time.time').forEach(t => {
+  const at = Date.parse(t.getAttribute('datetime')), m = Math.round((now - at) / 60000);
+  if (m < 0) return;
+  if (m < 60) t.textContent = m + ' min';
+  else if (m < 24 * 60) t.textContent = Math.floor(m / 60) + ' h';
+  else { const d = new Date(at); t.textContent = d.getDate() + '.' + (d.getMonth() + 1) + '.'; }
+});
+document.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('.seg button').forEach(x => x.setAttribute('aria-pressed', x === b));
+  document.querySelectorAll('[data-view]').forEach(v => v.hidden = v.dataset.view !== b.dataset.show);
+}));
+</script>"""
 
 
 def _write_sr_page(state: dict, vectors: dict, archive: dict) -> None:
     """Оформление — как у главной (template.html): Nunito, те же цвета и строки новостей «время · издание заголовок».
-    Сюжет: номер, заголовок, полоса лагерей (доля новостей каждого раздела), SR_FIRST свежих новостей, остальные —
-    свёрнуты. Состав и порядок — как на /plot/."""
+    Главная /sr/plot/: сюжет — номер, заголовок, полоса лагерей (доля новостей каждого раздела), SR_FIRST свежих
+    новостей и ссылка на его страницу /sr/plot/sX/: там все новости — по сторонам (разделам) или по времени (по дням).
+    Состав и порядок — как на /plot/."""
     e = html.escape
     config = json.loads(SOURCES_FILE.read_text("utf-8"))
     camp_names = {s["id"]: s["title"] for s in config["sections"]}
+    camp_order = [s["id"] for s in config["sections"]]
     now = state.get("built") or datetime.now(timezone.utc).isoformat(timespec="seconds")
     shown, _, _ = page_stories(state, now)
     sr_heads = state.get("sr_heads", {})
+    days = ["ponedeljak", "utorak", "sreda", "četvrtak", "petak", "subota", "nedelja"]
+    months = ["januara", "februara", "marta", "aprila", "maja", "juna", "jula", "avgusta", "septembra", "oktobra",
+              "novembra", "decembra"]
 
     def local(iso: str, fmt: str) -> str:
         return datetime.fromisoformat(iso).astimezone(LOCAL_TZ).strftime(fmt)
@@ -1148,7 +1217,15 @@ def _write_sr_page(state: dict, vectors: dict, archive: dict) -> None:
                 f'<a class="head" href="{e(u)}" target="_blank" rel="noopener"><span class="src">{dot(it["section"])}'
                 f'{e(it["source"])}</span>{e(orig(u))}</a></li>')
 
-    cards = []
+    def day_name(iso: str) -> str:  # без «danas / juče»: страница статична, а читают её и назавтра
+        d = datetime.fromisoformat(iso).astimezone(LOCAL_TZ).date()
+        return f"{days[d.weekday()].capitalize()}, {d.day}. {months[d.month - 1]}"
+
+    def head(title: str) -> str:
+        return SR_HEAD.format(title=e(title), style=SR_STYLE)
+
+    brand = '<a class="brand" href="/"><img src="/icon.svg" alt="">Vestomat</a>'
+    cards, pages = [], {}
     for k, sid in enumerate(shown, 1):
         story = state["stories"][sid]
         urls = story["urls"]
@@ -1159,76 +1236,60 @@ def _write_sr_page(state: dict, vectors: dict, archive: dict) -> None:
                       for c, n in camps)
         legend = "".join(f'<span>{dot(c)}{e(camp_names.get(c, c))} {n}</span>' for c, n in camps)
         news = sorted(urls, key=lambda u: (when(u), state["items"][u]["n"]), reverse=True)
-        more = news[SR_FIRST:]
-        rest = (f'<details class="more"><summary>Još {count(len(more), *SR_NEWS)}</summary>'
-                f'<ul class="items">{"".join(row(u) for u in more)}</ul></details>' if more else "")
+        outlets = len({it["source"] for it in items})
+        meta = (f'{count(len(urls), *SR_NEWS)} · {count(outlets, *SR_OUTLETS)} · od {local(story["created"], "%d.%m.")}')
+        balance = (f'<div class="bar" role="img" aria-label="{e(", ".join(f"{camp_names.get(c, c)} {n}" for c, n in camps))}">'
+                   f'{bar}</div><p class="legend">{legend}</p>')
+        more = (f'<a class="all" href="{sid}/">Sve {count(len(urls), *SR_NEWS)} →</a>' if len(news) > SR_FIRST
+                else f'<a class="all" href="{sid}/">Stranica teme →</a>')
         cards.append(
-            f'<article class="story" id="{sid}"><h2><span class="rank">{k}</span>{e(title)}</h2>'
-            f'<p class="meta">{count(len(urls), *SR_NEWS)} · {count(len({it["source"] for it in items}), *SR_OUTLETS)} · '
-            f'od {local(story["created"], "%d.%m.")}</p>'
-            f'<div class="bar" role="img" aria-label="{e(", ".join(f"{camp_names.get(c, c)} {n}" for c, n in camps))}">{bar}</div>'
-            f'<p class="legend">{legend}</p>'
-            f'<ul class="items">{"".join(row(u) for u in news[:SR_FIRST])}</ul>{rest}</article>')
+            f'<article class="story" id="{sid}"><h2><span class="rank">{k}</span><a href="{sid}/">{e(title)}</a></h2>'
+            f'<div class="indent"><p class="meta">{meta}</p>{balance}'
+            f'<ul class="items">{"".join(row(u) for u in news[:SR_FIRST])}</ul>{more}</div></article>')
 
-    colors = "".join(f"--c-{c}:{v};" for c, v in SR_COLORS.items())
-    page = f"""<!doctype html><html lang="sr-Latn"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
-<title>Teme dana — Vestomat</title>
-<link rel="icon" href="/favicon.ico" sizes="32x32"><link rel="icon" href="/icon.svg" type="image/svg+xml">
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;900&display=swap">
-<style>
-:root{{--bg:#fff;--text:#333;--strong:#000;--muted:#8a8a8a;--faint:#a8a8a8;--soft:#ececec;--hover:#9b9b9b;{colors}}}
-@media (prefers-color-scheme:dark){{:root{{--bg:#282c35;--text:#ddd;--strong:#fff;--muted:#9a9ca3;--faint:#7c7f87;--soft:#383d49}}}}
-*{{box-sizing:border-box}}
-body{{margin:0;background:var(--bg);color:var(--text);font:16px/1.3 "Nunito",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}}
-a{{color:inherit}}
-.wrap{{max-width:820px;margin:0 auto;padding:18px 20px 40px}}
-.brand{{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--muted);font-weight:700;font-size:14px}}
-.brand img{{width:22px;height:22px}}
-h1{{margin:14px 0 4px;font-size:32px;font-weight:900;color:var(--strong)}}
-.lead{{margin:0 0 8px;color:var(--muted);font-size:14px}}
-.story{{padding:26px 0 12px;border-bottom:1.5px solid var(--soft)}}
-.story h2{{margin:0;font-size:22px;line-height:1.25;font-weight:700;color:var(--strong);display:flex;gap:12px}}
-.rank{{flex:none;min-width:22px;color:var(--faint);font-weight:900}}
-.meta{{margin:6px 0 10px 34px;color:var(--muted);font-size:13px}}
-.bar{{display:flex;gap:2px;height:6px;margin-left:34px;border-radius:3px;overflow:hidden}}
-.legend{{margin:6px 0 14px 34px;color:var(--muted);font-size:12px;line-height:1.7}}
-.legend>span{{display:inline-flex;align-items:center;gap:5px;margin-right:12px;white-space:nowrap}}
-.dot{{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block}}
-.items{{list-style:none;margin:0 0 0 34px;padding:0}}
-.row{{display:flex;gap:10px;margin-bottom:9px}}
-.time{{flex:none;width:44px;white-space:nowrap;color:var(--faint);font-size:12px;padding-top:2px;font-variant-numeric:tabular-nums}}
-.head{{flex:1;min-width:0;text-decoration:none;overflow-wrap:anywhere}}
-.head:hover{{color:var(--hover)}}
-.src{{font-size:13px;font-weight:700;color:var(--muted);display:inline-flex;align-items:center;gap:5px;margin-right:6px;white-space:nowrap}}
-.more{{margin:0 0 8px 34px}}.more .items{{margin-left:0}}
-.more summary{{cursor:pointer;color:var(--muted);font-size:14px;font-weight:700;padding:4px 0 10px;list-style:none}}
-.more summary::-webkit-details-marker{{display:none}}
-.more summary::after{{content:" ↓"}}.more[open] summary::after{{content:" ↑"}}
-.more summary:hover{{color:var(--strong)}}
-@media (max-width:600px){{.wrap{{padding:14px 16px 32px}}h1{{font-size:26px}}.story h2{{font-size:19px;gap:8px}}
-.meta,.bar,.legend,.items,.more{{margin-left:0}}.more .items{{margin-left:0}}.head{{font-size:15px}}}}
-</style></head><body><div class="wrap">
-<a class="brand" href="/"><img src="/icon.svg" alt="">Vestomat</a>
+        # страница сюжета: по сторонам — разделы по числу новостей, внутри свежие сверху; по времени — по дням
+        def camp_block(c: str, n: int) -> str:  # SR_CAMP_FIRST свежих, остальные стороны — раскрываются на месте
+            mine = [u for u in news if state["items"][u]["section"] == c]
+            rest = mine[SR_CAMP_FIRST:]
+            more = (f'<details class="more"><summary>Još {count(len(rest), *SR_NEWS)}</summary>'
+                    f'<ul class="items">{"".join(row(u) for u in rest)}</ul></details>' if rest else "")
+            return (f'<h3 class="group">{dot(c)}{e(camp_names.get(c, c))} <span class="n">{n}</span></h3>'
+                    f'<ul class="items">{"".join(row(u) for u in mine[:SR_CAMP_FIRST])}</ul>{more}')
+
+        by_camp = "".join(camp_block(c, n) for c, n in
+                          sorted(camps, key=lambda cn: (-cn[1], camp_order.index(cn[0]) if cn[0] in camp_order else 99)))
+        by_day, current = [], None
+        for u in news:
+            d = day_name(when(u))
+            if d != current:
+                by_day.append(("</ul>" if current else "") + f'<h3 class="group">{e(d)}</h3><ul class="items">')
+                current = d
+            by_day.append(row(u))
+        by_day.append("</ul>")
+        prev = f'<a href="../{shown[k - 2]}/">← Prethodna tema</a>' if k > 1 else "<span></span>"
+        after = f'<a href="../{shown[k]}/">Sledeća tema →</a>' if k < len(shown) else "<span></span>"
+        pages[sid] = f"""{head(f"{title} — Vestomat")}
+<a class="brand" href="../">← Teme dana</a>
+<h1>{e(title)}</h1>
+<p class="meta">{k}. tema dana · {meta} · poslednja {local(story["updated"], "%d.%m. u %H:%M")}</p>
+{balance}
+<div class="seg" role="group"><button data-show="camps" aria-pressed="true">Po stranama</button><button data-show="time" aria-pressed="false">Po vremenu</button></div>
+<div data-view="camps">{by_camp}</div>
+<div data-view="time" hidden>{"".join(by_day)}</div>
+<nav class="nav">{prev}{after}</nav>
+</div>{SR_SCRIPT}</body></html>"""
+
+    page = f"""{head("Teme dana — Vestomat")}
+{brand}
 <h1>Teme dana</h1>
 <p class="lead">O čemu piše najviše medija u poslednja 24 sata · ažurirano {local(now, "%d.%m. u %H:%M")} · naslovi vesti su originalni</p>
 {"".join(cards) or "<p>Još nema tema.</p>"}
-</div>
-<script>
-// время новости — как на главной: «5 min», «3 h», старше суток — дата
-const now = Date.now();
-document.querySelectorAll('time.time').forEach(t => {{
-  const m = Math.round((now - Date.parse(t.getAttribute('datetime'))) / 60000);
-  if (m < 0) return;
-  if (m < 60) t.textContent = m + ' min';
-  else if (m < 24 * 60) t.textContent = Math.floor(m / 60) + ' h';
-  else {{ const d = new Date(Date.parse(t.getAttribute('datetime'))); t.textContent = d.getDate() + '.' + (d.getMonth() + 1) + '.'; }}
-}});
-</script>
-</body></html>"""
+</div>{SR_SCRIPT}</body></html>"""
     SR_PAGE_DIR.mkdir(parents=True, exist_ok=True)
     (SR_PAGE_DIR / "index.html").write_text(page, "utf-8")
+    for sid, text in pages.items():
+        (SR_PAGE_DIR / sid).mkdir(exist_ok=True)
+        (SR_PAGE_DIR / sid / "index.html").write_text(text, "utf-8")
 
 
 def safe_run(archive: dict, sections: dict) -> None:
