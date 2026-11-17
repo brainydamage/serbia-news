@@ -578,6 +578,7 @@ def run(archive: dict, sections: dict) -> None:
           f"за сегодня ≈ ${today.get('usd', 0):.3f} (входа из кэша {today.get('read', 0) * 100 // max(today.get('in', 0), 1)}%"
           f"{'; ' + by_steps(today) if today.get('steps') else ''})", file=sys.stderr)
     write_page(state, vectors, sections)
+    write_sr_page(state, vectors, archive)
 
 
 def by_steps(spent: dict) -> str:
@@ -602,6 +603,18 @@ def heat(state: dict, sid: str, now: str) -> float:
     return stories.heat(state, sid, now)
 
 
+def typical(state: dict, vectors: dict, urls: list[str], fits) -> str | None:
+    """Самая типичная из свежих новостей сюжета (HEADLINE_RECENT до последней), подходящих под fits: больше всех
+    похожая на остальные такие же. Свежих нет — из всех подходящих; подходящих с вектором нет — None."""
+    last = max(datetime.fromisoformat(state["items"][u]["seen"]) for u in urls)
+    good = [u for u in urls if u in vectors and fits(u)]
+    good = [u for u in good if last - datetime.fromisoformat(state["items"][u]["seen"]) <= HEADLINE_RECENT] or good
+    if not good:
+        return None
+    v = np.stack([vectors[u] for u in good]).astype(np.float32)
+    return good[int((v @ v.T).mean(axis=1).argmax())]
+
+
 def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> None:
     """site/plot/index.html — статичная страница: видимые сюжеты за PAGE_WINDOW, крупные сверху; у каждого видимого
     сюжета — своя страница site/plot/sX/."""
@@ -623,16 +636,9 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
 
     def headline(urls: list[str]) -> str:
         """Пока у сюжетов нет своих названий — «что произошло» (what, ровный пересказ без кликбейта из перевода)
-        самой типичной из свежих новостей (HEADLINE_RECENT до последней): больше всех похожей на остальные свежие.
-        Нет свежих с what — из всех. Без what — заголовок."""
-        last = max(datetime.fromisoformat(state["items"][u]["seen"]) for u in urls)
-        with_what = [u for u in urls if state["items"][u].get("what") and u in vectors]
-        with_what = [u for u in with_what
-                     if last - datetime.fromisoformat(state["items"][u]["seen"]) <= HEADLINE_RECENT] or with_what
-        if not with_what:
-            return state["items"][urls[0]]["title"]
-        v = np.stack([vectors[u] for u in with_what])
-        return state["items"][with_what[int((v @ v.T).mean(axis=1).argmax())]]["what"]
+        самой типичной из свежих новостей (typical). Без what — заголовок."""
+        u = typical(state, vectors, urls, lambda u: bool(state["items"][u].get("what")))
+        return state["items"][u]["what"] if u else state["items"][urls[0]]["title"]
 
     def closest(urls: list[str], among: list[str]) -> dict[str, tuple[float, int]]:
         """Для каждой новости urls — лучшее сходство с новостями among (кроме неё самой) и номер той новости."""
@@ -995,6 +1001,96 @@ document.addEventListener('keydown', ev => {{
 </body></html>""", "utf-8")
 
 
+SR_PAGE_DIR = ROOT / "site" / "sr" / "plot"
+SOURCES_FILE = ROOT / "sources.json"
+SR_NEWS, SR_OUTLETS = ("vest", "vesti", "vesti"), ("medij", "medija", "medija")
+
+
+def write_sr_page(state: dict, vectors: dict, archive: dict) -> None:
+    """site/sr/plot/index.html — сюжеты для читателя по-сербски, без модели: те же SHOW_TOP сюжетов в том же порядке,
+    что на /plot/, но заголовок — оригинальный заголовок самой типичной свежей новости (typical) из сербского издания,
+    а под ним — последняя новость каждого издания с оригинальным заголовком. Оригиналы — из архива (archive.json),
+    в состоянии сюжетов заголовки русские. Ошибка здесь не роняет сюжеты: страница пробная."""
+    try:
+        _write_sr_page(state, vectors, archive)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+        print("Сюжеты: сербская страница не обновилась", file=sys.stderr)
+
+
+def _write_sr_page(state: dict, vectors: dict, archive: dict) -> None:
+    e = html.escape
+    config = json.loads(SOURCES_FILE.read_text("utf-8"))
+    camp_names = {s["id"]: s["title"] for s in config["sections"]}
+    # издания не на сербском (Google News EN/RU, Balkan Insight) в заголовок сюжета не берём, в списке они есть
+    foreign_lang = {src["name"] for s in config["sections"] for src in s.get("sources", []) if src.get("lang")}
+    now = state.get("built") or datetime.now(timezone.utc).isoformat(timespec="seconds")
+    cutoff = (datetime.fromisoformat(now) - PAGE_WINDOW).isoformat()
+    shown = [sid for sid, s in state["stories"].items() if s["updated"] >= cutoff and stories.visible(state, sid)]
+    heats = {sid: heat(state, sid, now) for sid in shown}
+    shown.sort(key=lambda sid: (heats[sid], state["stories"][sid]["updated"]), reverse=True)
+    shown = shown[:stories.SHOW_TOP]
+
+    def when(it: dict) -> str:
+        return it.get("published", it["seen"])
+
+    def local_time(iso: str) -> str:
+        return datetime.fromisoformat(iso).astimezone(LOCAL_TZ).strftime("%d.%m. %H:%M")
+
+    cards = []
+    for sid in shown:
+        urls = [u for u in state["stories"][sid]["urls"] if archive.get(u, {}).get("title")]
+        if not urls:
+            continue
+        items = {u: state["items"][u] for u in urls}
+        head = (typical(state, vectors, urls, lambda u: items[u]["source"] not in foreign_lang)
+                or typical(state, vectors, urls, lambda u: True)
+                or max(urls, key=lambda u: when(items[u])))
+        latest = {}  # издание → его последняя новость в сюжете
+        for u in urls:
+            src = items[u]["source"]
+            if src not in latest or when(items[u]) > when(items[latest[src]]):
+                latest[src] = u
+        camps = Counter(items[u]["section"] for u in latest.values())
+        chips = "".join(f'<span class="chip"><span class="dot" style="background:var(--c-{e(c)})"></span>'
+                        f'{e(camp_names.get(c, c))} {n}</span>' for c, n in camps.most_common())
+        rows = "".join(
+            f'<li><span class="meta">{local_time(when(items[u]))} · '
+            f'<span class="dot" style="background:var(--c-{e(items[u]["section"])})"></span>{e(items[u]["source"])}</span><br>'
+            f'<a href="{e(u)}" target="_blank" rel="noopener">{e(archive[u]["title"])}</a></li>'
+            for u in sorted(latest.values(), key=lambda u: when(items[u]), reverse=True))
+        cards.append(
+            f'<article class="story"><h2><a href="{e(head)}" target="_blank" rel="noopener">{e(archive[head]["title"])}</a></h2>'
+            f'<p class="meta">{count(len(state["stories"][sid]["urls"]), *SR_NEWS)} · {count(len(latest), *SR_OUTLETS)} · '
+            f'poslednja {local_time(max(when(it) for it in items.values()))}</p><p class="chips">{chips}</p>'
+            f'<details><summary>Kako su pisali — {count(len(latest), *SR_OUTLETS)}</summary><ul>{rows}</ul></details></article>')
+
+    colors = "".join(f"--c-{c}:{v};" for c, v in {
+        "independent": "#2563eb", "investigations": "#0d9488", "progov": "#dc2626", "state": "#db2777",
+        "mainstream": "#6b7280", "economy": "#ca8a04", "foreign-sr": "#7c3aed", "foreign": "#d97706",
+        "reddit": "#ff4500", "trends": "#1a73e8", "regional": "#65a30d"}.items())
+    page = f"""<!doctype html><html lang="sr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
+<title>Teme dana — Vestomat</title>
+<style>:root{{--bg:#fff;--text:#222;--strong:#111;--muted:#777;--line:#e6e6e6;--link:#1a5fb4;{colors}}}
+@media (prefers-color-scheme:dark){{:root{{--bg:#282c35;--text:#ddd;--strong:#fff;--muted:#9a9ca3;--line:#383d49;--link:#78aeed}}}}
+body{{font:16px/1.5 system-ui,sans-serif;max-width:760px;margin:24px auto;padding:0 16px;color:var(--text);background:var(--bg)}}
+h1{{font-size:26px;margin:0 0 4px}}.story{{border-bottom:1px solid var(--line);padding:14px 0}}
+.story h2{{font-size:19px;line-height:1.35;margin:0 0 6px}}.story h2 a{{color:var(--strong);text-decoration:none}}
+.story h2 a:hover{{text-decoration:underline}}a{{color:var(--link)}}.meta{{color:var(--muted);font-size:13px}}
+p{{margin:4px 0}}.chips{{font-size:13px;color:var(--muted)}}.chip{{margin-right:12px;white-space:nowrap}}
+.dot{{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:1px}}
+summary{{cursor:pointer;font-size:14px;color:var(--link);margin-top:6px}}ul{{margin:6px 0;padding-left:18px}}li{{margin:8px 0}}</style>
+</head><body>
+<h1>Teme dana</h1>
+<p class="meta">Teme o kojima je pisalo najviše medija u poslednja 24 sata, najtoplije prve · ažurirano {local_time(now)} ·
+naslovi su originalni · probna stranica</p>
+{"".join(cards) or "<p>Još nema tema.</p>"}
+</body></html>"""
+    SR_PAGE_DIR.mkdir(parents=True, exist_ok=True)
+    (SR_PAGE_DIR / "index.html").write_text(page, "utf-8")
+
+
 def safe_run(archive: dict, sections: dict) -> None:
     """Для build.py: ошибка в сюжетах не роняет сборку — пишем в лог, а на странице — прошлое состояние и ошибку."""
     if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
@@ -1007,6 +1103,7 @@ def safe_run(archive: dict, sections: dict) -> None:
         print(f"Сюжеты: ошибка, состояние не сохранено — {type(exc).__name__}: {exc}"[:300], file=sys.stderr)
         try:
             write_page(*load_state(), sections, f"{type(exc).__name__}: {exc}"[:300])
+            write_sr_page(*load_state(), archive)
         except Exception:  # noqa: BLE001
             traceback.print_exc()
 
