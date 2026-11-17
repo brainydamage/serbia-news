@@ -42,6 +42,7 @@ STATE_FILE = ROOT / "cache" / "stories.json"
 VECTORS_FILE = ROOT / "cache" / "story-vectors.npz"
 PAGE_DIR = ROOT / "site" / "plot"
 COMMANDS_FILE = ROOT / "stories-commands.json"
+ORIG_FILE = ROOT / "stories-orig.json"  # оригинальные заголовки старых новостей, разовый перенос
 COMMANDS_SHOWN = 30  # последних команд с итогом — на странице
 # начало новой страницы: 12.11 17:05 по Белграду — с этой сборки у новостей части, история переносов и номера для бота
 START = "2026-11-12T16:05:00+00:00"
@@ -246,7 +247,7 @@ def step_of(system: str) -> str:
     """Шаг сборки по системному промпту запроса — для расхода по шагам."""
     return {stories.SYSTEM_PROMPT: "раскладка", stories.RECHECK_PROMPT: "перепроверка", stories.MERGE_PROMPT: "склейка",
             stories.LINES_PROMPT: "деление", NAME_PROMPT: "имена", stories.CARD_PROMPT: "карточки", stories_audit.AUDIT_PROMPT: "аудит",
-            stories_audit.ADVICE_PROMPT: "аудит"}.get(system, "другое")
+            stories_audit.ADVICE_PROMPT: "аудит", SR_HEAD_PROMPT: "заголовки sr"}.get(system, "другое")
 
 
 def spender(state: dict, day: str):
@@ -551,11 +552,17 @@ def run(archive: dict, sections: dict) -> None:
     if rebuilt:  # во сколько обошлась раскладка заново — отдельно: в обычный день её нет
         today = state["spent"].setdefault(day, {"calls": 0, "in": 0, "out": 0, "usd": 0.0})
         today["rebuild"] = round(today.get("rebuild", 0) + today["usd"] - usd, 6)
+    # оригиналы новостей старше архива, разложенных до 18.11, — из снимков архива (snapshot.py), один раз: файл
+    # можно удалить, когда сборка их перенесла (у всех новостей в состоянии есть orig)
+    backfill = json.loads(ORIG_FILE.read_text("utf-8")) if ORIG_FILE.exists() else {}
     # время публикации из RSS — для порядка новостей в сюжете. Позже, чем мы её увидели, — неверный часовой пояс у
     # издания (RTS и др.): тогда время, когда увидели
     for u, it in state["items"].items():
         if "published" not in it and u in archive:
             it["published"] = min(archive[u].get("date") or it["seen"], it["seen"])
+        # оригинальный заголовок — для /sr/plot/: в it["title"] — перевод, а архив помнит новость только ARCHIVE_DAYS
+        if "orig" not in it and (archive.get(u, {}).get("title") or u in backfill):
+            it["orig"] = archive.get(u, {}).get("title") or backfill[u]
     # что сделала эта сборка — сводкой наверху страницы
     state["last"] = {"t": now, "rebuilt": rebuilt, "news": [u for u, _ in items], "commands": [c["result"] for c in done],
                      "merges": [[m["keep"], m["gone"]] for m in state.get("merges", [])[merges:]],
@@ -564,6 +571,11 @@ def run(archive: dict, sections: dict) -> None:
     forget_old(state, vectors, now)
     state["spent"] = {d: s for d, s in sorted(state.get("spent", {}).items())[-SPENT_DAYS:]}
     state["built"] = now
+    try:
+        sr_headlines(state, vectors, ask)
+    except Exception as exc:  # noqa: BLE001 — без перевода /sr/plot/ покажет оригинальный заголовок
+        traceback.print_exc()
+        print(f"Сюжеты: заголовки по-сербски не переведены — {type(exc).__name__}: {exc}"[:300], file=sys.stderr)
     save_state(state, vectors)
     if done:  # ответы в Telegram — после сохранения: не сохранилось — команды применятся заново в следующей сборке
         translate.reports_api({"results": [{"message": c.get("message"), "text": c["result"]} for c in done]}, "stories")
@@ -615,6 +627,28 @@ def typical(state: dict, vectors: dict, urls: list[str], fits) -> str | None:
     return good[int((v @ v.T).mean(axis=1).argmax())]
 
 
+def page_stories(state: dict, now: str) -> tuple[list[str], dict[str, float], int]:
+    """Сюжеты страницы и их порядок — общие для /plot/ и /sr/plot/: видимые за PAGE_WINDOW, по горячести, SHOW_TOP
+    первых. (сюжеты, горячесть, сколько видимых всего)."""
+    cutoff = (datetime.fromisoformat(now) - PAGE_WINDOW).isoformat()
+    shown = [sid for sid, s in state["stories"].items() if s["updated"] >= cutoff and stories.visible(state, sid)]
+    heats = {sid: heat(state, sid, now) for sid in shown}
+    shown.sort(key=lambda sid: (heats[sid], state["stories"][sid]["updated"]), reverse=True)
+    return shown[:stories.SHOW_TOP], heats, len(shown)
+
+
+def headline_url(state: dict, vectors: dict, urls: list[str]) -> str:
+    """Новость, по которой назван сюжет: самая типичная из свежих с what (typical), без них — первая."""
+    return typical(state, vectors, urls, lambda u: bool(state["items"][u].get("what"))) or urls[0]
+
+
+def headline_of(state: dict, vectors: dict, urls: list[str]) -> str:
+    """Пока у сюжетов нет своих названий — «что произошло» (what, ровный пересказ без кликбейта из перевода)
+    новости headline_url. Без what — её заголовок."""
+    it = state["items"][headline_url(state, vectors, urls)]
+    return it.get("what") or it["title"]
+
+
 def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> None:
     """site/plot/index.html — статичная страница: видимые сюжеты за PAGE_WINDOW, крупные сверху; у каждого видимого
     сюжета — своя страница site/plot/sX/."""
@@ -622,23 +656,16 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
     names = state.get("names", {})
     now = state.get("built") or datetime.now(timezone.utc).isoformat(timespec="seconds")
     cutoff = (datetime.fromisoformat(now) - PAGE_WINDOW).isoformat()
-    shown = [sid for sid, s in state["stories"].items() if s["updated"] >= cutoff and stories.visible(state, sid)]
+    shown, heats, visible_count = page_stories(state, now)
 
     def sources(sid):
         return {state["items"][u]["source"] for u in state["stories"][sid]["urls"]}
-
-    heats = {sid: heat(state, sid, now) for sid in shown}
-    shown.sort(key=lambda sid: (heats[sid], state["stories"][sid]["updated"]), reverse=True)
-    visible_count, shown = len(shown), shown[:stories.SHOW_TOP]
 
     def local_time(iso: str) -> str:
         return datetime.fromisoformat(iso).astimezone(LOCAL_TZ).strftime("%d.%m %H:%M")
 
     def headline(urls: list[str]) -> str:
-        """Пока у сюжетов нет своих названий — «что произошло» (what, ровный пересказ без кликбейта из перевода)
-        самой типичной из свежих новостей (typical). Без what — заголовок."""
-        u = typical(state, vectors, urls, lambda u: bool(state["items"][u].get("what")))
-        return state["items"][u]["what"] if u else state["items"][urls[0]]["title"]
+        return headline_of(state, vectors, urls)
 
     def closest(urls: list[str], among: list[str]) -> dict[str, tuple[float, int]]:
         """Для каждой новости urls — лучшее сходство с новостями among (кроме неё самой) и номер той новости."""
@@ -1004,13 +1031,55 @@ document.addEventListener('keydown', ev => {{
 SR_PAGE_DIR = ROOT / "site" / "sr" / "plot"
 SOURCES_FILE = ROOT / "sources.json"
 SR_NEWS, SR_OUTLETS = ("vest", "vesti", "vesti"), ("medij", "medija", "medija")
+# заголовок сюжета на /sr/plot/ — тот же, что на /plot/ (headline_of), переведённый на сербский: оригинальные заголовки
+# изданий бывают кликбейтом, а русский — ровный пересказ (what). Переводится только новый текст заголовка; кэш —
+# state["sr_heads"] {русский: сербский}, в нём только заголовки нынешней страницы. Haiku, около цента в день
+SR_HEAD_PROMPT = """Ты переводишь заголовки сюжетов агрегатора новостей о Сербии с русского на сербский язык, латиницей.
+Вход — JSON: heads — заголовки, id вида H…: ru — заголовок по-русски, orig — оригинальный заголовок новости, по которой он написан (бывает пустым, на сербском, английском или русском).
+Для каждого верни text — точный перевод ru: тот же смысл и тот же нейтральный тон, без добавлений и без кликбейта. Имена людей, мест и организаций — в сербском написании латиницей; как они пишутся, смотри в orig (Vukićević, Galerija, Stara Pazova, SNS, REM). Точку в конце не ставь."""
+SR_HEAD_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "heads": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"id": {"type": "string"}, "text": {"type": "string"}},
+                "required": ["id", "text"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["heads"],
+    "additionalProperties": False,
+}
+
+
+def sr_headlines(state: dict, vectors: dict, ask) -> int:
+    """Перевод заголовков сюжетов страницы на сербский (SR_HEAD_PROMPT), только новых. Возвращает, сколько перевели."""
+    shown, _, _ = page_stories(state, state["built"])
+    heads = {}  # русский заголовок → оригинал новости, по которой он написан
+    for sid in shown:
+        urls = state["stories"][sid]["urls"]
+        heads.setdefault(headline_of(state, vectors, urls), state["items"][headline_url(state, vectors, urls)].get("orig", ""))
+    cache = state.get("sr_heads", {})
+    todo = [ru for ru in heads if ru not in cache]
+    if todo:
+        content = json.dumps({"heads": [{"id": f"H{k}", "ru": ru, "orig": heads[ru]} for k, ru in enumerate(todo)]},
+                             ensure_ascii=False)
+        answer, _ = ask(SR_HEAD_PROMPT, content, SR_HEAD_SCHEMA)
+        for h in answer["heads"]:
+            k = h["id"][1:]
+            if k.isdigit() and int(k) < len(todo) and h["text"].strip():
+                cache[todo[int(k)]] = stories.clean_name(h["text"])
+    state["sr_heads"] = {ru: cache[ru] for ru in heads if ru in cache}
+    return len(todo)
 
 
 def write_sr_page(state: dict, vectors: dict, archive: dict) -> None:
-    """site/sr/plot/index.html — сюжеты для читателя по-сербски, без модели: те же SHOW_TOP сюжетов в том же порядке,
-    что на /plot/, но заголовок — оригинальный заголовок самой типичной свежей новости (typical) из сербского издания,
-    а под ним — последняя новость каждого издания с оригинальным заголовком. Оригиналы — из архива (archive.json),
-    в состоянии сюжетов заголовки русские. Ошибка здесь не роняет сюжеты: страница пробная."""
+    """site/sr/plot/index.html — /plot/ для читателя по-сербски: те же сюжеты в том же порядке, тот же заголовок
+    (переведённый, sr_headlines), те же новости в том же порядке — с оригинальными заголовками. Служебного нет.
+    Ошибка здесь не роняет сюжеты: страница пробная."""
     try:
         _write_sr_page(state, vectors, archive)
     except Exception:  # noqa: BLE001
@@ -1022,69 +1091,63 @@ def _write_sr_page(state: dict, vectors: dict, archive: dict) -> None:
     e = html.escape
     config = json.loads(SOURCES_FILE.read_text("utf-8"))
     camp_names = {s["id"]: s["title"] for s in config["sections"]}
-    # издания не на сербском (Google News EN/RU, Balkan Insight) в заголовок сюжета не берём, в списке они есть
-    foreign_lang = {src["name"] for s in config["sections"] for src in s.get("sources", []) if src.get("lang")}
     now = state.get("built") or datetime.now(timezone.utc).isoformat(timespec="seconds")
-    cutoff = (datetime.fromisoformat(now) - PAGE_WINDOW).isoformat()
-    shown = [sid for sid, s in state["stories"].items() if s["updated"] >= cutoff and stories.visible(state, sid)]
-    heats = {sid: heat(state, sid, now) for sid in shown}
-    shown.sort(key=lambda sid: (heats[sid], state["stories"][sid]["updated"]), reverse=True)
-    shown = shown[:stories.SHOW_TOP]
-
-    def when(it: dict) -> str:
-        return it.get("published", it["seen"])
+    shown, _, _ = page_stories(state, now)
+    sr_heads = state.get("sr_heads", {})
 
     def local_time(iso: str) -> str:
         return datetime.fromisoformat(iso).astimezone(LOCAL_TZ).strftime("%d.%m. %H:%M")
 
+    def orig(u: str) -> str:  # старше архива и без orig — остаётся только перевод
+        it = state["items"][u]
+        return it.get("orig") or archive.get(u, {}).get("title") or it["title"]
+
+    def when(u: str) -> str:
+        return state["items"][u].get("published", state["items"][u]["seen"])
+
+    def dot(section: str) -> str:
+        return f'<span class="dot" style="background:var(--c-{e(section)})"></span>'
+
     cards = []
     for sid in shown:
-        urls = [u for u in state["stories"][sid]["urls"] if archive.get(u, {}).get("title")]
-        if not urls:
-            continue
-        items = {u: state["items"][u] for u in urls}
-        head = (typical(state, vectors, urls, lambda u: items[u]["source"] not in foreign_lang)
-                or typical(state, vectors, urls, lambda u: True)
-                or max(urls, key=lambda u: when(items[u])))
-        latest = {}  # издание → его последняя новость в сюжете
-        for u in urls:
-            src = items[u]["source"]
-            if src not in latest or when(items[u]) > when(items[latest[src]]):
-                latest[src] = u
-        camps = Counter(items[u]["section"] for u in latest.values())
-        chips = "".join(f'<span class="chip"><span class="dot" style="background:var(--c-{e(c)})"></span>'
-                        f'{e(camp_names.get(c, c))} {n}</span>' for c, n in camps.most_common())
+        story = state["stories"][sid]
+        urls = story["urls"]
+        items = [state["items"][u] for u in urls]
+        ru = headline_of(state, vectors, urls)
+        title = sr_heads.get(ru) or orig(headline_url(state, vectors, urls))
+        # как на /plot/: по разделам — число новостей, порядок — тот же Counter по тем же новостям
+        camps = Counter(it["section"] for it in items)
+        chips = "".join(f'<span class="chip">{dot(c)}{e(camp_names.get(c, c))} {n}</span>' for c, n in camps.most_common())
         rows = "".join(
-            f'<li><span class="meta">{local_time(when(items[u]))} · '
-            f'<span class="dot" style="background:var(--c-{e(items[u]["section"])})"></span>{e(items[u]["source"])}</span><br>'
-            f'<a href="{e(u)}" target="_blank" rel="noopener">{e(archive[u]["title"])}</a></li>'
-            for u in sorted(latest.values(), key=lambda u: when(items[u]), reverse=True))
+            f'<li><span class="meta">{local_time(when(u))} · {dot(state["items"][u]["section"])}{e(state["items"][u]["source"])}'
+            f'</span><br><a href="{e(u)}" target="_blank" rel="noopener">{e(orig(u))}</a></li>'
+            for u in sorted(urls, key=lambda u: (when(u), state["items"][u]["n"]), reverse=True))
         cards.append(
-            f'<article class="story"><h2><a href="{e(head)}" target="_blank" rel="noopener">{e(archive[head]["title"])}</a></h2>'
-            f'<p class="meta">{count(len(state["stories"][sid]["urls"]), *SR_NEWS)} · {count(len(latest), *SR_OUTLETS)} · '
-            f'poslednja {local_time(max(when(it) for it in items.values()))}</p><p class="chips">{chips}</p>'
-            f'<details><summary>Kako su pisali — {count(len(latest), *SR_OUTLETS)}</summary><ul>{rows}</ul></details></article>')
+            f'<details class="story" id="{sid}" open><summary><b>{e(title)}</b><br><span class="meta">'
+            f'{count(len(urls), *SR_NEWS)} · {count(len({it["source"] for it in items}), *SR_OUTLETS)} · '
+            f'{local_time(story["created"])} — {local_time(story["updated"])}</span>'
+            f'<span class="chips">{chips}</span></summary><ul>{rows}</ul></details>')
 
     colors = "".join(f"--c-{c}:{v};" for c, v in {
         "independent": "#2563eb", "investigations": "#0d9488", "progov": "#dc2626", "state": "#db2777",
         "mainstream": "#6b7280", "economy": "#ca8a04", "foreign-sr": "#7c3aed", "foreign": "#d97706",
         "reddit": "#ff4500", "trends": "#1a73e8", "regional": "#65a30d"}.items())
+    toggle = "document.querySelectorAll('details.story').forEach(d => d.open = %s)"
     page = f"""<!doctype html><html lang="sr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
 <title>Teme dana — Vestomat</title>
 <style>:root{{--bg:#fff;--text:#222;--strong:#111;--muted:#777;--line:#e6e6e6;--link:#1a5fb4;{colors}}}
 @media (prefers-color-scheme:dark){{:root{{--bg:#282c35;--text:#ddd;--strong:#fff;--muted:#9a9ca3;--line:#383d49;--link:#78aeed}}}}
-body{{font:16px/1.5 system-ui,sans-serif;max-width:760px;margin:24px auto;padding:0 16px;color:var(--text);background:var(--bg)}}
-h1{{font-size:26px;margin:0 0 4px}}.story{{border-bottom:1px solid var(--line);padding:14px 0}}
-.story h2{{font-size:19px;line-height:1.35;margin:0 0 6px}}.story h2 a{{color:var(--strong);text-decoration:none}}
-.story h2 a:hover{{text-decoration:underline}}a{{color:var(--link)}}.meta{{color:var(--muted);font-size:13px}}
-p{{margin:4px 0}}.chips{{font-size:13px;color:var(--muted)}}.chip{{margin-right:12px;white-space:nowrap}}
-.dot{{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:1px}}
-summary{{cursor:pointer;font-size:14px;color:var(--link);margin-top:6px}}ul{{margin:6px 0;padding-left:18px}}li{{margin:8px 0}}</style>
+body{{font:15px/1.45 system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:var(--text);background:var(--bg)}}
+summary{{cursor:pointer;padding:6px 0}}summary b{{font-size:17px;color:var(--strong)}}details{{border-bottom:1px solid var(--line)}}
+ul{{margin:4px 0 12px;padding-left:20px}}li{{margin:6px 0}}a{{color:var(--link)}}.meta{{color:var(--muted);font-size:13px}}
+.chips{{display:block;font-size:13px;color:var(--muted)}}.chip{{margin-right:12px;white-space:nowrap}}
+.dot{{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:1px}}</style>
 </head><body>
 <h1>Teme dana</h1>
 <p class="meta">Teme o kojima je pisalo najviše medija u poslednja 24 sata, najtoplije prve · ažurirano {local_time(now)} ·
-naslovi su originalni · probna stranica</p>
+naslovi vesti su originalni · probna stranica</p>
+<p><button onclick="{toggle % 'true'}">Otvori sve</button> <button onclick="{toggle % 'false'}">Zatvori sve</button></p>
 {"".join(cards) or "<p>Još nema tema.</p>"}
 </body></html>"""
     SR_PAGE_DIR.mkdir(parents=True, exist_ok=True)
