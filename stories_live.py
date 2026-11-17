@@ -131,6 +131,28 @@ def save_state(state: dict, vectors: dict) -> None:
              vectors=np.stack([vectors[u] for u in urls]).astype(np.float16) if urls else np.zeros((0, 0), np.float16))
 
 
+def known_sources() -> set[str]:
+    """Издания из sources.json — по имени, как в новостях."""
+    return {src["name"] for s in json.loads(SOURCES_FILE.read_text("utf-8"))["sections"] for src in s.get("sources", [])}
+
+
+def drop_gone_sources(state: dict, vectors: dict, known: set[str]) -> int:
+    """Новости изданий, которых больше нет в sources.json, — вон из сюжетов и из памяти вместе с векторами, а сюжеты,
+    в которых ничего не осталось, — тоже (имена, карточки и прочее за ними подчистит forget_old). Иначе убранное
+    издание (18.11 — Google News EN и RU, мелкие сайты со всего мира) ещё дни сидело бы в растущих сюжетах и в счёте
+    изданий. Архив помнит их ARCHIVE_DAYS — новые новости таких изданий в сюжеты не берём (run). Возвращает, сколько убрано."""
+    gone = [u for u, it in state["items"].items() if it["source"] not in known]
+    for u in gone:
+        it = state["items"].pop(u)
+        vectors.pop(u, None)
+        story = state["stories"].get(it["story"]) if it["story"] else None
+        if story and u in story["urls"]:
+            story["urls"].remove(u)
+    for sid in [sid for sid, story in state["stories"].items() if not story["urls"]]:
+        del state["stories"][sid]
+    return len(gone)
+
+
 def forget_old(state: dict, vectors: dict, now: str) -> None:
     """Убирает давно не обновлявшиеся сюжеты вместе с векторами их новостей."""
     cutoff = (datetime.fromisoformat(now) - FORGET).isoformat()
@@ -455,10 +477,13 @@ def run(archive: dict, sections: dict) -> None:
         # новость. Применённые команды заново не применяем: к новой раскладке они могут не подходить
         keep = {k: state[k] for k in ("spent", "next_n", "next_id", "commands_done", "commands") if k in state}
         state = {**stories.new_state(), **keep, "start": START, "fingerprint": fingerprint(), "rebuilt": now}
+    known = known_sources()
+    if gone := drop_gone_sources(state, vectors, known):
+        print(f"Сюжеты: убрано {gone} новостей изданий, которых больше нет в sources.json", file=sys.stderr)
     since = max(START, (datetime.fromisoformat(now) - stories.LIVE).isoformat())
     wait = (datetime.fromisoformat(now) - WAIT_TRANSLATION).isoformat()
     items = [(u, a) for u, a in archive.items()
-             if u not in state["items"] and stories.eligible(a) and a["seen"] >= since
+             if u not in state["items"] and a["source"] in known and stories.eligible(a) and a["seen"] >= since
              and (a.get("ru") or a.get("what") or a["seen"] < wait)]
     items.sort(key=lambda x: x[1]["seen"])
     print(f"Сюжеты: новых новостей {len(items)}{f' (раскладываем заново: {rebuilt})' if rebuilt else ''}", file=sys.stderr)
