@@ -977,7 +977,10 @@ def write_pages(data: dict) -> None:
     payload = json.dumps(page, ensure_ascii=False).replace("</", "<\\/")
     template = strip_comments(TEMPLATE.read_text("utf-8"))
     # по нему открытая страница узнаёт о новой сборке, не скачивая весь data.json
-    (OUT_DIR / "version.json").write_text(json.dumps({"generated": data["generated"]}), "utf-8")
+    # info и число изданий — для шапки страниц тем (/sr/plot/, /ru/plot/): своих данных у них нет
+    (OUT_DIR / "version.json").write_text(json.dumps(
+        {"generated": data["generated"], "outlets": len(data["sources"]), "info": data.get("info") or {}},
+        ensure_ascii=False), "utf-8")
     for lang, page in PAGES.items():
         out = OUT_DIR / page["path"] / "index.html"
         out.parent.mkdir(parents=True, exist_ok=True)

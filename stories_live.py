@@ -1139,8 +1139,9 @@ SR_COLORS = {"independent": "#2563eb", "investigations": "#0d9488", "progov": "#
              "mainstream": "#6b7280", "economy": "#ca8a04", "foreign-sr": "#92400e", "foreign": "#d97706",
              "reddit": "#ff4500", "trends": "#1a73e8", "regional": "#65a30d"}  # как --c-* в template.html
 SR_STYLE = """:root{--bg:#fff;--text:#333;--strong:#000;--muted:#8a8a8a;--faint:#a8a8a8;--soft:#ececec;--hover:#9b9b9b;--tip-bg:#282c35;--tip-text:#ddd;COLORS}
-@media (prefers-color-scheme:dark){:root{--bg:#282c35;--text:#ddd;--strong:#fff;--muted:#9a9ca3;--faint:#7c7f87;--soft:#383d49;--tip-bg:#ddd;--tip-text:#282c35}}
+@media (prefers-color-scheme:dark){:root{--bg:#282c35;--text:#ddd;--strong:#fff;--muted:#9a9ca3;--faint:#7c7f87;--soft:#383d49;--tip-bg:#3a404d;--tip-text:#eee}}
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--text);font:16px/1.3 "Nunito",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}
 a{color:inherit}
 .wrap{max-width:820px;margin:0 auto;padding:18px 20px 40px}
@@ -1185,22 +1186,41 @@ h1{margin:14px 0 4px;font-size:32px;font-weight:900;color:var(--strong);line-hei
 .story h2{font-size:24px}.rhs{margin-left:0;padding-top:4px}
 .cols:not([hidden]){display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:8px 44px;align-items:start}
 .narrow{max-width:880px}}
-.site{max-width:1300px;margin:0 auto;padding:14px 20px;display:flex;flex-wrap:wrap;gap:10px 20px;align-items:center}
-.site .name{display:flex;align-items:baseline;gap:12px;margin-right:auto;min-width:0}
-.site .name a{font-size:29px;font-weight:700;line-height:1.4;white-space:nowrap;text-decoration:none;color:var(--text)}
-.site .name img{width:28px;height:28px;vertical-align:-4px;margin-right:10px}
-.site .upd{color:var(--muted);font-size:13px}.site .upd b{font-weight:800}
-.site .ctl{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
-.site .seg{margin:0}.site .seg a{padding:5px 12px;border-radius:20px;font-size:14px;font-weight:700;color:var(--muted);text-decoration:none;text-align:center}
-.site .seg a:hover{color:var(--text)}.site .seg a[aria-current]{background:var(--tip-bg);color:var(--tip-text)}
-.site .view a{width:76px;padding-left:4px;padding-right:4px}
+/* шапка — как на главной (template.html: .topline, header, .bar, .seg, #lang, #script, #view, .search) */
+.topline{max-width:1300px;margin:0 auto;padding:8px 20px 0;color:var(--muted);font-size:13px;text-align:right}
+.topline:empty{display:none}#info>span{white-space:nowrap}#info .dot{width:7px;height:7px;margin-left:5px;vertical-align:1px}
+.site{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 94%,transparent);backdrop-filter:blur(10px)}
+.site .bar{max-width:1300px;margin:0 auto;padding:14px 20px;display:flex;flex-wrap:wrap;gap:10px 20px;align-items:center}
+.site .brand{display:flex;align-items:baseline;gap:12px;margin-right:auto}
+.site .name{font-size:29px;font-weight:700;line-height:1.4;white-space:nowrap;text-decoration:none;color:var(--text)}
+.site .logo{width:28px;height:28px;vertical-align:-4px;margin-right:10px}
+.site .updated{color:var(--muted);font-size:13px}.site .updated b{font-weight:800}
+.site .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center}.site .controls-row{display:contents}
+.site .seg{display:inline-flex;background:var(--soft);border-radius:20px;padding:3px;margin:0}
+.site .seg button,.site .seg a{border:0;background:none;padding:5px 12px;border-radius:20px;cursor:pointer;font:inherit;font-size:14px;font-weight:700;color:var(--muted);text-decoration:none;text-align:center}
+.site .seg button:hover,.site .seg a:hover{color:var(--text)}
+#view a{width:76px;padding-left:4px;padding-right:4px}
+.site .seg button[aria-pressed=true],.site .seg a[aria-current]{background:var(--tip-bg);color:var(--tip-text)}
+#lang .short{display:none}
+.search{border:1.5px solid var(--soft);background:var(--bg);color:var(--text);border-radius:20px;padding:6px 34px 6px 14px;font:inherit;font-size:14px;width:180px}
+.search:focus{outline:none;border-color:var(--text)}.search::-webkit-search-cancel-button{-webkit-appearance:none}
+.search-box{position:relative;display:inline-flex}
+.search-clear{position:absolute;right:7px;top:50%;transform:translateY(-50%);width:20px;height:20px;padding:0;border:0;border-radius:50%;cursor:pointer;background:var(--soft);color:var(--muted);font:inherit;font-size:15px;line-height:20px}
+.search-clear:hover{background:var(--tip-bg);color:var(--tip-text)}
 .back{display:inline-block;color:var(--muted);font-size:14px;font-weight:700;text-decoration:none}.back:hover{color:var(--strong)}
-.site .short{display:none}
-@media (max-width:800px){.site .name a{font-size:24px}}
-@media (max-width:640px){.site{padding:8px 16px 12px}.site .name{flex-direction:column;align-items:flex-start;gap:0;width:100%}
-.site .name a{font-size:21px}.site .ctl{width:100%;flex-direction:column;align-items:flex-start}
-.site .view{width:100%}.site .view a{flex:1;width:auto;padding:10px 4px;font-size:15px}
-.site .lang a{padding:10px 14px;font-size:15px}.site .full{display:none}.site .short{display:inline}}
+@media (max-width:800px){.site .name{font-size:24px}}
+@media (max-width:640px){.site{position:static}
+.site .bar{display:grid;grid-template-columns:auto 1fr;gap:10px 8px;padding:8px 16px 12px}
+.site .controls,.site .controls-row{display:contents}
+.site .brand{grid-row:1;grid-column:1/-1;flex-direction:column;align-items:flex-start;gap:0;margin:0;min-width:0}
+.site .name{font-size:21px}.site .logo{width:22px;height:22px;vertical-align:-3px;margin-right:8px}.site .updated{font-size:12px}
+#lang{grid-row:2;grid-column:1}#lang .full{display:none}#lang .short{display:inline}
+#script{grid-row:2;grid-column:2}#script button{flex:1}
+#view{grid-row:3;grid-column:1/-1}#view a{flex:1}
+.search-box{grid-row:4;grid-column:1/-1;min-width:0}
+.site .seg button,.site .seg a,#view a{width:auto;padding:8px 14px;font-size:15px}
+.search{width:100%;height:100%;font-size:16px}.search-clear{width:26px;height:26px;line-height:26px;font-size:18px}
+.topline{padding:8px 16px 0;text-align:left;font-size:12px}#info .unit{display:none}}
 @media (max-width:600px){.wrap{padding:14px 16px 32px}h1{font-size:26px}.story h2{font-size:19px;gap:8px}.indent{margin-left:0}.head{font-size:15px}}
 """.replace("COLORS", "".join(f"--c-{c}:{v};" for c, v in SR_COLORS.items()))
 SR_HEAD = """<!doctype html><html lang="{lang}"><head><meta charset="utf-8">
@@ -1226,10 +1246,135 @@ document.addEventListener('click', ev => {
   const a = ev.target.closest('a.head'), sel = getSelection();
   if (a && !sel.isCollapsed && a.contains(sel.anchorNode)) ev.preventDefault();
 });
-document.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => {
-  document.querySelectorAll('.seg button').forEach(x => x.setAttribute('aria-pressed', x === b));
+document.querySelectorAll('.wrap .seg button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('.wrap .seg button').forEach(x => x.setAttribute('aria-pressed', x === b));
   document.querySelectorAll('[data-view]').forEach(v => v.hidden = v.dataset.view !== b.dataset.show);
 }));
+</script>"""
+
+# шапка как на главной: курс, погода и воздух — из /version.json (их пишет build.py), алфавит и поиск — на месте.
+# Переводы букв, иконки погоды и уровни воздуха — как в template.html
+HEADER_SCRIPT = r"""<script>
+(() => {
+const CFG = /*CFG*/;
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+};
+store.set('lang', CFG.lang);  // главная по ссылкам из шапки откроется на языке этой страницы
+const C2L = { А:"A",Б:"B",В:"V",Г:"G",Д:"D",Ђ:"Đ",Е:"E",Ж:"Ž",З:"Z",И:"I",Ј:"J",К:"K",Л:"L",Љ:"Lj",М:"M",Н:"N",Њ:"Nj",О:"O",П:"P",Р:"R",С:"S",Т:"T",Ћ:"Ć",У:"U",Ф:"F",Х:"H",Ц:"C",Ч:"Č",Џ:"Dž",Ш:"Š" };
+for (const [c, l] of Object.entries(C2L)) C2L[c.toLowerCase()] = l.toLowerCase();
+const L2C = {};
+for (const [c, l] of Object.entries(C2L)) L2C[l] = c;
+Object.assign(L2C, { LJ: "Љ", NJ: "Њ", DŽ: "Џ", Q: "Ку", W: "В", X: "Кс", Y: "И", q: "ку", w: "в", x: "кс", y: "и" });
+const toLatin = s => s.replace(/[Ѐ-ӿ]/g, (ch, i) => {
+  const l = C2L[ch];
+  if (!l) return ch;
+  if (l.length === 2 && ch === ch.toUpperCase()) {
+    const next = s[i + 1] || "";
+    if (next && next === next.toUpperCase() && next !== next.toLowerCase()) return l.toUpperCase();
+  }
+  return l;
+});
+const KEEP_LATIN = new Set(["Ctrl", "RSS", "EN", "RU", "SR", "BIRN", "RFE", "RL", "Lat", "Vestomat", "Original"]);
+const toCyrillic = s => s.replace(/[A-Za-zČĆŽŠĐčćžšđ]+/g, w => KEEP_LATIN.has(w) ? w
+  : w.replace(/Lj|LJ|lj|Nj|NJ|nj|Dž|DŽ|dž|[A-Za-zČĆŽŠĐčćžšđ]/g, ch => L2C[ch] ?? ch));
+const norm = s => toLatin(s).toLowerCase().replace(/đ/g, "dj").normalize("NFD").replace(/[̀-ͯ]/g, "");
+
+// алфавит: Original — как написали издания, Lat / Ћир — всё латиницей или кириллицей (выбор общий с главной)
+let mode = CFG.lang === 'sr' ? store.get('script', 'orig') : 'orig';
+const originals = new WeakMap();
+const q = document.getElementById('q'), placeholder = q.placeholder;
+function applyScript() {
+  const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, { acceptNode: n =>
+    n.parentElement.closest('script, style, #lang, #script') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
+  for (let n; (n = walk.nextNode());) {
+    if (!originals.has(n)) originals.set(n, n.nodeValue);
+    const text = originals.get(n);
+    const cyr = (text.match(/[Ѐ-ӿ]/g) || []).length;
+    n.nodeValue = mode === 'lat' ? toLatin(text) : mode === 'cyr' && cyr <= text.length / 3 ? toCyrillic(text) : text;
+  }
+  q.placeholder = mode === 'cyr' ? toCyrillic(placeholder) : placeholder;
+  document.querySelectorAll('#script button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === mode)));
+  if (CFG.lang === 'sr') document.documentElement.lang = mode === 'cyr' ? 'sr-Cyrl' : 'sr-Latn';
+}
+document.getElementById('script')?.addEventListener('click', e => {
+  const v = e.target.closest('button')?.dataset.v;
+  if (v) { mode = v; store.set('script', v); applyScript(); }
+});
+
+// курс, погода, воздух и «обновлено» — свежие, из той же сборки, что и главная
+const locale = CFG.lang === 'ru' ? 'ru' : 'sr-Latn-RS';
+const AQI_LEVELS = [[20, "#50f0e6"], [40, "#50ccaa"], [60, "#f0e641"], [80, "#ff5050"], [100, "#960032"], [Infinity, "#7d2181"]];
+function weatherIcon(code, day) {
+  if (code <= 1) return day ? "☀️" : "🌙";
+  if (code === 2) return day ? "⛅" : "☁️";
+  if (code === 3) return "☁️";
+  if (code === 45 || code === 48) return "🌫️";
+  if ((code >= 71 && code <= 77) || code === 85 || code === 86) return "🌨️";
+  if (code >= 95) return "⛈️";
+  return "🌧️";
+}
+function plural(n, [one, few, many]) {
+  const m10 = n % 10, m100 = n % 100;
+  return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many;
+}
+const el = (tag, attrs, ...kids) => { const x = document.createElement(tag); Object.assign(x, attrs); x.append(...kids); return x; };
+fetch('/version.json?t=' + Date.now(), { cache: 'no-store' }).then(r => r.json()).then(v => {
+  const info = v.info || {}, parts = [];
+  const num = x => new Intl.NumberFormat(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(x);
+  if (info.rates) {
+    const day = new Intl.DateTimeFormat(locale, { timeZone: 'Europe/Belgrade', day: 'numeric', month: 'short' })
+      .format(new Date(info.rates.date)).replace(/\.$/, '');
+    const title = CFG.rateHint + ' ' + day;
+    parts.push(el('span', { title }, '€ ' + num(info.rates.EUR), el('span', { className: 'unit' }, ' ' + CFG.din)));
+    parts.push(el('span', { title }, '₽ ' + num(info.rates.RUB), el('span', { className: 'unit' }, ' ' + CFG.din)));
+  }
+  if (info.weather) {
+    const t = Math.round(info.weather.temp);
+    parts.push(el('span', {}, `${CFG.city} ${t > 0 ? '+' : ''}${t}° ${weatherIcon(info.weather.code, info.weather.day)}`));
+  }
+  if (info.air) {
+    const level = AQI_LEVELS.findIndex(([max]) => info.air.aqi < max);
+    const dot = el('span', { className: 'dot' });
+    dot.style.background = AQI_LEVELS[level][1];
+    parts.push(el('span', { title: `${CFG.airHint}: ${Math.round(info.air.aqi)}, PM2.5 ${Math.round(info.air.pm25)} µg/m³` },
+      `${CFG.air}: ${CFG.aqi[level]}`, dot));
+  }
+  document.getElementById('info').replaceChildren(...parts.flatMap((p, i) => i ? [' · ', p] : [p]));
+  if (v.generated) {
+    const time = new Intl.DateTimeFormat(locale, { timeZone: 'Europe/Belgrade', hour: '2-digit', minute: '2-digit' }).format(new Date(v.generated));
+    document.getElementById('updated').replaceChildren(el('b', {}, 'Vestomat'),
+      ` · ${CFG.updated} ${time}` + (v.outlets ? ` · ${v.outlets} ${plural(v.outlets, CFG.outlets)}` : ''));
+  }
+  applyScript();
+}).catch(() => {});
+
+// поиск — по новостям этой страницы: лишние строки, дни, стороны и темы прячутся
+const qInput = document.getElementById('q'), qClear = document.getElementById('q-clear');
+const hit = (node, q) => node && norm(node.textContent).includes(q);
+function search() {
+  const q = norm(qInput.value.trim());
+  qClear.hidden = !qInput.value;
+  document.querySelectorAll('.wrap .items li').forEach(li => li.hidden = !!q && !hit(li, q));
+  document.querySelectorAll('.wrap article.story').forEach(a => {
+    const title = q && hit(a.querySelector('h2'), q);
+    if (title) a.querySelectorAll('li').forEach(li => li.hidden = false);
+    a.hidden = !!q && !title && !a.querySelector('li:not([hidden])');
+  });
+  document.querySelectorAll('.wrap details.more').forEach(d => d.open = !!q);
+  document.querySelectorAll('.wrap section.col').forEach(s => s.hidden = !!q && !s.querySelector('li:not([hidden])'));
+  document.querySelectorAll('.wrap h3.group').forEach(h => {
+    const ul = h.nextElementSibling;
+    if (ul && ul.tagName === 'UL') h.hidden = !!q && !ul.querySelector('li:not([hidden])');
+  });
+}
+qInput.addEventListener('input', search);
+qInput.addEventListener('keydown', e => { if (e.key === 'Escape' && qInput.value) { qInput.value = ''; search(); } });
+qClear.addEventListener('click', () => { qInput.value = ''; search(); qInput.focus(); });
+if (qInput.value) search();
+applyScript();
+})();
 </script>"""
 
 
@@ -1239,7 +1384,10 @@ READER = {
     "sr": {
         "dir": SR_PAGE_DIR, "html_lang": "sr-Latn", "home": "/", "news": SR_NEWS, "outlets": SR_OUTLETS,
         "title": "Teme dana", "lead": "O čemu piše najviše medija", "site": "Srbija: vesti",
-        "views": ("Mediji", "Sve vesti", "Teme"), "lang_names": ("Srpski", "Русский"), "updated": "ažurirano", "at": "u",
+        "views": ("Mediji", "Sve vesti", "Teme"), "lang_names": ("Srpski", "Русский"), "search": "Pretraga",
+        "info": {"din": "din", "city": "Beograd", "air": "vazduh", "rateHint": "Srednji kurs NBS za",
+                 "airHint": "Evropski indeks kvaliteta vazduha", "updated": "ažurirano", "outlets": SR_OUTLETS,
+                 "aqi": ["dobar", "prihvatljiv", "umeren", "loš", "veoma loš", "izuzetno loš"]}, "updated": "ažurirano", "at": "u",
         "since": "od", "all": "Sve", "page": "Stranica teme", "wrote": "Pisali su:", "silent": "nisu pisali",
         "others": "Ostali mediji:", "nth": "tema dana", "last": "poslednja", "by_time": "Po vremenu",
         "by_side": "Po stranama", "more": "Još", "prev": "Prethodna tema", "next": "Sledeća tema",
@@ -1251,7 +1399,10 @@ READER = {
     "ru": {
         "dir": ROOT / "site" / "ru" / "plot", "html_lang": "ru", "home": "/ru/", "news": NEWS, "outlets": OUTLETS,
         "title": "Темы дня", "lead": "О чём пишет больше всего изданий", "site": "Сербия: новости",
-        "views": ("Издания", "Лента", "Темы"), "lang_names": ("Srpski", "Русский"), "updated": "обновлено", "at": "в",
+        "views": ("Издания", "Лента", "Темы"), "lang_names": ("Srpski", "Русский"), "search": "Поиск",
+        "info": {"din": "дин", "city": "Белград", "air": "воздух", "rateHint": "Средний курс Народного банка Сербии на",
+                 "airHint": "Европейский индекс качества воздуха", "updated": "обновлено", "outlets": OUTLETS,
+                 "aqi": ["хороший", "приемлемый", "умеренный", "плохой", "очень плохой", "крайне плохой"]}, "updated": "обновлено", "at": "в",
         "since": "с", "all": "Все", "page": "Страница темы", "wrote": "Писали:", "silent": "не писали",
         "others": "Остальные издания:", "nth": "тема дня", "last": "последняя", "by_time": "По времени",
         "by_side": "По сторонам", "more": "Ещё", "prev": "Предыдущая тема", "next": "Следующая тема",
@@ -1328,12 +1479,21 @@ def _write_reader(state: dict, vectors: dict, archive: dict) -> None:
             langs = "".join(f'<a href="/{code}/plot/{here}"{" aria-current=\"page\"" if code == lang else ""}>'
                             f'<span class="full">{e(name)}</span><span class="short">{code.upper()}</span></a>'
                             for code, name in zip(("sr", "ru"), L["lang_names"]))
-            site = (f'<header class="site"><div class="name"><a href="{home}"><img src="/icon.svg" alt="Vestomat">'
-                    f'{e(L["site"])}</a><span class="upd"><b>Vestomat</b> · {L["updated"]} {local(now, "%H:%M")}</span></div>'
-                    f'<nav class="ctl"><span class="seg lang">{langs}</span><span class="seg view">{views}</span></nav></header>')
+            # алфавит — только по-сербски, как на главной (в русском режиме он скрыт)
+            scripts = ('<div class="seg" id="script" title="Srpski tekst: kao u originalu, latinicom ili ćirilicom">'
+                       '<button data-v="orig">Original</button><button data-v="lat">Lat</button>'
+                       '<button data-v="cyr">Ћир</button></div>' if lang == "sr" else "")
+            site = (f'<div class="topline" id="info"></div><header class="site"><div class="bar"><div class="brand">'
+                    f'<a class="name" href="{home}"><img class="logo" src="/icon.svg" width="28" height="28" alt="Vestomat">'
+                    f'{e(L["site"])}</a><span class="updated" id="updated"><b>Vestomat</b> · {L["updated"]} '
+                    f'{local(now, "%H:%M")}</span></div><div class="controls">{scripts}<div class="seg" id="lang">{langs}</div>'
+                    f'<div class="controls-row"><div class="seg" id="view">{views}</div><span class="search-box">'
+                    f'<input class="search" id="q" type="search" autocomplete="off" placeholder="{L["search"]}">'
+                    f'<button class="search-clear" id="q-clear" type="button" hidden>×</button></span></div></div></div></header>')
             return SR_HEAD.format(title=e(title), style=SR_STYLE, lang=L["html_lang"], site=site)
 
-        script = SR_SCRIPT.replace("MIN", L["min"]).replace("HOURS", L["h"])
+        script = (SR_SCRIPT.replace("MIN", L["min"]).replace("HOURS", L["h"])
+                  + HEADER_SCRIPT.replace("/*CFG*/", json.dumps({"lang": lang, **L["info"]}, ensure_ascii=False)))
         cards, pages = [], {}
         for k, sid in enumerate(shown, 1):
             story = state["stories"][sid]
