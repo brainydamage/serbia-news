@@ -1,12 +1,13 @@
-"""Ежедневная проверка сюжетов из топа — раз в сутки, в первой сборке после AUDIT_HOUR по Белграду.
+"""Проверка тем из топа — три раза в день (AUDIT_HOURS по Белграду), в первой сборке после каждого часа.
 
-Топ — stories.SHOW_TOP сюжетов с самой высокой за день горячестью среди тех, что хоть раз были на странице
-(stories.hot); их горячесть отмечает каждая сборка (note_top). Цель — 99.9% новостей в них на своём месте.
-Модель (AUDIT_MODEL) читает каждый такой сюжет целиком и отмечает новости, которым в нём не место: чужие и отдельные
-события. Отчёт — в Telegram через приёмник жалоб (path="stories", как итоги команд): доля ошибок, откуда они пришли
-(раскладка, склейка, перепроверка…), готовые команды для бота и предложения по правилам. Итоги дня — в
-state["audits"], уже отмеченные новости — в state["audited_news"]: на следующий день их не повторяем, а сюжет,
-не изменившийся с прошлой проверки, модель не читает заново (state["audit_seen"]).
+Топ — stories.SHOW_TOP тем с самой высокой за день горячестью среди тех, что хоть раз были на странице
+(stories.hot); их горячесть отмечает каждая сборка (note_top). Модель (AUDIT_MODEL) читает новости, пришедшие в тему
+с прошлой проверки (state["audit_seen"] — когда тему проверили), и отмечает те, что совсем не про её ситуацию.
+Отчёт — в Telegram через приёмник жалоб (path="stories", как итоги команд): доля ошибок, откуда они пришли
+(раскладка, склейка, перепроверка…), готовые команды для бота и предложения по правилам. Итоги проверки — в
+state["audits"][день T час]; находки — в state["audit_found"][день], с номерами подряд за день: кнопка отчёта
+(«fix:день:находка», worker) знает только день. Уже отмеченные новости — в state["audited_news"].
+До 18.11 проверка была раз в сутки и читала каждый изменившийся сюжет целиком (Opus, $0.3–0.65 за вечер).
 """
 import json
 from collections import Counter
@@ -14,22 +15,21 @@ from datetime import datetime
 
 import stories
 
-AUDIT_HOUR = 23  # по Белграду: поток новостей к этому времени уже небольшой
-AUDIT_MODEL, AUDIT_EFFORT = "claude-opus-5-5", "medium"
-AUDIT_PRICE = (4.0, 20.0)  # вход / выход за 1M токенов, $
+AUDIT_HOURS = (11, 17, 23)  # по Белграду
+AUDIT_MODEL, AUDIT_EFFORT = stories.SONNET, "medium"
+AUDIT_PRICE = stories.PRICES[stories.SONNET]  # вход / выход за 1M токенов, $
+AUDIT_KNOWN = 5  # сколько уже проверенных новостей темы модель видит для понимания, о чём она
 AUDIT_BATCH = 200  # новостей в одном запросе: большой сюжет — один, мелкие — пачкой
-AUDIT_DAYS = 14  # сколько дней итогов хранить — для сравнения со вчера
+AUDIT_DAYS = 14  # сколько дней итогов хранить — для сравнения с прошлой проверкой
 MESSAGE = 1000  # приёмник жалоб режет сообщение до 1000 знаков
 MESSAGES = 20  # и берёт не больше 20 за раз: отчёт длиннее уходит несколькими порциями
-REPORT_MAX = 60  # больше сообщений за вечер не шлём
+REPORT_MAX = 40  # больше сообщений за одну проверку не шлём
 
-AUDIT_PROMPT = f"""Ты проверяешь сюжеты агрегатора новостей о Сербии перед показом читателям. {stories.RULES}
+AUDIT_PROMPT = f"""Ты проверяешь темы агрегатора новостей о Сербии перед показом читателям. {stories.RULES}
 
-Вход — JSON: stories — сюжеты, id вида S…: name — кодовое имя, event — событие, ради которого сюжет заведён (если определено; основная история сюжета — оно), news — новости по времени: n — номер, t — время UTC, source — издание, what — что произошло.
-Для каждого сюжета верни findings — новости, которым в нём не место:
-- kind foreign — новость не про историю сюжета: другой повод или другое дело, общие только участник, ведомство или тема;
-- kind event — отдельное событие внутри сюжета: у него свой повод и о нём пишут как о самостоятельном. Подробности, реакции и последствия основной истории — не отдельное событие.
-У находки: news — номера n её новостей (новости одного отдельного события — в одной находке), why — одной фразой, почему им здесь не место, sure — true, если уверен; false — если стоит посмотреть редактору. Основная история сюжета в находки не входит. Всё на месте — пустой findings."""
+Вход — JSON: stories — темы, id вида S…: name — название темы, event — её ситуация (если определена), known — несколько её новостей, проверенных раньше (чтобы понять, о чём тема); news — новые новости темы, их и проверяешь: n — номер, t — время UTC, source — издание, what — что произошло.
+Для каждой темы верни findings — новые новости, которым в ней не место: они про другую ситуацию, а общие с темой только участник, ведомство, город или область. Эпизоды, развитие, последствия, реакции и споры той же ситуации — на месте, даже если это отдельное событие.
+У находки: kind — foreign; news — номера n (новости про одну и ту же чужую ситуацию — в одной находке); why — одной фразой, почему им здесь не место; sure — true, если уверен, false — если стоит посмотреть редактору. Всё на месте — пустой findings."""
 
 AUDIT_SCHEMA = {
     "type": "object",
@@ -44,7 +44,7 @@ AUDIT_SCHEMA = {
                         "type": "array",
                         "items": {
                             "type": "object",
-                            "properties": {"kind": {"type": "string", "enum": ["foreign", "event"]},
+                            "properties": {"kind": {"type": "string", "enum": ["foreign"]},
                                            "news": {"type": "array", "items": {"type": "integer"}},
                                            "why": {"type": "string"}, "sure": {"type": "boolean"}},
                             "required": ["kind", "news", "why", "sure"],
@@ -61,9 +61,9 @@ AUDIT_SCHEMA = {
     "additionalProperties": False,
 }
 
-ADVICE_PROMPT = f"""Ты настраиваешь раскладку новостей по сюжетам в агрегаторе новостей о Сербии. Правила сюжета сейчас: {stories.RULES}
-Как новость попадает в сюжет: у видимого сюжета (от двух изданий) — карточка события, одна фраза, её пишет Haiku один раз; раскладка (Haiku решает по новости и похожим сюжетам с их карточками: join — в сюжет, new — новый сюжет; новость, почти дословно повторяющая уже разложенную, идёт за ней без модели; join с низким сходством и в сюжет с карточкой перепроверяет Haiku, в сюжет страницы (30 самых горячих) со сходством ниже {stories.RECHECK_SONNET_MAX} — Sonnet: называет повод новости и выбирает, как он связан с событием сюжета — то же событие, развитие, последствие, реакция (остаётся) или новый случай того же рода, общая тема, другое (уходит в свой сюжет)), склейка дублей раз в два часа — только пары, где хоть один сюжет на странице (Haiku сначала отсеивает пары, которые считает несвязанными; оставшиеся решает Sonnet: по паре сюжетов сравнивает их поводы — карточку, а у сюжета без неё называет повод сам — и выбирает тот же тип связи; одиночка — сюжет из одной новости — тоже идёт в склейку), выделение отдельных событий из больших сюжетов, ручные команды.
-Вход — JSON: errors — ошибки, найденные проверкой за день: what — новость, story — сюжет, в который она попала, why — почему ей там не место, path — как она туда попала.
+ADVICE_PROMPT = f"""Ты настраиваешь раскладку новостей по темам в агрегаторе новостей о Сербии. Правила темы сейчас: {stories.RULES}
+Как новость попадает в тему: у видимой темы (от двух изданий) — карточка, ситуация одной фразой, её пишет Haiku и обновляет вместе с названием темы; раскладка (Haiku решает по новости и похожим темам с их карточками: join — в тему, new — новая тема; новость, почти дословно повторяющая уже разложенную, идёт за ней без модели; join с низким сходством или в тему страницы (30 самых горячих) перепроверяет Haiku: называет повод новости и выбирает, как он связан с ситуацией темы — та же ситуация, развитие или эпизод, последствие, реакция (остаётся) или новый случай того же рода, общий участник, другое (уходит в свою тему)), склейка дублей раз в два часа — только пары, где хоть одна тема на странице (Haiku сравнивает ситуации пары и выбирает тот же тип связи), ручные команды.
+Вход — JSON: errors — ошибки, найденные проверкой: what — новость, story — тема, в которую она попала, why — почему ей там не место, path — как она туда попала.
 Верни advice — до трёх предложений: pattern — что повторяется в ошибках, change — что поменять и на каком шаге (правило, промпт раскладки или склейки, порог, перепроверка). Единичную ошибку без закономерности не обобщай. Закономерностей нет — пустой advice."""
 
 ADVICE_SCHEMA = {
@@ -100,12 +100,21 @@ def note_top(state: dict, day: str, heats: dict[str, float]) -> None:
 
 
 def due(state: dict, now: str, tz) -> str:
-    """День (по Белграду), за который пора проверять, или пустая строка."""
+    """Проверка, которую пора делать, — «день T час» (по Белграду: последний из AUDIT_HOURS, который уже наступил),
+    или пустая строка: эту уже сделали, она у модели пакетом или в топе за день ещё никого нет."""
     local = datetime.fromisoformat(now).astimezone(tz)
     day = local.date().isoformat()
-    sent = state.get("batches", {}).get("audit", {}).get("day") == day  # уже у модели пакетом
-    return day if (local.hour >= AUDIT_HOUR and day not in state.get("audits", {}) and state.get("top", {}).get(day)
-                   and not sent) else ""
+    hours = [h for h in AUDIT_HOURS if local.hour >= h]
+    if not hours:
+        return ""
+    slot = f"{day}T{hours[-1]:02d}"
+    sent = state.get("batches", {}).get("audit", {}).get("day") == slot  # уже у модели пакетом
+    return slot if slot not in state.get("audits", {}) and state.get("top", {}).get(day) and not sent else ""
+
+
+def arrived(it: dict, sid: str) -> str:
+    """Когда новость попала в тему sid (раскладка, склейка, команда) — последний такой шаг её истории."""
+    return max((h["t"] for h in it.get("history", []) if h["story"] == sid), default=it["seen"])
 
 
 def _path(it: dict) -> tuple[str, str]:
@@ -121,18 +130,19 @@ def _path(it: dict) -> tuple[str, str]:
     return PATHS.get(why, why), PATHS.get(why, why) + f": {why}"
 
 
-def todo(state: dict, day: str) -> tuple[list[str], list[list[str]]]:
-    """Что проверять за день: (сюжеты топа, пачки сюжетов для модели). Модель читает только сюжеты, изменившиеся
-    с прошлой проверки (state["audit_seen"] — сколько в сюжете было новостей, когда его проверили): в неизменном
-    находки уже были в прошлом отчёте. Пачка — до AUDIT_BATCH новостей, большой сюжет — один."""
+def todo(state: dict, slot: str) -> tuple[list[str], list[list[str]]]:
+    """Что проверять: (темы топа за день, пачки тем для модели). Модель читает только новости, пришедшие в тему
+    с прошлой проверки (audit_seen — когда её проверили); тему без новых новостей — нет. Пачка — до AUDIT_BATCH
+    новых новостей, большая тема — одна."""
     seen = state.get("audit_seen", {})
-    peaks = state["top"][day]
+    peaks = state["top"][slot[:10]]
     peaks = dict.fromkeys(peaks, 0.0) if isinstance(peaks, list) else peaks
     sids = sorted((sid for sid in peaks if sid in state["stories"]), key=peaks.get, reverse=True)[:stories.SHOW_TOP]
+    fresh = {sid: len(new_news(state, sid, seen.get(sid, ""))) for sid in sids}
     chunks, size = [], 0
-    for sid in sorted(sids, key=lambda s: len(state["stories"][s]["urls"])):
-        n = len(state["stories"][sid]["urls"])
-        if seen.get(sid) == n:
+    for sid in sorted(sids, key=fresh.get):
+        n = fresh[sid]
+        if not n:
             continue
         if not chunks or size + n > AUDIT_BATCH:
             chunks.append([])
@@ -142,23 +152,39 @@ def todo(state: dict, day: str) -> tuple[list[str], list[list[str]]]:
     return sids, chunks
 
 
+def new_news(state: dict, sid: str, since: str) -> list[str]:
+    """Новости темы, пришедшие в неё после since (ISO; пустая строка — все)."""
+    # до 18.11 в audit_seen было число новостей, а не время: такую тему проверяем целиком
+    since = since if isinstance(since, str) else ""
+    return [u for u in state["stories"][sid]["urls"] if arrived(state["items"][u], sid) > since]
+
+
 def request(state: dict, chunk: list[str]) -> str:
-    """Запрос проверки пачки сюжетов. Системный промпт — AUDIT_PROMPT."""
-    items = state["items"]
-    return json.dumps({"stories": [
-        {"id": f"S{k}", "name": state.get("names", {}).get(sid, "")}
-        | ({"event": state["cards"][sid]} if sid in state.get("cards", {}) else {})
-        | {"news": [{"n": items[u]["n"], "t": items[u]["seen"][5:16], "source": items[u]["source"],
-                   "what": items[u].get("what") or items[u]["title"]} for u in state["stories"][sid]["urls"]]}
-        for k, sid in enumerate(chunk)]}, ensure_ascii=False)
+    """Запрос проверки пачки тем: новые новости каждой и несколько уже проверенных. Системный промпт — AUDIT_PROMPT."""
+    items, seen = state["items"], state.get("audit_seen", {})
+
+    def row(u: str) -> dict:
+        return {"n": items[u]["n"], "t": items[u]["seen"][5:16], "source": items[u]["source"],
+                "what": items[u].get("what") or items[u]["title"]}
+
+    out = []
+    for k, sid in enumerate(chunk):
+        new = new_news(state, sid, seen.get(sid, ""))
+        known = [u for u in state["stories"][sid]["urls"] if u not in set(new)][-AUDIT_KNOWN:]
+        out.append({"id": f"S{k}", "name": state.get("names", {}).get(sid, "")}
+                   | ({"event": state["cards"][sid]} if sid in state.get("cards", {}) else {})
+                   | {"known": [items[u].get("what") or items[u]["title"] for u in known],
+                      "news": [row(u) for u in new]})
+    return json.dumps({"stories": out}, ensure_ascii=False)
 
 
-def finish(state: dict, day: str, sids: list[str], chunks: list[list[str]], sizes: dict[str, int],
+def finish(state: dict, slot: str, sids: list[str], chunks: list[list[str]], sizes: dict[str, dict],
            answers: dict[int, dict], usd: float, ask) -> dict:
-    """Итоги дня по ответам модели на пачки (answers — номер пачки → ответ; ответ мог прийти в другой сборке):
+    """Итоги проверки по ответам модели на пачки (answers — номер пачки → ответ; ответ мог прийти в другой сборке):
     находки, советы по правилам (сразу, ask(system, content, schema, effort, model, price)), итоги — в
-    state["audits"][day]. sizes — сколько новостей было в сюжете, когда его отдали модели; usd — во что обошлись
-    пачки."""
+    state["audits"][slot]. sizes — тема → {"t": когда её отдали модели, "n": сколько новых новостей она видела};
+    usd — во что обошлись пачки."""
+    day = slot[:10]
     items, by_n = state["items"], {it["n"]: u for u, it in state["items"].items() if it.get("story")}
     reported = set(state.get("audited_news", []))
     sids = [sid for sid in sids if sid in state["stories"]]
@@ -174,10 +200,10 @@ def finish(state: dict, day: str, sids: list[str], chunks: list[list[str]], size
                 news = sorted({n for n in f["news"] if n in by_n and items[by_n[n]]["story"] == sid})
                 if news and set(news) - reported:
                     found.append({"story": sid, "kind": f["kind"], "news": news, "why": f["why"].strip(), "sure": f["sure"]})
-        for sid in chunk:  # проверен; сюжеты пачки без ответа проверим в следующий раз
-            state.setdefault("audit_seen", {})[sid] = sizes[sid]
+        for sid in chunk:  # проверена; темы пачки без ответа проверим в следующий раз
+            state.setdefault("audit_seen", {})[sid] = sizes[sid]["t"]
 
-    news_total = sum(len(state["stories"][sid]["urls"]) for sid in sids)
+    news_total = sum(sizes[sid]["n"] for k in answers for sid in chunks[k])
     flagged = {n for f in found for n in f["news"]}
     paths = Counter(_path(items[by_n[n]])[0] for n in flagged)
     advice = []
@@ -188,28 +214,34 @@ def finish(state: dict, day: str, sids: list[str], chunks: list[list[str]], size
                             AUDIT_EFFORT, AUDIT_MODEL, AUDIT_PRICE)
         usd += usage["usd"]
         advice = answer["advice"]
-    for k, f in enumerate(found, 1):
+    before = state.get("audit_found", {}).get(day, [])
+    for k, f in enumerate(found, len(before) + 1):  # номера подряд за день: кнопка знает только день
         f["id"] = k
-    state["audit_found"] = {d: v for d, v in sorted({**state.get("audit_found", {}), day: found}.items())[-AUDIT_DAYS:]}
+    state["audit_found"] = {d: v for d, v in sorted({**state.get("audit_found", {}), day: before + found}.items())[-AUDIT_DAYS:]}
     state["audited_news"] = sorted(reported | flagged)
     state["audit_seen"] = {sid: n for sid, n in state.get("audit_seen", {}).items() if sid in state["stories"]}
-    state.setdefault("audits", {})[day] = {"stories": len(sids), "news": news_total,
+    state.setdefault("audits", {})[slot] = {"stories": len(sids), "news": news_total,
                                            "checked": sum(len(chunks[k]) for k in answers), "flagged": len(flagged),
                                            "sure": len({n for f in found if f["sure"] for n in f["news"]}),
                                            "paths": dict(paths), "usd": round(usd, 4)}
-    state["audits"] = dict(sorted(state["audits"].items())[-AUDIT_DAYS:])
+    state["audits"] = dict(sorted(state["audits"].items())[-AUDIT_DAYS * len(AUDIT_HOURS):])
     return {"found": found, "advice": advice}
 
 
-def run(state: dict, day: str, ask) -> dict:
-    """Проверка дня сразу: пачки (todo) — к модели одна за другой, итоги — finish."""
-    sids, chunks = todo(state, day)
+def run(state: dict, slot: str, ask, now: str) -> dict:
+    """Проверка сразу: пачки (todo) — к модели одна за другой, итоги — finish."""
+    sids, chunks = todo(state, slot)
     answers, usd = {}, 0.0
     for k, chunk in enumerate(chunks):
         answers[k], usage = ask(AUDIT_PROMPT, request(state, chunk), AUDIT_SCHEMA, AUDIT_EFFORT, AUDIT_MODEL, AUDIT_PRICE)
         usd += usage["usd"]
-    return finish(state, day, sids, chunks, {sid: len(state["stories"][sid]["urls"]) for c in chunks for sid in c},
-                  answers, usd, ask)
+    return finish(state, slot, sids, chunks, sizes(state, chunks, now), answers, usd, ask)
+
+
+def sizes(state: dict, chunks: list[list[str]], now: str) -> dict[str, dict]:
+    """Что увидит модель: тема → {"t": now, "n": сколько новых новостей}."""
+    seen = state.get("audit_seen", {})
+    return {sid: {"t": now, "n": len(new_news(state, sid, seen.get(sid, "")))} for c in chunks for sid in c}
 
 
 def _remedy(state: dict, finding: dict) -> tuple[str, str]:
@@ -270,31 +302,29 @@ def apply_fix(state: dict, day: str, which, now: str) -> str:
     return (f"находки {day[8:10]}.{day[5:7]}: " if which == "sure" else "") + "; ".join(done)
 
 
-def report(state: dict, day: str, result: dict) -> list[dict]:
+def report(state: dict, slot: str, result: dict) -> list[dict]:
     """Сообщения в Telegram ({"text", "buttons"}): итоги с подсказкой, как читать, и кнопкой «убрать все уверенные»;
     по сообщению на сюжет — пронумерованные находки, под сообщением — кнопка на каждую; советы по правилам.
     Режем между находками, а не посреди. Кнопка шлёт боту fix:<день>:<номер находки или sure>."""
-    a = state["audits"][day]
+    a, day = state["audits"][slot], slot[:10]
     names = state.get("names", {})
     by_n = {it["n"]: it for it in state["items"].values() if it.get("story")}
     share = a["flagged"] / max(a["news"], 1) * 100
-    before = [v for d, v in sorted(state["audits"].items()) if d < day]
+    before = [v for d, v in sorted(state["audits"].items()) if d < slot]
     paths = sorted(a["paths"].items(), key=lambda kv: -kv[1])
     by_story = {}
     for f in result["found"]:  # сюжет и новости могли забыться между проверкой и отчётом
         if f["story"] in state["stories"] and all(n in by_n for n in f["news"]):
             by_story.setdefault(f["story"], []).append(f)
     sure = [f for found in by_story.values() for f in found if f["sure"]]
-    head = [f"Проверка сюжетов за {day[8:10]}.{day[5:7]}",
+    head = [f"Проверка тем {day[8:10]}.{day[5:7]}, {slot[11:13]}:00",
             "",
-            f"В топе за день было {a['stories']} сюжетов, в них {a['news']} новостей. Лишних нашлось {a['flagged']} "
-            f"({share:.1f}%), цель — не больше 0.1%."
-            + (f" Заново прочитаны только изменившиеся с прошлой проверки ({a['checked']}), в остальных находки были в прошлых отчётах."
-               if a.get("checked", a["stories"]) < a["stories"] else "")
+            f"В топе за день {a['stories']} тем; в {a['checked']} из них с прошлой проверки пришло {a['news']} новостей. "
+            f"Чужих нашлось {a['flagged']} ({share:.1f}%)."
             + (f" В прошлый раз было {before[-1]['flagged'] / max(before[-1]['news'], 1) * 100:.1f}%." if before else ""),
             *([f"Откуда лишние: {', '.join(f'{k} — {v}' for k, v in paths)}."] if paths else []),
             "",
-            "Как читать: дальше по сообщению на сюжет. У каждой находки — что не так, номера новостей (как на /plot/) "
+            "Как читать: дальше по сообщению на тему. У каждой находки — что не так, номера новостей (как на /plot/) "
             "и что сделает её кнопка под сообщением. «Уверенно» — проверяющий не сомневается, «посмотри» — реши сам; так подписаны "
             "и кнопки. "
             + (f"Кнопка ниже убирает все {len(sure)} уверенных разом — тогда их отдельные кнопки пропадут. " if sure else "")
@@ -307,7 +337,7 @@ def report(state: dict, day: str, result: dict) -> list[dict]:
         title = f"{sid} «{names.get(sid, '')}» ({len(state['stories'][sid]['urls'])} новостей)"
         blocks = []
         for k, f in enumerate(sorted(found, key=lambda f: not f["sure"]), 1):
-            kind = "Чужая" if f["kind"] == "foreign" else "Отдельное событие"
+            kind = "Чужая" if f["kind"] == "foreign" else "Отдельное событие"  # «событие» — до 18.11
             how = Counter(_path(by_n[n])[0] for n in f["news"])
             came = ", ".join(f"{p} ({c})" if len(how) > 1 else p for p, c in how.most_common())
             news = ", ".join(f"№{n}" for n in f["news"])
@@ -332,7 +362,7 @@ def report(state: dict, day: str, result: dict) -> list[dict]:
                                                  f"Что повторяется: {tip['pattern']}\n\nЧто поменять: {tip['change']}")]
     if len(messages) > REPORT_MAX:
         cut = len(messages) - REPORT_MAX + 1
-        messages = messages[:REPORT_MAX - 1] + [{"text": f"…и ещё {cut} сообщений: больше {REPORT_MAX} за вечер не шлём."}]
+        messages = messages[:REPORT_MAX - 1] + [{"text": f"…и ещё {cut} сообщений: больше {REPORT_MAX} за проверку не шлём."}]
     return messages
 
 

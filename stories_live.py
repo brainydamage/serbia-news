@@ -84,11 +84,13 @@ BATCH_KINDS = {"merge": "склейка", "lines": "деление", "audit": "�
 BATCH_GIVE_UP = timedelta(days=2)  # пакет, который столько не удаётся проверить, забываем: модель держит его сутки
 PROGRESS_FROM = 200  # с стольких новостей за сборку (раскладка заново) — прогресс в лог
 LOCAL_TZ = ZoneInfo("Europe/Belgrade")
-# кодовые имена видимых сюжетов — чтобы узнавать сюжет по ссылке, а не по номеру. Имя даётся один раз и не меняется:
-# его ценность в том, что оно постоянно. На раскладку не влияет, поэтому и не в отпечатке правил
-NAME_PROMPT = """Ты даёшь сюжетам агрегатора новостей о Сербии кодовые имена — чтобы редактор узнавал сюжет по ссылке.
-Вход — JSON: stories — сюжеты, id вида S…, у каждого несколько новостей (что произошло).
-Для каждого сюжета верни name — не больше трёх слов по-русски: главный участник и предмет, по которым сюжет легко узнать и отличить от соседних. Имя — для сюжета целиком, его общего события, а не подробности одной из новостей. Без кавычек и точки в конце."""
+# название темы — её заголовок на страницах (headline_of). До 18.11 это было кодовое имя сюжета для редактора, данное
+# один раз; у темы ситуация меняется (выборы → учредительное заседание → выбор председателя), и название — по свежим
+# новостям, заново раз в NAME_EVERY, если в теме прибавилось NAME_NEW новостей. Карточка темы (stories.cards) при
+# новом названии пишется заново. На раскладку не влияет, поэтому и не в отпечатке правил
+NAME_PROMPT = """Ты называешь темы агрегатора новостей о Сербии. Название — заголовок темы для читателя.
+Вход — JSON: stories — темы, id вида S…: name — прежнее название, если было; news — свежие и самые типичные новости темы (что произошло).
+Для каждой темы верни name — по-русски, от двух до семи слов: о чём тема сейчас, по свежим новостям. Как рубрика: именительный падеж, без глагола в личной форме («Учредительное заседание Скупщины Сербии», «Крах «Алта банка»», «Травмы детей на эскалаторе в ТЦ «Галерия»»). Ситуация целиком, а не один её эпизод и не одно заявление. Если прежнее название ещё верно — верни его как есть. Без оценок, без кавычек вокруг и без точки в конце."""
 NAME_SCHEMA = {
     "type": "object",
     "properties": {
@@ -106,8 +108,11 @@ NAME_SCHEMA = {
     "additionalProperties": False,
 }
 NAME_BATCH = 30
-NAME_GROW = 3  # имя — заново, когда сюжет вырос во столько раз с тех пор, как его назвали
-NAME_SHOWN = 6  # сколько новостей сюжета видит модель: первая и самые типичные
+NAME_EVERY = timedelta(hours=4)
+NAME_NEW = 5
+NAME_RECENT = timedelta(hours=24)  # свежие новости темы — за столько до её последней
+NAME_SHOWN = 8  # сколько новостей темы видит модель: самые типичные из свежих
+NAME_MAX = 80
 
 
 def load_state() -> tuple[dict, dict]:
@@ -171,6 +176,7 @@ def forget_old(state: dict, vectors: dict, now: str) -> None:
     state["names"] = {sid: name + "»" * (name.count("«") - name.count("»"))
                       for sid, name in state.get("names", {}).items() if sid in state["stories"]}
     state["named_at"] = {sid: n for sid, n in state.get("named_at", {}).items() if sid in state["stories"]}
+    state["named_t"] = {sid: t for sid, t in state.get("named_t", {}).items() if sid in state["stories"]}
     state.pop("names_whole", None)  # прежняя разовая чистка обрезанных имён; теперь имена обновляются, когда сюжет вырос
     state["lines"] = {sid: v for sid, v in state.get("lines", {}).items() if sid in state["stories"]}
     state["spun"] = {sid: p for sid, p in state.get("spun", {}).items() if sid in state["stories"]}
@@ -430,27 +436,47 @@ def name_spun(state: dict, spun: list[tuple[str, str]]) -> None:
         state["named_at"][state["spun"][sid]] = 0
 
 
-def name_stories(state: dict, vectors: dict, ask) -> int:
-    """Кодовые имена видимым сюжетам (Haiku, пачками): тем, у кого имени ещё нет, и тем, кто с тех пор вырос в
-    NAME_GROW раз — имя по первым новостям бывает про одну из них (12.11 матч Сербия — Германия назвался по прогнозу
-    одного букмекера). Возвращает, скольким дали имя."""
+def name_stories(state: dict, vectors: dict, ask, now: str) -> int:
+    """Названия видимым темам (Haiku, пачками): тем, у кого названия ещё нет, и тем, в которых с прошлого названия
+    прошло NAME_EVERY и прибавилось NAME_NEW новостей. Новое название — новая карточка (её напишет stories.cards в
+    следующей сборке). Возвращает, скольких спросили."""
     names = state.setdefault("names", {})
-    named_at = state.setdefault("named_at", {})  # сюжет → сколько в нём было новостей, когда его назвали
+    named_at = state.setdefault("named_at", {})  # тема → сколько в ней было новостей, когда её назвали
+    named_t = state.setdefault("named_t", {})  # тема → когда её назвали
+    due = (datetime.fromisoformat(now) - NAME_EVERY).isoformat()
     todo = [sid for sid, story in state["stories"].items() if stories.visible(state, sid)
-            and (sid not in names or len(story["urls"]) >= NAME_GROW * named_at.get(sid, 2))]
+            and (sid not in names or named_t.get(sid, "") <= due and len(story["urls"]) >= named_at.get(sid, 0) + NAME_NEW)]
     for start in range(0, len(todo), NAME_BATCH):
         chunk = todo[start:start + NAME_BATCH]
-        content = json.dumps({"stories": [{"id": f"S{n}", "news": stories._shown(state, sid, vectors, NAME_SHOWN)}
-                                          for n, sid in enumerate(chunk)]}, ensure_ascii=False)
+        content = json.dumps({"stories": [{"id": f"S{n}"} | ({"name": names[sid]} if sid in names else {})
+                                          | {"news": recent_news(state, vectors, sid)} for n, sid in enumerate(chunk)]},
+                             ensure_ascii=False)
         answer, _ = ask(NAME_PROMPT, content, NAME_SCHEMA)
         for named in answer["names"]:
             n = named["id"][1:]
             if n.isdigit() and int(n) < len(chunk) and named["name"].strip():
                 name, sid = stories.clean_name(named["name"]), chunk[int(n)]
-                # длинное — по словам, не посреди слова
-                names[sid] = name if len(name) <= 50 else name[:50].rsplit(" ", 1)[0]
+                name = name if len(name) <= NAME_MAX else name[:NAME_MAX].rsplit(" ", 1)[0]  # по словам
+                if sid in names and names[sid] != name:
+                    state.get("cards", {}).pop(sid, None)  # ситуация сменилась — и карточка заново
+                names[sid] = name
                 named_at[sid] = len(state["stories"][sid]["urls"])
+                named_t[sid] = now
     return len(todo)
+
+
+def recent_news(state: dict, vectors: dict, sid: str) -> list[str]:
+    """Что модель видит о теме, когда называет её: NAME_SHOWN самых типичных из свежих (NAME_RECENT до последней)
+    новостей, по времени."""
+    urls = state["stories"][sid]["urls"]
+    last = datetime.fromisoformat(state["items"][urls[-1]]["seen"])
+    recent = [u for u in urls if u in vectors and last - datetime.fromisoformat(state["items"][u]["seen"]) <= NAME_RECENT] \
+        or urls[-NAME_SHOWN:]
+    if len(recent) > NAME_SHOWN:
+        v = np.stack([vectors[u] for u in recent]).astype(np.float32)
+        keep = set(np.argsort(-(v @ v.T).mean(axis=1))[:NAME_SHOWN])
+        recent = [u for k, u in enumerate(recent) if k in keep]
+    return list(dict.fromkeys(stories.text_of(state["items"][u]) for u in recent))
 
 
 def fingerprint() -> str:
@@ -533,7 +559,7 @@ def run(archive: dict, sections: dict) -> None:
         print(f"Сюжеты: разложено всё за {(time.monotonic() - started) / 60:.0f} мин; "
               "имена и поиск отдельных событий в больших сюжетах…", file=sys.stderr)
     recheck_later(client, state, now, ask)
-    name_stories(state, vectors, ask)
+    name_stories(state, vectors, ask, now)
     # сюжеты, которые сейчас в топе, — для вечерней проверки и деления: на отдельные события проверяем только топ
     # (сюжеты за день, хоть раз бывшие в нём), остальные читатель почти не открывает
     cutoff = (datetime.fromisoformat(now) - PAGE_WINDOW).isoformat()
@@ -544,7 +570,7 @@ def run(archive: dict, sections: dict) -> None:
         lines = stories.find_lines(state, now, ask, top)
         name_spun(state, lines["spun"])
         checked, found = checked + lines["checked"], found + lines["found"]
-    elif "lines" not in state.get("batches", {}):
+    elif stories.LINES_ON and "lines" not in state.get("batches", {}):
         sids = stories.lines_todo(state, top)
         calls = [(stories.LINES_PROMPT, stories.lines_request(state, sid), stories.LINES_SCHEMA, stories.LINES_EFFORT,
                   stories.MERGE_MODEL, None) for sid in sids]
@@ -552,7 +578,7 @@ def run(archive: dict, sections: dict) -> None:
         if got := send(client, state, "lines", calls, sent, now, ask):
             c, f = apply_lines(state, now, sent, got[0])
             checked, found = checked + c, found + f
-    # проверка дня — раз в сутки после AUDIT_HOUR, пакетом; отчёт — в сборке, в которую придут ответы.
+    # проверка топа — три раза в день (stories_audit.AUDIT_HOURS), пакетом; отчёт — в сборке, в которую придут ответы.
     # Ошибка проверки не роняет сборку: не пришли ответы — отправим заново в следующей
     audit, audit_day = None, ""
     if "audit" in arrived or stories_audit.due(state, now, LOCAL_TZ):
@@ -567,7 +593,7 @@ def run(archive: dict, sections: dict) -> None:
                 sids, chunks = stories_audit.todo(state, audit_day)
                 calls = [(stories_audit.AUDIT_PROMPT, stories_audit.request(state, chunk), stories_audit.AUDIT_SCHEMA,
                           stories_audit.AUDIT_EFFORT, stories_audit.AUDIT_MODEL, stories_audit.AUDIT_PRICE) for chunk in chunks]
-                sizes = {sid: len(state["stories"][sid]["urls"]) for chunk in chunks for sid in chunk}
+                sizes = stories_audit.sizes(state, chunks, now)
                 sent = {"day": audit_day, "sids": sids, "chunks": chunks, "sizes": sizes}
                 if got := send(client, state, "audit", calls, sent, now, ask):
                     audit = stories_audit.finish(state, audit_day, sids, chunks, sizes, *got, ask)
@@ -668,8 +694,11 @@ def headline_url(state: dict, vectors: dict, urls: list[str]) -> str:
 
 
 def headline_of(state: dict, vectors: dict, urls: list[str]) -> str:
-    """Пока у сюжетов нет своих названий — «что произошло» (what, ровный пересказ без кликбейта из перевода)
-    новости headline_url. Без what — её заголовок."""
+    """Заголовок темы — её название (name_stories). Пока названия нет — «что произошло» (what, ровный пересказ без
+    кликбейта из перевода) новости headline_url, без what — её заголовок. urls — не вся тема (часть на /plot/) — тоже."""
+    sid = state["items"][urls[0]]["story"]
+    if len(urls) == len(state["stories"][sid]["urls"]) and (name := state.get("names", {}).get(sid)):
+        return name
     it = state["items"][headline_url(state, vectors, urls)]
     return it.get("what") or it["title"]
 
@@ -1011,7 +1040,7 @@ td{padding:2px 14px 2px 0}.what{color:#777;font-size:13px}
 Сюжет о событии за рубежом без прямой связи с Сербией (так решает карточка) горяч в {1 / stories.FOREIGN_HEAT:.0f} раза меньше.
 Цифра у новости — сходство с самой похожей другой новостью сюжета (у одиночных — с новостью видимого сюжета).
 Модель видит новость с сюжетом, только если сходство не ниже {stories.CANDIDATE_SIM}; <span class="sim mid">жёлтые</span> — ниже
-{stories.RECHECK_SIM}, такое добавление (и любое в сюжет с карточкой) перепроверяет Haiku, в сюжет этой страницы со сходством ниже {stories.RECHECK_SONNET_MAX} — Sonnet (пакетом: снятая новость уходит через сборку); копии (сходство от {stories.COPY_SIM}) идут за оригиналом без модели; <span class="sim low">красные</span> — ниже {stories.CANDIDATE_SIM}.
+{stories.RECHECK_SIM}, такое добавление (и любое в тему этой страницы) перепроверяет Haiku (пакетом: снятая новость уходит через сборку); копии (сходство от {stories.COPY_SIM}) идут за оригиналом без модели; <span class="sim low">красные</span> — ниже {stories.CANDIDATE_SIM}.
 Серым под заголовком — «что произошло» (what): по нему считается сходство.</p>
 <p><button onclick="{toggle % 'true'}">Раскрыть все</button> <button onclick="{toggle % 'false'}">Свернуть все</button>
 <span class="meta">· клавиши j / k — следующий / предыдущий сюжет</span></p>
