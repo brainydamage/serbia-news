@@ -1139,7 +1139,7 @@ h1{margin:14px 0 4px;font-size:32px;font-weight:900;color:var(--strong);line-hei
 .cov>span{display:inline-flex;align-items:center;gap:5px;margin-right:14px;white-space:nowrap}
 .cov .what{font-weight:700}
 .cov .none{opacity:.55}
-.cov .rest{display:block}
+.cov .rest{display:block;white-space:normal}
 .dot{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block}
 .items{list-style:none;margin:0;padding:0}
 .row{display:flex;gap:10px;margin-bottom:9px}
@@ -1160,6 +1160,13 @@ h1{margin:14px 0 4px;font-size:32px;font-weight:900;color:var(--strong);line-hei
 .more summary:hover{color:var(--strong)}
 .nav{display:flex;justify-content:space-between;gap:16px;margin-top:28px;font-size:14px;font-weight:700;color:var(--muted)}
 .nav a{text-decoration:none}.nav a:hover{color:var(--strong)}
+/* компьютер: на главной сюжет в две колонки — слева заголовок и стороны, справа новости; на странице сюжета
+   «Po stranama» — стороны рядом колонками, «Po vremenu» — узкой колонкой для чтения */
+@media (min-width:1100px){.wrap{max-width:1240px;padding:28px 40px 48px}h1{font-size:38px;max-width:1000px}
+.lead{font-size:15px}.story{display:grid;grid-template-columns:5fr 7fr;gap:48px;padding:30px 0 18px}
+.story h2{font-size:24px}.rhs{margin-left:0;padding-top:4px}
+.cols:not([hidden]){display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:8px 44px;align-items:start}
+.narrow{max-width:880px}}
 @media (max-width:600px){.wrap{padding:14px 16px 32px}h1{font-size:26px}.story h2{font-size:19px;gap:8px}.indent{margin-left:0}.head{font-size:15px}}
 """.replace("COLORS", "".join(f"--c-{c}:{v};" for c, v in SR_COLORS.items()))
 SR_HEAD = """<!doctype html><html lang="sr-Latn"><head><meta charset="utf-8">
@@ -1260,9 +1267,9 @@ def _write_sr_page(state: dict, vectors: dict, archive: dict) -> None:
                 else f'<a class="all" href="{sid}/">Stranica teme →</a>')
         preview = news[:SR_FIRST]  # на главной — просто самые свежие
         cards.append(
-            f'<article class="story" id="{sid}"><h2><span class="rank">{k}</span><a href="{sid}/">{e(title)}</a></h2>'
-            f'<div class="indent"><p class="meta">{meta}</p>{balance}'
-            f'<ul class="items">{"".join(row(u) for u in preview)}</ul>{more}</div></article>')
+            f'<article class="story" id="{sid}"><div class="lhs"><h2><span class="rank">{k}</span><a href="{sid}/">'
+            f'{e(title)}</a></h2><div class="indent"><p class="meta">{meta}</p>{balance}</div></div>'
+            f'<div class="rhs indent"><ul class="items">{"".join(row(u) for u in preview)}</ul>{more}</div></article>')
 
         # страница сюжета: по времени (по дням) — первой вкладкой; по сторонам — в порядке camp_order, свежие сверху
         def camp_block(c: str, n: int) -> str:  # SR_CAMP_FIRST свежих, остальные стороны — раскрываются на месте
@@ -1270,9 +1277,9 @@ def _write_sr_page(state: dict, vectors: dict, archive: dict) -> None:
             rest = mine[SR_CAMP_FIRST:]
             more = (f'<details class="more"><summary>Još {count(len(rest), *SR_NEWS)}</summary>'
                     f'<ul class="items">{"".join(row(u) for u in rest)}</ul></details>' if rest else "")
-            return (f'<h3 class="group">{dot(c)}{e(camp_names.get(c, c))} <span class="n">{count(n, *SR_OUTLETS)} · '
+            return (f'<section class="col"><h3 class="group">{dot(c)}{e(camp_names.get(c, c))} <span class="n">{count(n, *SR_OUTLETS)} · '
                     f'{count(len(mine), *SR_NEWS)}</span></h3>'
-                    f'<ul class="items">{"".join(row(u) for u in mine[:SR_CAMP_FIRST])}</ul>{more}')
+                    f'<ul class="items">{"".join(row(u) for u in mine[:SR_CAMP_FIRST])}</ul>{more}</section>')
 
         by_camp = "".join(camp_block(c, n) for c, n in camps)
         by_day, current = [], None
@@ -1291,16 +1298,15 @@ def _write_sr_page(state: dict, vectors: dict, archive: dict) -> None:
 <p class="meta">{k}. tema dana · {meta} · poslednja {local(story["updated"], "%d.%m. u %H:%M")}</p>
 {balance}
 <div class="seg" role="group"><button data-show="time" aria-pressed="true">Po vremenu</button><button data-show="camps" aria-pressed="false">Po stranama</button></div>
-<div data-view="time">{"".join(by_day)}</div>
-<div data-view="camps" hidden>{by_camp}</div>
+<div data-view="time" class="narrow">{"".join(by_day)}</div>
+<div data-view="camps" class="cols" hidden>{by_camp}</div>
 <nav class="nav">{prev}{after}</nav>
 </div>{SR_SCRIPT}</body></html>"""
 
     page = f"""{head("Teme dana — Vestomat")}
 {brand}
 <h1>Teme dana</h1>
-<p class="lead">O čemu piše najviše medija u poslednja 24 sata · ažurirano {local(now, "%d.%m. u %H:%M")} · naslovi vesti su originalni ·
-strane su poređane od kritičnih prema SNS-u do bliskih SNS-u</p>
+<p class="lead">O čemu piše najviše medija · ažurirano {local(now, "%d.%m. u %H:%M")}</p>
 {"".join(cards) or "<p>Još nema tema.</p>"}
 </div>{SR_SCRIPT}</body></html>"""
     SR_PAGE_DIR.mkdir(parents=True, exist_ok=True)
