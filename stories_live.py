@@ -1136,10 +1136,12 @@ h1{margin:14px 0 4px;font-size:32px;font-weight:900;color:var(--strong);line-hei
 .rank{flex:none;min-width:22px;color:var(--faint);font-weight:900}
 .meta{margin:6px 0 10px;color:var(--muted);font-size:13px}
 .cov{margin:4px 0 14px;color:var(--muted);font-size:12px;line-height:1.9}
-.cov>span{display:inline-flex;align-items:center;gap:5px;margin-right:14px;white-space:nowrap}
-.cov .what{font-weight:700}
+.cov>span,.pair>span{display:inline-flex;align-items:center;gap:5px;margin-right:14px;white-space:nowrap}
+.cov .what{font-weight:700;display:block}
 .cov .none{opacity:.55}
 .cov .rest{display:block;white-space:normal}
+.cov .sides{display:block;white-space:normal;margin:0}
+.cov .pair{display:inline-block;white-space:nowrap;margin:0}
 .dot{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block}
 .items{list-style:none;margin:0;padding:0}
 .row{display:flex;gap:10px;margin-bottom:9px}
@@ -1258,16 +1260,19 @@ def _write_sr_page(state: dict, vectors: dict, archive: dict) -> None:
                     f'<span class="none">{dot(c)}{name}: nisu pisali</span>')
 
         others = [e(camp_names.get(c, c)) for c, _ in camps if c not in core]
-        balance = (f'<p class="cov"><span class="what">Pisali su:</span>{"".join(side(c) for c in camp_order if c in core)}'
+        # стороны парами, пара не разрывается: строка переносится 2 + 2, а не одна сторона на новую строку
+        sides = [side(c) for c in camp_order if c in core]
+        pairs = "".join(f'<span class="pair">{"".join(sides[i:i + 2])}</span>' for i in range(0, len(sides), 2))
+        balance = (f'<p class="cov"><span class="what">Pisali su:</span><span class="sides">{pairs}</span>'
                    + (f'<span class="rest">Ostali mediji: {" · ".join(others)}</span>' if others else "") + '</p>')
         news = sorted(urls, key=lambda u: (when(u), state["items"][u]["n"]), reverse=True)
         outlets = len({it["source"] for it in items})
         meta = (f'{count(len(urls), *SR_NEWS)} · {count(outlets, *SR_OUTLETS)} · od {local(story["created"], "%d.%m.")}')
-        more = (f'<a class="all" href="{sid}/">Sve {count(len(urls), *SR_NEWS)} →</a>' if len(news) > SR_FIRST
-                else f'<a class="all" href="{sid}/">Stranica teme →</a>')
+        more = (f'<a class="all" href="{sid}/" target="_blank">Sve {count(len(urls), *SR_NEWS)} →</a>' if len(news) > SR_FIRST
+                else f'<a class="all" href="{sid}/" target="_blank">Stranica teme →</a>')
         preview = news[:SR_FIRST]  # на главной — просто самые свежие
         cards.append(
-            f'<article class="story" id="{sid}"><div class="lhs"><h2><span class="rank">{k}</span><a href="{sid}/">'
+            f'<article class="story" id="{sid}"><div class="lhs"><h2><span class="rank">{k}</span><a href="{sid}/" target="_blank">'
             f'{e(title)}</a></h2><div class="indent"><p class="meta">{meta}</p>{balance}</div></div>'
             f'<div class="rhs indent"><ul class="items">{"".join(row(u) for u in preview)}</ul>{more}</div></article>')
 
