@@ -210,7 +210,7 @@ a.card-name:hover { color: var(--hover); }
 .time { flex: none; width: 42px; white-space: nowrap; color: var(--faint); font-size: 12px; padding-top: 2px; font-variant-numeric: tabular-nums; }
 .head {
   flex: 1; min-width: 0; text-decoration: none; cursor: pointer; font-size: 16px; line-height: 1.3;
-  overflow-wrap: anywhere;
+  overflow-wrap: anywhere; -webkit-user-drag: none;  /* тянуть мышью — выделять текст, а не перетаскивать ссылку */
 }
 .head:hover { color: var(--hover); }
 .head.fresh { font-weight: 700; color: var(--strong); }
@@ -223,7 +223,7 @@ a.card-name:hover { color: var(--hover); }
 .tip, .details { border-radius: 20px; background: var(--tip-bg); color: var(--tip-text); font-size: 15px; line-height: 1.45; }
 .tip {
   position: fixed; z-index: 20; max-width: 420px; padding: 16px 20px;
-  pointer-events: none; box-shadow: 0 8px 28px rgb(0 0 0 / .2);
+  box-shadow: 0 8px 28px rgb(0 0 0 / .2); cursor: text;
 }
 .details { margin: 0 0 14px 52px; padding: 14px 18px; }
 .tip p, .details p { margin: 0; }
@@ -730,7 +730,17 @@ function showTip(anchor, nodes) {
   }, 150);
 }
 function hideTip() { clearTimeout(tipTimer); tipEl.hidden = true; }
+// с заголовка на подсказку можно перейти мышью — тогда она остаётся, и из неё можно выделить и скопировать текст
+function leaveHead() {
+  clearTimeout(tipTimer);
+  tipTimer = setTimeout(() => { if (!tipEl.matches(":hover")) tipEl.hidden = true; }, 200);
+}
+tipEl.addEventListener("mouseleave", () => { if (!String(getSelection()).trim() || !tipEl.contains(getSelection().anchorNode)) hideTip(); });
+// выделение в подсказке держит её открытой, пока не кликнули мимо
+document.addEventListener("mousedown", e => { if (!tipEl.hidden && !tipEl.contains(e.target)) hideTip(); });
 addEventListener("scroll", hideTip, { passive: true });
+// выделили часть заголовка мышью — это не клик по ссылке
+const selecting = el => { const sel = getSelection(); return !sel.isCollapsed && el.contains(sel.anchorNode); };
 
 // ---------- жалоба на перевод ----------
 // жалобы принимает Cloudflare Worker (папка worker/): присылает их в Telegram, а сборка переводит
@@ -822,6 +832,7 @@ function renderItem(item, src, { showSource = false, showVia = false } = {}) {
     if (shift > 0) scrollBy({ top: shift, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   }
   const onclick = e => {
+    if (selecting(head)) { e.preventDefault(); return; }
     // без мыши наводить нечем: касание раскрывает и сворачивает подводку, статья открывается кнопкой в ней
     if (!HOVER && summary.length) {
       e.preventDefault();
@@ -831,7 +842,7 @@ function renderItem(item, src, { showSource = false, showVia = false } = {}) {
     opened();
   };
 
-  const head = h("a", { class: "head" + (fresh ? " fresh" : ""), href: item.url, target: "_blank", rel: "noopener", onclick,
+  const head = h("a", { class: "head" + (fresh ? " fresh" : ""), href: item.url, draggable: "false", target: "_blank", rel: "noopener", onclick,
     onauxclick: e => { if (e.button === 1) opened(); } },  // только колёсико: правая кнопка — это меню, а не открытие
     showSource ? h("span", { class: "src" }, h("span", { class: "dot", style: `background:var(--c-${src.section})` }), src.name) : null,
     script(v.title, v.lang),
@@ -840,7 +851,7 @@ function renderItem(item, src, { showSource = false, showVia = false } = {}) {
   );
   if (HOVER && summary.length) {
     head.addEventListener("mouseenter", () => showTip(head, summary));
-    head.addEventListener("mouseleave", hideTip);
+    head.addEventListener("mouseleave", leaveHead);
   }
 
   li.append(h("div", { class: "row" },

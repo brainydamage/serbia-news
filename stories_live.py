@@ -90,7 +90,7 @@ LOCAL_TZ = ZoneInfo("Europe/Belgrade")
 # новом названии пишется заново. На раскладку не влияет, поэтому и не в отпечатке правил
 NAME_PROMPT = """Ты называешь темы агрегатора новостей о Сербии. Название — заголовок темы для читателя.
 Вход — JSON: stories — темы, id вида S…: name — прежнее название, если было; news — свежие и самые типичные новости темы (что произошло).
-Для каждой темы верни name — по-русски, от двух до семи слов: о чём тема сейчас, по свежим новостям. Как рубрика: именительный падеж, без глагола в личной форме («Учредительное заседание Скупщины Сербии», «Крах «Алта банка»», «Травмы детей на эскалаторе в ТЦ «Галерия»»). Ситуация целиком, а не один её эпизод и не одно заявление. Если прежнее название ещё верно — верни его как есть. Без оценок, без кавычек вокруг и без точки в конце."""
+Для каждой темы верни name — по-русски, от двух до семи слов: о чём тема сейчас, по свежим новостям. Как рубрика: именительный падеж, без глагола в личной форме («Учредительное заседание Скупщины Сербии», «Крах «Алта банка»», «Травмы детей на эскалаторе в ТЦ «Галерия»»). Только слова, которые правда говорят по-русски. Отглагольное существительное — лишь привычное («задержание», «избиение», «поджог», «отставка»); не сочиняй таких, как «облитие», «закидывание», «подписание заявления об уходе». Если привычного слова нет, назови событие другим существительным или через участника: не «Облитие йогуртом депутатки Лидии Вукичевич», а «Нападение на депутатку Лидию Вукичевич» или «Инцидент с йогуртом у Скупщины». Если прежнее название нарушает эти правила — исправь его. Ситуация целиком, а не один её эпизод и не одно заявление. Если прежнее название ещё верно — верни его как есть. Без оценок, без кавычек вокруг и без точки в конце."""
 NAME_SCHEMA = {
     "type": "object",
     "properties": {
@@ -1164,7 +1164,7 @@ h1{margin:14px 0 4px;font-size:32px;font-weight:900;color:var(--strong);line-hei
 .items{list-style:none;margin:0;padding:0}
 .row{display:flex;gap:10px;margin-bottom:9px}
 .time{flex:none;width:44px;white-space:nowrap;color:var(--faint);font-size:12px;padding-top:2px;font-variant-numeric:tabular-nums}
-.head{flex:1;min-width:0;text-decoration:none;overflow-wrap:anywhere}
+.head{flex:1;min-width:0;text-decoration:none;overflow-wrap:anywhere;-webkit-user-drag:none}
 .head:hover{color:var(--hover)}
 .src{font-size:13px;font-weight:700;color:var(--muted);display:inline-flex;align-items:center;gap:5px;margin-right:6px;white-space:nowrap}
 .all{display:inline-block;margin:2px 0 8px;color:var(--muted);font-size:14px;font-weight:700;text-decoration:none}
@@ -1207,6 +1207,11 @@ document.querySelectorAll('time.time').forEach(t => {
   if (m < 60) t.textContent = m + ' MIN';
   else if (m < 24 * 60) t.textContent = Math.floor(m / 60) + ' HOURS';
   else { const d = new Date(at); t.textContent = d.getDate() + '.' + (d.getMonth() + 1) + '.'; }
+});
+// выделили часть заголовка мышью — это не клик по ссылке
+document.addEventListener('click', ev => {
+  const a = ev.target.closest('a.head'), sel = getSelection();
+  if (a && !sel.isCollapsed && a.contains(sel.anchorNode)) ev.preventDefault();
 });
 document.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => {
   document.querySelectorAll('.seg button').forEach(x => x.setAttribute('aria-pressed', x === b));
@@ -1291,7 +1296,7 @@ def _write_reader(state: dict, vectors: dict, archive: dict) -> None:
         def row(u: str) -> str:
             it = state["items"][u]
             return (f'<li class="row"><time class="time" datetime="{e(when(u))}">{local(when(u), "%H:%M")}</time>'
-                    f'<a class="head" href="{e(u)}" target="_blank" rel="noopener"><span class="src">{dot(it["section"])}'
+                    f'<a class="head" href="{e(u)}" target="_blank" rel="noopener" draggable="false"><span class="src">{dot(it["section"])}'
                     f'{e(it["source"])}</span>{e(news_title(u))}</a></li>')
 
         def day_name(iso: str) -> str:  # без «danas / juče»: страница статична, а читают её и назавтра
