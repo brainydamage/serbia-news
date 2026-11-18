@@ -457,9 +457,10 @@ const state = {
   expandedCards: new Set(),
   feedLimit: FEED_PAGE,
 };
-// #teme — ссылка «← Teme dana» со страницы темы: открываем вид тем и запоминаем его, адрес — без хвоста
-if (location.hash === "#teme") {
-  state.view = "themes"; store.set("view", "themes");
+// #mediji, #lenta, #teme — ссылки из шапки страниц тем: открываем этот вид и запоминаем его, адрес — без хвоста
+const HASH_VIEWS = { "#mediji": "sources", "#lenta": "feed", "#teme": "themes" };
+if (HASH_VIEWS[location.hash]) {
+  state.view = HASH_VIEWS[location.hash]; store.set("view", state.view);
   history.replaceState(null, "", location.pathname + location.search);
 }
 // пришли по ссылке на /ru/ — запоминаем русский, чтобы и главная потом открывалась по-русски

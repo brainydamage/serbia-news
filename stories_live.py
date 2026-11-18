@@ -1138,14 +1138,12 @@ SR_CAMP_FIRST = 8  # на странице сюжета — сколько но�
 SR_COLORS = {"independent": "#2563eb", "investigations": "#0d9488", "progov": "#dc2626", "state": "#7c3aed",
              "mainstream": "#6b7280", "economy": "#ca8a04", "foreign-sr": "#92400e", "foreign": "#d97706",
              "reddit": "#ff4500", "trends": "#1a73e8", "regional": "#65a30d"}  # как --c-* в template.html
-SR_STYLE = """:root{--bg:#fff;--text:#333;--strong:#000;--muted:#8a8a8a;--faint:#a8a8a8;--soft:#ececec;--hover:#9b9b9b;COLORS}
-@media (prefers-color-scheme:dark){:root{--bg:#282c35;--text:#ddd;--strong:#fff;--muted:#9a9ca3;--faint:#7c7f87;--soft:#383d49}}
+SR_STYLE = """:root{--bg:#fff;--text:#333;--strong:#000;--muted:#8a8a8a;--faint:#a8a8a8;--soft:#ececec;--hover:#9b9b9b;--tip-bg:#282c35;--tip-text:#ddd;COLORS}
+@media (prefers-color-scheme:dark){:root{--bg:#282c35;--text:#ddd;--strong:#fff;--muted:#9a9ca3;--faint:#7c7f87;--soft:#383d49;--tip-bg:#ddd;--tip-text:#282c35}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font:16px/1.3 "Nunito",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}
 a{color:inherit}
 .wrap{max-width:820px;margin:0 auto;padding:18px 20px 40px}
-.brand{display:inline-flex;align-items:center;gap:10px;text-decoration:none;color:var(--muted);font-weight:700;font-size:14px}
-.brand img{width:22px;height:22px}.brand:hover{color:var(--strong)}
 h1{margin:14px 0 4px;font-size:32px;font-weight:900;color:var(--strong);line-height:1.15}
 .lead{margin:0 0 8px;color:var(--muted);font-size:14px}
 .story{padding:26px 0 12px;border-bottom:1.5px solid var(--soft)}
@@ -1178,7 +1176,6 @@ h1{margin:14px 0 4px;font-size:32px;font-weight:900;color:var(--strong);line-hei
 .more summary{cursor:pointer;color:var(--muted);font-size:14px;font-weight:700;padding:2px 0 8px;list-style:none}
 .more summary::-webkit-details-marker{display:none}.more summary::after{content:" ↓"}.more[open] summary::after{content:" ↑"}
 .more summary:hover{color:var(--strong)}
-.top{display:flex;justify-content:space-between;align-items:center;gap:16px}
 .nav{display:flex;justify-content:space-between;gap:16px;margin-top:28px;font-size:14px;font-weight:700;color:var(--muted)}
 .nav a{text-decoration:none}.nav a:hover{color:var(--strong)}
 /* компьютер: на главной сюжет в две колонки — слева заголовок и стороны, справа новости; на странице сюжета
@@ -1188,6 +1185,22 @@ h1{margin:14px 0 4px;font-size:32px;font-weight:900;color:var(--strong);line-hei
 .story h2{font-size:24px}.rhs{margin-left:0;padding-top:4px}
 .cols:not([hidden]){display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:8px 44px;align-items:start}
 .narrow{max-width:880px}}
+.site{max-width:1300px;margin:0 auto;padding:14px 20px;display:flex;flex-wrap:wrap;gap:10px 20px;align-items:center}
+.site .name{display:flex;align-items:baseline;gap:12px;margin-right:auto;min-width:0}
+.site .name a{font-size:29px;font-weight:700;line-height:1.4;white-space:nowrap;text-decoration:none;color:var(--text)}
+.site .name img{width:28px;height:28px;vertical-align:-4px;margin-right:10px}
+.site .upd{color:var(--muted);font-size:13px}.site .upd b{font-weight:800}
+.site .ctl{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.site .seg{margin:0}.site .seg a{padding:5px 12px;border-radius:20px;font-size:14px;font-weight:700;color:var(--muted);text-decoration:none;text-align:center}
+.site .seg a:hover{color:var(--text)}.site .seg a[aria-current]{background:var(--tip-bg);color:var(--tip-text)}
+.site .view a{width:76px;padding-left:4px;padding-right:4px}
+.back{display:inline-block;color:var(--muted);font-size:14px;font-weight:700;text-decoration:none}.back:hover{color:var(--strong)}
+.site .short{display:none}
+@media (max-width:800px){.site .name a{font-size:24px}}
+@media (max-width:640px){.site{padding:8px 16px 12px}.site .name{flex-direction:column;align-items:flex-start;gap:0;width:100%}
+.site .name a{font-size:21px}.site .ctl{width:100%;flex-direction:column;align-items:flex-start}
+.site .view{width:100%}.site .view a{flex:1;width:auto;padding:10px 4px;font-size:15px}
+.site .lang a{padding:10px 14px;font-size:15px}.site .full{display:none}.site .short{display:inline}}
 @media (max-width:600px){.wrap{padding:14px 16px 32px}h1{font-size:26px}.story h2{font-size:19px;gap:8px}.indent{margin-left:0}.head{font-size:15px}}
 """.replace("COLORS", "".join(f"--c-{c}:{v};" for c, v in SR_COLORS.items()))
 SR_HEAD = """<!doctype html><html lang="{lang}"><head><meta charset="utf-8">
@@ -1196,7 +1209,7 @@ SR_HEAD = """<!doctype html><html lang="{lang}"><head><meta charset="utf-8">
 <link rel="icon" href="/favicon.ico" sizes="32x32"><link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;900&display=swap">
-<style>{style}</style></head><body><div class="wrap">"""
+<style>{style}</style></head><body>{site}<div class="wrap">"""
 # время новости — как на главной: «5 min», «3 h», старше суток — дата. Переключатель на странице сюжета — по времени
 # (по дням) или по сторонам (разделам)
 SR_SCRIPT = """<script>
@@ -1225,22 +1238,24 @@ document.querySelectorAll('.seg button').forEach(b => b.addEventListener('click'
 READER = {
     "sr": {
         "dir": SR_PAGE_DIR, "html_lang": "sr-Latn", "home": "/", "news": SR_NEWS, "outlets": SR_OUTLETS,
-        "title": "Teme dana", "lead": "O čemu piše najviše medija", "updated": "ažurirano", "at": "u",
+        "title": "Teme dana", "lead": "O čemu piše najviše medija", "site": "Srbija: vesti",
+        "views": ("Mediji", "Sve vesti", "Teme"), "lang_names": ("Srpski", "Русский"), "updated": "ažurirano", "at": "u",
         "since": "od", "all": "Sve", "page": "Stranica teme", "wrote": "Pisali su:", "silent": "nisu pisali",
         "others": "Ostali mediji:", "nth": "tema dana", "last": "poslednja", "by_time": "Po vremenu",
         "by_side": "Po stranama", "more": "Još", "prev": "Prethodna tema", "next": "Sledeća tema",
-        "none": "Još nema tema.", "min": "min", "h": "h", "other": ("ru", "Русский"),
+        "none": "Još nema tema.", "min": "min", "h": "h",
         "days": ["ponedeljak", "utorak", "sreda", "četvrtak", "petak", "subota", "nedelja"],
         "months": ["januara", "februara", "marta", "aprila", "maja", "juna", "jula", "avgusta", "septembra",
                    "oktobra", "novembra", "decembra"],
     },
     "ru": {
         "dir": ROOT / "site" / "ru" / "plot", "html_lang": "ru", "home": "/ru/", "news": NEWS, "outlets": OUTLETS,
-        "title": "Темы дня", "lead": "О чём пишет больше всего изданий", "updated": "обновлено", "at": "в",
+        "title": "Темы дня", "lead": "О чём пишет больше всего изданий", "site": "Сербия: новости",
+        "views": ("Издания", "Лента", "Темы"), "lang_names": ("Srpski", "Русский"), "updated": "обновлено", "at": "в",
         "since": "с", "all": "Все", "page": "Страница темы", "wrote": "Писали:", "silent": "не писали",
         "others": "Остальные издания:", "nth": "тема дня", "last": "последняя", "by_time": "По времени",
         "by_side": "По сторонам", "more": "Ещё", "prev": "Предыдущая тема", "next": "Следующая тема",
-        "none": "Тем пока нет.", "min": "мин", "h": "ч", "other": ("sr", "Srpski"),
+        "none": "Тем пока нет.", "min": "мин", "h": "ч",
         "days": ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"],
         "months": ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября",
                    "ноября", "декабря"],
@@ -1304,11 +1319,21 @@ def _write_reader(state: dict, vectors: dict, archive: dict) -> None:
             return f"{L['days'][d.weekday()].capitalize()}, {d.day} {L['months'][d.month - 1]}" if lang == "ru" else \
                 f"{L['days'][d.weekday()].capitalize()}, {d.day}. {L['months'][d.month - 1]}"
 
-        def head(title: str) -> str:
-            return SR_HEAD.format(title=e(title), style=SR_STYLE, lang=L["html_lang"])
+        def head(title: str, here: str) -> str:
+            """Шапка — как на главной: иконка и название сайта, язык, вид («Темы» выбран). here — путь этой страницы
+            внутри /{lang}/plot/, переключатель языка ведёт на ту же страницу другого языка"""
+            home = L["home"]
+            views = "".join(f'<a href="{home}#{hash_}"{" aria-current=\"page\"" if hash_ == "teme" else ""}>{e(name)}</a>'
+                            for hash_, name in zip(("mediji", "lenta", "teme"), L["views"]))
+            langs = "".join(f'<a href="/{code}/plot/{here}"{" aria-current=\"page\"" if code == lang else ""}>'
+                            f'<span class="full">{e(name)}</span><span class="short">{code.upper()}</span></a>'
+                            for code, name in zip(("sr", "ru"), L["lang_names"]))
+            site = (f'<header class="site"><div class="name"><a href="{home}"><img src="/icon.svg" alt="Vestomat">'
+                    f'{e(L["site"])}</a><span class="upd"><b>Vestomat</b> · {L["updated"]} {local(now, "%H:%M")}</span></div>'
+                    f'<nav class="ctl"><span class="seg lang">{langs}</span><span class="seg view">{views}</span></nav></header>')
+            return SR_HEAD.format(title=e(title), style=SR_STYLE, lang=L["html_lang"], site=site)
 
         script = SR_SCRIPT.replace("MIN", L["min"]).replace("HOURS", L["h"])
-        other_lang, other_name = L["other"]
         cards, pages = [], {}
         for k, sid in enumerate(shown, 1):
             story = state["stories"][sid]
@@ -1373,8 +1398,8 @@ def _write_reader(state: dict, vectors: dict, archive: dict) -> None:
             by_day.append("</ul>")
             prev = f'<a href="../{shown[k - 2]}/">← {L["prev"]}</a>' if k > 1 else "<span></span>"
             after = f'<a href="../{shown[k]}/">{L["next"]} →</a>' if k < len(shown) else "<span></span>"
-            pages[sid] = f"""{head(f"{title} — Vestomat")}
-<div class="top"><a class="brand" href="{L["home"]}#teme">← {L["title"]}</a><a class="brand" href="/{other_lang}/plot/{sid}/">{other_name}</a></div>
+            pages[sid] = f"""{head(f"{title} — Vestomat", f"{sid}/")}
+<a class="back" href="{L["home"]}#teme">← {L["title"]}</a>
 <h1>{e(title)}</h1>
 <p class="meta">{k}. {L["nth"]} · {meta} · {L["last"]} {local(story["updated"], "%d.%m.")} {L["at"]} {local(story["updated"], "%H:%M")}</p>
 {balance}
@@ -1384,8 +1409,7 @@ def _write_reader(state: dict, vectors: dict, archive: dict) -> None:
 <nav class="nav">{prev}{after}</nav>
 </div>{script}</body></html>"""
 
-        page = f"""{head(f"{L['title']} — Vestomat")}
-<div class="top"><a class="brand" href="{L["home"]}"><img src="/icon.svg" alt="">Vestomat</a><a class="brand" href="/{other_lang}/plot/">{other_name}</a></div>
+        page = f"""{head(f"{L['title']} — Vestomat", "")}
 <h1>{L["title"]}</h1>
 <p class="lead">{L["lead"]} · {L["updated"]} {local(now, "%d.%m.")} {L["at"]} {local(now, "%H:%M")}</p>
 {"".join(cards) or f"<p>{L['none']}</p>"}
