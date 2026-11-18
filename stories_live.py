@@ -1142,7 +1142,10 @@ SR_STYLE = """:root{--bg:#fff;--text:#333;--strong:#000;--muted:#8a8a8a;--faint:
 @media (prefers-color-scheme:dark){:root{--bg:#282c35;--text:#ddd;--strong:#fff;--muted:#9a9ca3;--faint:#7c7f87;--soft:#383d49;--tip-bg:#3a404d;--tip-text:#eee}}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
-body{margin:0;background:var(--bg);color:var(--text);font:16px/1.3 "Nunito",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}
+/* как на главной: в приложении на iPhone размыта строка состояния и полоса ~28pt под ней — опускаем страницу ниже */
+:root{--safe-top:env(safe-area-inset-top)}
+@supports (-webkit-touch-callout:none){@media (display-mode:standalone){:root{--safe-top:calc(env(safe-area-inset-top) + 28px)}}}
+body{padding:var(--safe-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);margin:0;background:var(--bg);color:var(--text);font:16px/1.3 "Nunito",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}
 a{color:inherit}
 .wrap{max-width:820px;margin:0 auto;padding:18px 20px 40px}
 h1{margin:14px 0 4px;font-size:32px;font-weight:900;color:var(--strong);line-height:1.15}
@@ -1189,7 +1192,7 @@ h1{margin:14px 0 4px;font-size:32px;font-weight:900;color:var(--strong);line-hei
 /* шапка — как на главной (template.html: .topline, header, .bar, .seg, #lang, #script, #view, .search) */
 .topline{max-width:1300px;margin:0 auto;padding:8px 20px 0;color:var(--muted);font-size:13px;text-align:right}
 .topline:empty{display:none}#info>span{white-space:nowrap}#info .dot{width:7px;height:7px;margin-left:5px;vertical-align:1px}
-.site{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 94%,transparent);backdrop-filter:blur(10px)}
+.site{position:sticky;top:var(--safe-top);z-index:5;background:color-mix(in srgb,var(--bg) 94%,transparent);backdrop-filter:blur(10px)}
 .site .bar{max-width:1300px;margin:0 auto;padding:14px 20px;display:flex;flex-wrap:wrap;gap:10px 20px;align-items:center}
 .site .brand{display:flex;flex-direction:column;align-items:flex-start;flex:1 1 0;min-width:280px}
 .site .name{font-size:29px;font-weight:700;line-height:1.2;white-space:nowrap;text-decoration:none;color:var(--text)}
@@ -1225,7 +1228,8 @@ h1{margin:14px 0 4px;font-size:32px;font-weight:900;color:var(--strong);line-hei
 @media (max-width:600px){.wrap{padding:14px 16px 32px}h1{font-size:26px}.story h2{font-size:19px;gap:8px}.indent{margin-left:0}.head{font-size:15px}}
 """.replace("COLORS", "".join(f"--c-{c}:{v};" for c, v in SR_COLORS.items()))
 SR_HEAD = """<!doctype html><html lang="{lang}"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#282c35" media="(prefers-color-scheme: dark)">
 <title>{title}</title>
 <link rel="icon" href="/favicon.ico" sizes="32x32"><link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
