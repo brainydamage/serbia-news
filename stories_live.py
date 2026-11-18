@@ -1112,7 +1112,9 @@ def write_sr_page(state: dict, vectors: dict, archive: dict) -> None:
         print("Сюжеты: сербская страница не обновилась", file=sys.stderr)
 
 
-SR_CAMPS = ["independent", "state", "mainstream", "progov"]  # основные стороны — как CAMPS в template.html и build.py
+# основные стороны в порядке спектра: от критичных к SNS через нейтральные. Место в строке — не ранг: порядок один для
+# всех сюжетов. Ни «кто больше» (всегда побеждала сторона с большим числом изданий), ни ротация по дням
+SR_SPECTRUM = ["independent", "mainstream", "state", "progov"]
 SR_FIRST = 5  # сколько свежих новостей сюжета видно на главной; все — на странице сюжета
 SR_CAMP_FIRST = 8  # на странице сюжета — сколько новостей каждой стороны видно сразу
 SR_COLORS = {"independent": "#2563eb", "investigations": "#0d9488", "progov": "#dc2626", "state": "#7c3aed",
@@ -1136,9 +1138,6 @@ h1{margin:14px 0 4px;font-size:32px;font-weight:900;color:var(--strong);line-hei
 .cov{margin:4px 0 14px;color:var(--muted);font-size:12px;line-height:1.9}
 .cov>span{display:inline-flex;align-items:center;gap:5px;margin-right:14px;white-space:nowrap}
 .cov .what{font-weight:700}
-.cov .fill{width:36px;height:5px;border-radius:3px;background:var(--soft);overflow:hidden;display:inline-block}
-.cov .fill i{display:block;height:100%}
-.cov b{color:var(--text);font-weight:700;font-variant-numeric:tabular-nums}
 .cov .none{opacity:.55}
 .cov .rest{display:block}
 .dot{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block}
@@ -1198,13 +1197,9 @@ def _write_sr_page(state: dict, vectors: dict, archive: dict) -> None:
     config = json.loads(SOURCES_FILE.read_text("utf-8"))
     camp_names = {s["id"]: s["title"] for s in config["sections"]}
     now = state.get("built") or datetime.now(timezone.utc).isoformat(timespec="seconds")
-    # порядок сторон — как на главной сайта (template.html, CAMPS): четыре основные стороны по кругу, кто первый — меняется
-    # раз в день по белградскому календарю (тот же сдвиг); за ними остальные разделы, как в sources.json. Постоянный
-    # порядок ставил бы одну сторону первой всегда
-    core = [c for c in SR_CAMPS if c in camp_names]
-    shift = (datetime.fromisoformat(now).astimezone(LOCAL_TZ).date() - datetime(1970, 1, 1).date()).days % len(core)
-    camp_order = core[shift:] + core[:shift] + [s["id"] for s in config["sections"] if s["id"] not in core]
-    camp_size = {s["id"]: len(s["sources"]) for s in config["sections"]}
+    # порядок сторон — SR_SPECTRUM, один на все сюжеты и все дни; за ними остальные разделы, как в sources.json
+    core = [c for c in SR_SPECTRUM if c in camp_names]
+    camp_order = core + [s["id"] for s in config["sections"] if s["id"] not in core]
     shown, _, _ = page_stories(state, now)
     sr_heads = state.get("sr_heads", {})
     days = ["ponedeljak", "utorak", "sreda", "četvrtak", "petak", "subota", "nedelja"]
@@ -1244,22 +1239,18 @@ def _write_sr_page(state: dict, vectors: dict, archive: dict) -> None:
         urls = story["urls"]
         items = [state["items"][u] for u in urls]
         title = sr_heads.get(headline_of(state, vectors, urls)) or orig(headline_url(state, vectors, urls))
-        # стороны — доля изданий стороны, которые написали (9/9, 10/11): не зависит от того, сколько изданий в разделе,
-        # и показывает, кто молчит. Не полоса «кто больше»: при равном покрытии в ней всегда выигрывала бы сторона, где
-        # больше изданий. Дроби — только у четырёх основных сторон (SR_CAMPS); остальные разделы — числом изданий.
-        # Порядок — camp_order: один на все сюжеты дня
+        # стороны — только писали или нет, без чисел. Полоса долей всегда «побеждала» сторону, где больше изданий, а
+        # дроби (10/11) занижали: еженедельники (Radar) вне новостного цикла, колонки слияние иногда не берёт. Не писавшая
+        # основная сторона — приглушённо «nisu pisali». Остальные разделы — списком названий
         per_camp = Counter(c for c, _ in {(it["section"], it["source"]) for it in items})
         camps = sorted(per_camp.items(), key=lambda cn: camp_order.index(cn[0]) if cn[0] in camp_order else 99)
 
         def side(c: str) -> str:
-            n, total = per_camp.get(c, 0), camp_size[c]
             name = e(camp_names.get(c, c))
-            if not n:
-                return f'<span class="none">{dot(c)}{name}: nisu pisali</span>'
-            return (f'<span title="{name}: {n} od {total}">{dot(c)}{name} <span class="fill"><i style="width:'
-                    f'{round(100 * n / total)}%;background:var(--c-{e(c)})"></i></span><b>{n}/{total}</b></span>')
+            return (f'<span>{dot(c)}{name}</span>' if per_camp.get(c) else
+                    f'<span class="none">{dot(c)}{name}: nisu pisali</span>')
 
-        others = [f'{e(camp_names.get(c, c))} {n}' for c, n in camps if c not in core]
+        others = [e(camp_names.get(c, c)) for c, _ in camps if c not in core]
         balance = (f'<p class="cov"><span class="what">Pisali su:</span>{"".join(side(c) for c in camp_order if c in core)}'
                    + (f'<span class="rest">Ostali mediji: {" · ".join(others)}</span>' if others else "") + '</p>')
         news = sorted(urls, key=lambda u: (when(u), state["items"][u]["n"]), reverse=True)
@@ -1309,7 +1300,7 @@ def _write_sr_page(state: dict, vectors: dict, archive: dict) -> None:
 {brand}
 <h1>Teme dana</h1>
 <p class="lead">O čemu piše najviše medija u poslednja 24 sata · ažurirano {local(now, "%d.%m. u %H:%M")} · naslovi vesti su originalni ·
-„9/9“ znači da je o temi pisalo 9 od 9 medija te strane</p>
+strane su poređane od kritičnih prema SNS-u do bliskih SNS-u</p>
 {"".join(cards) or "<p>Još nema tema.</p>"}
 </div>{SR_SCRIPT}</body></html>"""
     SR_PAGE_DIR.mkdir(parents=True, exist_ok=True)
