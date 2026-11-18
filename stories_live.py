@@ -1199,7 +1199,7 @@ h1{margin:14px 0 4px;font-size:32px;font-weight:900;color:var(--strong);line-hei
 .site .seg{display:inline-flex;background:var(--soft);border-radius:20px;padding:3px;margin:0}
 .site .seg button,.site .seg a{border:0;background:none;padding:5px 12px;border-radius:20px;cursor:pointer;font:inherit;font-size:14px;font-weight:700;color:var(--muted);text-decoration:none;text-align:center}
 .site .seg button:hover,.site .seg a:hover{color:var(--text)}
-#view a{width:76px;padding-left:4px;padding-right:4px}
+#view a{min-width:76px;padding-left:8px;padding-right:8px}
 .site .seg button[aria-pressed=true],.site .seg a[aria-current]{background:var(--tip-bg);color:var(--tip-text)}
 #lang .short{display:none}
 .search{border:1.5px solid var(--soft);background:var(--bg);color:var(--text);border-radius:20px;padding:6px 34px 6px 14px;font:inherit;font-size:14px;width:180px}
@@ -1276,7 +1276,7 @@ const toLatin = s => s.replace(/[Ѐ-ӿ]/g, (ch, i) => {
   }
   return l;
 });
-const KEEP_LATIN = new Set(["Ctrl", "RSS", "EN", "RU", "SR", "BIRN", "RFE", "RL", "Lat", "Vestomat", "Original"]);
+const KEEP_LATIN = new Set(["Ctrl", "RSS", "EN", "RU", "SR", "BIRN", "RFE", "RL", "Lat", "Vestomat"]);
 const toCyrillic = s => s.replace(/[A-Za-zČĆŽŠĐčćžšđ]+/g, w => KEEP_LATIN.has(w) ? w
   : w.replace(/Lj|LJ|lj|Nj|NJ|nj|Dž|DŽ|dž|[A-Za-zČĆŽŠĐčćžšđ]/g, ch => L2C[ch] ?? ch));
 const norm = s => toLatin(s).toLowerCase().replace(/đ/g, "dj").normalize("NFD").replace(/[̀-ͯ]/g, "");
@@ -1287,10 +1287,12 @@ const originals = new WeakMap();
 const q = document.getElementById('q'), placeholder = q.placeholder;
 function applyScript() {
   const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, { acceptNode: n =>
-    n.parentElement.closest('script, style, #lang, #script') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
+    n.parentElement.closest('script, style, #lang') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
   for (let n; (n = walk.nextNode());) {
     if (!originals.has(n)) originals.set(n, n.nodeValue);
     const text = originals.get(n);
+    // кнопки алфавита — как на главной: кириллицей «Оригинал», в остальных режимах как есть («Ћир» не латинизируем)
+    if (n.parentElement.closest('#script')) { n.nodeValue = mode === 'cyr' ? toCyrillic(text) : text; continue; }
     const cyr = (text.match(/[Ѐ-ӿ]/g) || []).length;
     n.nodeValue = mode === 'lat' ? toLatin(text) : mode === 'cyr' && cyr <= text.length / 3 ? toCyrillic(text) : text;
   }

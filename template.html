@@ -117,8 +117,9 @@ header {
   font-size: 14px; font-weight: 700; color: var(--muted);
 }
 .seg button:hover { color: var(--text); }
-/* три кнопки вида — в ширину прежних двух с полем поиска: шапка не переносится и не прыгает при смене языка */
-#view button { width: 76px; padding-left: 4px; padding-right: 4px; }
+/* три кнопки вида — в ширину прежних двух с полем поиска: шапка не переносится и не прыгает при смене языка.
+   Не меньше 76px, а не ровно: кириллицей «Све вести» шире и иначе залезала на соседнюю кнопку */
+#view button { min-width: 76px; padding-left: 8px; padding-right: 8px; }
 .seg button[aria-pressed="true"] { background: var(--tip-bg); color: var(--tip-text); }
 .search {
   border: 1.5px solid var(--soft); background: var(--bg); color: var(--text);
