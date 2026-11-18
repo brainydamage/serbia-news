@@ -1224,7 +1224,8 @@ h1{margin:14px 0 4px;font-size:32px;font-weight:900;color:var(--strong);line-hei
 .search-box{grid-row:4;grid-column:1/-1;min-width:0}
 .site .seg button,.site .seg a,#view a,#script button[data-v],#lang a{width:auto;padding:8px 14px;font-size:15px}
 .search{width:100%;height:100%;font-size:16px}.search-clear{width:26px;height:26px;line-height:26px;font-size:18px}
-.topline{padding:8px 16px 0;text-align:left;font-size:12px}#info .unit{display:none}}
+.topline{padding:8px 16px 0;text-align:left;font-size:12px}#info .unit{display:none}
+.to-top{position:fixed;right:16px;bottom:calc(16px + env(safe-area-inset-bottom));z-index:6;width:44px;height:44px;border:0;border-radius:50%;cursor:pointer;background:var(--tip-bg);color:var(--tip-text);font:inherit;font-size:20px;font-weight:700;box-shadow:0 4px 16px rgb(0 0 0 / .25)}}
 @media (max-width:600px){.wrap{padding:14px 16px 32px}h1{font-size:26px}.story h2{font-size:19px;gap:8px}.indent{margin-left:0}.head{font-size:15px}}
 """.replace("COLORS", "".join(f"--c-{c}:{v};" for c, v in SR_COLORS.items()))
 SR_HEAD = """<!doctype html><html lang="{lang}"><head><meta charset="utf-8">
@@ -1380,6 +1381,13 @@ qInput.addEventListener('input', search);
 qInput.addEventListener('keydown', e => { if (e.key === 'Escape' && qInput.value) { qInput.value = ''; search(); } });
 qClear.addEventListener('click', () => { qInput.value = ''; search(); qInput.focus(); });
 if (qInput.value) search();
+// ↑ — как на главной: на телефоне шапка не липнет, и кнопка появляется, когда шапка уехала за верх экрана
+const toTop = document.getElementById('to-top'), header = document.querySelector('header.site');
+toTop.addEventListener('click', () => scrollTo({ top: 0, behavior: 'smooth' }));
+const onScroll = () => { toTop.hidden = getComputedStyle(header).position === 'sticky' || header.getBoundingClientRect().bottom > 0; };
+addEventListener('scroll', onScroll, { passive: true });
+addEventListener('resize', onScroll);
+onScroll();
 applyScript();
 })();
 </script>"""
@@ -1391,7 +1399,7 @@ READER = {
     "sr": {
         "dir": SR_PAGE_DIR, "html_lang": "sr-Latn", "home": "/", "news": SR_NEWS, "outlets": SR_OUTLETS,
         "title": "Teme dana", "lead": "O čemu piše najviše medija", "site": "Srbija: vesti",
-        "views": ("Mediji", "Sve vesti", "Teme"), "lang_names": ("Srpski", "Русский"), "search": "Pretraga",
+        "views": ("Mediji", "Sve vesti", "Teme"), "lang_names": ("Srpski", "Русский"), "search": "Pretraga", "to_top": "Na vrh",
         "info": {"din": "din", "city": "Beograd", "air": "vazduh", "rateHint": "Srednji kurs NBS za",
                  "airHint": "Evropski indeks kvaliteta vazduha", "updated": "ažurirano", "outlets": SR_OUTLETS,
                  "aqi": ["dobar", "prihvatljiv", "umeren", "loš", "veoma loš", "izuzetno loš"]}, "updated": "ažurirano", "at": "u",
@@ -1406,7 +1414,7 @@ READER = {
     "ru": {
         "dir": ROOT / "site" / "ru" / "plot", "html_lang": "ru", "home": "/ru/", "news": NEWS, "outlets": OUTLETS,
         "title": "Темы дня", "lead": "О чём пишет больше всего изданий", "site": "Сербия: новости",
-        "views": ("Издания", "Лента", "Темы"), "lang_names": ("Srpski", "Русский"), "search": "Поиск",
+        "views": ("Издания", "Лента", "Темы"), "lang_names": ("Srpski", "Русский"), "search": "Поиск", "to_top": "Наверх",
         "info": {"din": "дин", "city": "Белград", "air": "воздух", "rateHint": "Средний курс Народного банка Сербии на",
                  "airHint": "Европейский индекс качества воздуха", "updated": "обновлено", "outlets": OUTLETS,
                  "aqi": ["хороший", "приемлемый", "умеренный", "плохой", "очень плохой", "крайне плохой"]}, "updated": "обновлено", "at": "в",
@@ -1497,7 +1505,8 @@ def _write_reader(state: dict, vectors: dict, archive: dict) -> None:
                     f'{local(now, "%H:%M")}</span></div><div class="controls">{scripts}<div class="seg" id="lang">{langs}</div>'
                     f'<div class="controls-row"><div class="seg" id="view">{views}</div><span class="search-box">'
                     f'<input class="search" id="q" type="search" autocomplete="off" placeholder="{L["search"]}">'
-                    f'<button class="search-clear" id="q-clear" type="button" hidden>×</button></span></div></div></div></header>')
+                    f'<button class="search-clear" id="q-clear" type="button" hidden>×</button></span></div></div></div></header>'
+                    f'<button class="to-top" id="to-top" type="button" hidden title="{L["to_top"]}" aria-label="{L["to_top"]}">↑</button>')
             return SR_HEAD.format(title=e(title), style=SR_STYLE, lang=L["html_lang"], site=site)
 
         script = (SR_SCRIPT.replace("MIN", L["min"]).replace("HOURS", L["h"])
