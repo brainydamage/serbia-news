@@ -117,11 +117,12 @@ header {
   font-size: 14px; font-weight: 700; color: var(--muted);
 }
 .seg button:hover { color: var(--text); }
-#view button { width: 104px; padding-left: 4px; padding-right: 4px; }
+/* три кнопки вида — в ширину прежних двух с полем поиска: шапка не переносится и не прыгает при смене языка */
+#view button { width: 76px; padding-left: 4px; padding-right: 4px; }
 .seg button[aria-pressed="true"] { background: var(--tip-bg); color: var(--tip-text); }
 .search {
   border: 1.5px solid var(--soft); background: var(--bg); color: var(--text);
-  border-radius: 20px; padding: 6px 14px; font-size: 14px; width: 200px;
+  border-radius: 20px; padding: 6px 14px; font-size: 14px; width: 180px;
 }
 .search:focus { outline: none; border-color: var(--text); }
 /* свой крестик вместо встроенного: у Firefox его нет, а у Chrome и Safari он у каждого свой */
@@ -280,6 +281,36 @@ dialog.report::backdrop { background: rgb(0 0 0 / .35); }
 .feed .more { margin-top: 12px; }
 
 .empty { color: var(--muted); text-align: center; padding: 60px 0; }
+
+/* ---------- темы дня ---------- */
+/* как /sr/plot/: на компьютере тема в две колонки — слева заголовок и стороны, справа свежие новости */
+.themes { max-width: 1260px; margin: 0 auto; padding: 0 20px; }
+.theme { padding: 26px 0 14px; border-bottom: 1.5px solid var(--soft); }
+.theme h2 { margin: 0; font-size: 22px; line-height: 1.25; font-weight: 700; color: var(--strong); display: flex; gap: 12px; }
+.theme h2 a { color: inherit; text-decoration: none; }
+.theme h2 a:hover { color: var(--hover); }
+.theme .rank { flex: none; min-width: 22px; color: var(--faint); font-weight: 900; }
+.theme-indent { margin-left: 34px; }
+.theme-meta { margin: 6px 0 10px; color: var(--muted); font-size: 13px; }
+.cov { margin: 4px 0 14px; color: var(--muted); font-size: 12px; line-height: 1.9; }
+.cov .what { font-weight: 700; display: block; }
+.cov .sides, .cov .rest { display: block; }
+.cov .pair { display: inline-block; white-space: nowrap; }
+.cov .pair > span { display: inline-flex; align-items: center; gap: 5px; margin-right: 14px; }
+.cov .none { opacity: .55; }
+.cov .dot { width: 8px; height: 8px; }
+.theme .all { display: inline-block; margin: 2px 0 8px; color: var(--muted); font-size: 14px; font-weight: 700; text-decoration: none; }
+.theme .all:hover { color: var(--text); }
+@media (min-width: 1100px) {
+  .theme { display: grid; grid-template-columns: 5fr 7fr; gap: 48px; padding: 30px 0 18px; }
+  .theme h2 { font-size: 24px; }
+  .theme-rhs { margin-left: 0; padding-top: 4px; }
+}
+@media (max-width: 640px) {
+  .themes { padding: 0 16px; }
+  .theme h2 { font-size: 19px; gap: 8px; }
+  .theme-indent { margin-left: 0; }
+}
 /* подвал по левому краю контента, как разделы и колонки, — короткая справка под тонкой линией */
 footer { color: var(--muted); font-size: 13px; line-height: 1.5; max-width: 1260px; width: calc(100% - 40px); margin: 60px auto 0; padding: 16px 0 40px; border-top: 1.5px solid var(--soft); }
 footer.narrow { max-width: 780px; }  /* в общей ленте — по ширине ленты */
@@ -374,6 +405,7 @@ footer a { color: var(--text); }
         <div class="seg" id="view">
           <button data-v="sources" data-t="bySource"></button>
           <button data-v="feed" data-t="feed"></button>
+          <button data-v="themes" data-t="themes"></button>
         </div>
         <span class="search-box">
           <input class="search" id="q" type="search" autocomplete="off">
@@ -425,6 +457,11 @@ const state = {
   expandedCards: new Set(),
   feedLimit: FEED_PAGE,
 };
+// #teme — ссылка «← Teme dana» со страницы темы: открываем вид тем и запоминаем его, адрес — без хвоста
+if (location.hash === "#teme") {
+  state.view = "themes"; store.set("view", "themes");
+  history.replaceState(null, "", location.pathname + location.search);
+}
 // пришли по ссылке на /ru/ — запоминаем русский, чтобы и главная потом открывалась по-русски
 if (PAGE_LANG === "ru") store.set("lang", "ru");
 function markRead(url) {
@@ -436,11 +473,20 @@ function markRead(url) {
 const UI = {
   title: "Srbija: vesti",
   pageTitle: "Srbija: vesti iz svih medija — Vestomat",
-  bySource: "Po medijima",
+  bySource: "Mediji",
   camps: "Najnovije sa svih strana",
   campsChip: "Najnovije",
   all: "Sve",
   feed: "Sve vesti",
+  themes: "Teme",
+  wrote: "Pisali su:",
+  silent: "nisu pisali",
+  otherMedia: "Ostali mediji:",
+  allNews: "Sve",
+  themePage: "Stranica teme",
+  since: "od",
+  loading: "Učitavanje…",
+  noThemes: "Još nema tema.",
   orig: "Original",
   scriptHint: "Srpski tekst: kao u originalu, latinicom ili ćirilicom",
   search: "Pretraga",
@@ -485,11 +531,20 @@ const UI = {
 const UI_RU = {
   title: "Сербия: новости",
   pageTitle: "Новости Сербии на русском — Vestomat",
-  bySource: "По изданиям",
+  bySource: "Издания",
   camps: "Последнее с каждой стороны",
   campsChip: "Самое новое",
   all: "Все",
-  feed: "Общая лента",
+  feed: "Лента",
+  themes: "Темы",
+  wrote: "Писали:",
+  silent: "не писали",
+  otherMedia: "Остальные издания:",
+  allNews: "Все",
+  themePage: "Страница темы",
+  since: "с",
+  loading: "Загрузка…",
+  noThemes: "Тем пока нет.",
   search: "Поиск",
   clear: "Очистить поиск",
   toTop: "Наверх",
@@ -971,11 +1026,68 @@ function renderFeed() {
   return [wrap];
 }
 
+// ---------- темы дня ----------
+// сюжеты — из /themes.json (пишет stories_live.py вместе со страницами /sr/plot/ и /ru/plot/): те же сюжеты, порядок и
+// новости. Грузим только когда открыли вид. Новость, которая ещё есть в DATA, рисуется как везде (перевод, подводка,
+// прочитанное); старше ленты — из themes.json, с теми же полями
+let THEMES = null, themesLoading = false;
+function loadThemes() {
+  if (THEMES || themesLoading) return;
+  themesLoading = true;
+  fetch(`/themes.json?v=${Date.parse(DATA.generated)}`).then(r => r.json())
+    .catch(() => ({ stories: [] }))
+    .then(d => { THEMES = d; if (state.view === "themes") render(); });
+}
+// стороны — только писали или нет, без чисел; порядок спектра — один для всех тем; пары не разрываются при переносе
+const SPECTRUM = ["independent", "mainstream", "state", "progov"];
+function renderThemes() {
+  if (!THEMES) { loadThemes(); return [h("p", { class: "empty" }, t("loading"))]; }
+  const byUrl = new Map(DATA.sources.flatMap(src => src.items.map(i => [i.url, [i, src]])));
+  const srcByName = new Map(DATA.sources.map(s => [s.name, s]));
+  const base = ru() ? "/ru/plot/" : "/sr/plot/";
+  const name = id => sectionById[id] ? label(sectionById[id], "title") : id;
+  const newsWord = n => ru() ? plural(n, "новость", "новости", "новостей") : tx(plural(n, "vest", "vesti", "vesti"));
+  const stories = THEMES.stories.filter(s => !state.q || norm([s.title.sr, s.title.ru, ...s.items.flatMap(i => [i.sr, i.ru])].join(" ")).includes(state.q));
+  if (!stories.length) return [h("p", { class: "empty" }, t(state.q ? "nothing" : "noThemes"))];
+  const wrap = h("div", { class: "themes" });
+  stories.forEach((s, k) => {
+    const title = ru() ? s.title.ru : tx(s.title.sr);
+    const sides = SPECTRUM.filter(id => sectionById[id]).map(id => s.wrote.includes(id)
+      ? h("span", {}, h("span", { class: "dot", style: `background:var(--c-${id})` }), name(id))
+      : h("span", { class: "none" }, h("span", { class: "dot", style: `background:var(--c-${id})` }), `${name(id)}: ${t("silent")}`));
+    const pairs = [];
+    for (let i = 0; i < sides.length; i += 2) pairs.push(h("span", { class: "pair" }, ...sides.slice(i, i + 2)));
+    const list = h("ul", { class: "items" }, ...s.items.map(x => {
+      const hit = byUrl.get(x.url);
+      if (hit) return renderItem(hit[0], hit[1], { showSource: true });
+      const src = srcByName.get(x.source) || { name: x.source, section: x.section, lang: "sr" };
+      return renderItem({ url: x.url, title: x.sr, date: x.date, ru: { title: x.ru } }, src, { showSource: true });
+    }));
+    const link = `${base}${s.id}/`;
+    wrap.append(h("article", { class: "theme" },
+      h("div", { class: "theme-lhs" },
+        h("h2", {}, h("span", { class: "rank" }, String(k + 1)),
+          h("a", { href: link, target: "_blank", onclick: () => track("theme") }, title)),
+        h("div", { class: "theme-indent" },
+          h("p", { class: "theme-meta" }, `${s.news} ${newsWord(s.news)} · ${outletCount(s.outlets)} · ${t("since")} ${dayMonth(s.created)}`),
+          h("p", { class: "cov" }, h("span", { class: "what" }, t("wrote")), h("span", { class: "sides" }, ...pairs),
+            s.others.length ? h("span", { class: "rest" }, `${t("otherMedia")} ${s.others.map(name).join(" · ")}`) : null))),
+      h("div", { class: "theme-rhs theme-indent" }, list,
+        h("a", { class: "all", href: link, target: "_blank" },
+          s.news > s.items.length ? `${t("allNews")} ${s.news} ${newsWord(s.news)} →` : `${t("themePage")} →`))));
+  });
+  return [wrap];
+}
+function dayMonth(iso) {
+  const d = new Date(iso);
+  return `${d.getDate()}.${d.getMonth() + 1}.`;
+}
+
 function renderChips() {
   const chips = document.getElementById("chips");
   chips.replaceChildren();
   if (state.view === "feed") renderFilterChips(chips);
-  else renderContents(chips);
+  else if (state.view !== "themes") renderContents(chips);
   chips.hidden = !chips.children.length;
   measureSticky();
   spy();
@@ -1120,7 +1232,8 @@ function render() {
   renderUpdated();
   renderInfo();
   document.querySelector("footer").classList.toggle("narrow", state.view === "feed");
-  document.getElementById("main").replaceChildren(...(state.view === "feed" ? renderFeed() : renderSources()));
+  document.getElementById("main").replaceChildren(...(state.view === "feed" ? renderFeed()
+    : state.view === "themes" ? renderThemes() : renderSources()));
   renderChips();
 }
 
