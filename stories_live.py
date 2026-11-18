@@ -1191,15 +1191,16 @@ h1{margin:14px 0 4px;font-size:32px;font-weight:900;color:var(--strong);line-hei
 .topline:empty{display:none}#info>span{white-space:nowrap}#info .dot{width:7px;height:7px;margin-left:5px;vertical-align:1px}
 .site{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 94%,transparent);backdrop-filter:blur(10px)}
 .site .bar{max-width:1300px;margin:0 auto;padding:14px 20px;display:flex;flex-wrap:wrap;gap:10px 20px;align-items:center}
-.site .brand{display:flex;align-items:baseline;gap:12px;margin-right:auto}
-.site .name{font-size:29px;font-weight:700;line-height:1.4;white-space:nowrap;text-decoration:none;color:var(--text)}
+.site .brand{display:flex;flex-direction:column;align-items:flex-start;flex:1 1 0;min-width:280px}
+.site .name{font-size:29px;font-weight:700;line-height:1.2;white-space:nowrap;text-decoration:none;color:var(--text)}
 .site .logo{width:28px;height:28px;vertical-align:-4px;margin-right:10px}
-.site .updated{color:var(--muted);font-size:13px}.site .updated b{font-weight:800}
+.site .updated{color:var(--muted);font-size:13px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.site .updated b{font-weight:800}
 .site .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center}.site .controls-row{display:contents}
 .site .seg{display:inline-flex;background:var(--soft);border-radius:20px;padding:3px;margin:0}
 .site .seg button,.site .seg a{border:0;background:none;padding:5px 12px;border-radius:20px;cursor:pointer;font:inherit;font-size:14px;font-weight:700;color:var(--muted);text-decoration:none;text-align:center}
 .site .seg button:hover,.site .seg a:hover{color:var(--text)}
-#view a{min-width:76px;padding-left:8px;padding-right:8px}
+#script [data-v=orig]{width:92px}#script [data-v=lat]{width:50px}#script [data-v=cyr]{width:54px}#lang a{width:80px}
+#view a{width:84px;padding-left:4px;padding-right:4px}
 .site .seg button[aria-pressed=true],.site .seg a[aria-current]{background:var(--tip-bg);color:var(--tip-text)}
 #lang .short{display:none}
 .search{border:1.5px solid var(--soft);background:var(--bg);color:var(--text);border-radius:20px;padding:6px 34px 6px 14px;font:inherit;font-size:14px;width:180px}
@@ -1213,12 +1214,12 @@ h1{margin:14px 0 4px;font-size:32px;font-weight:900;color:var(--strong);line-hei
 .site .bar{display:grid;grid-template-columns:auto 1fr;gap:10px 8px;padding:8px 16px 12px}
 .site .controls,.site .controls-row{display:contents}
 .site .brand{grid-row:1;grid-column:1/-1;flex-direction:column;align-items:flex-start;gap:0;margin:0;min-width:0}
-.site .name{font-size:21px}.site .logo{width:22px;height:22px;vertical-align:-3px;margin-right:8px}.site .updated{font-size:12px}
+.site .name{font-size:21px;line-height:1.4}.site .logo{width:22px;height:22px;vertical-align:-3px;margin-right:8px}.site .updated{font-size:12px;white-space:normal}
 #lang{grid-row:2;grid-column:1}#lang .full{display:none}#lang .short{display:inline}
 #script{grid-row:2;grid-column:2}#script button{flex:1}
 #view{grid-row:3;grid-column:1/-1}#view a{flex:1}
 .search-box{grid-row:4;grid-column:1/-1;min-width:0}
-.site .seg button,.site .seg a,#view a{width:auto;padding:8px 14px;font-size:15px}
+.site .seg button,.site .seg a,#view a,#script button[data-v],#lang a{width:auto;padding:8px 14px;font-size:15px}
 .search{width:100%;height:100%;font-size:16px}.search-clear{width:26px;height:26px;line-height:26px;font-size:18px}
 .topline{padding:8px 16px 0;text-align:left;font-size:12px}#info .unit{display:none}}
 @media (max-width:600px){.wrap{padding:14px 16px 32px}h1{font-size:26px}.story h2{font-size:19px;gap:8px}.indent{margin-left:0}.head{font-size:15px}}
@@ -1481,10 +1482,11 @@ def _write_reader(state: dict, vectors: dict, archive: dict) -> None:
             langs = "".join(f'<a href="/{code}/plot/{here}"{" aria-current=\"page\"" if code == lang else ""}>'
                             f'<span class="full">{e(name)}</span><span class="short">{code.upper()}</span></a>'
                             for code, name in zip(("sr", "ru"), L["lang_names"]))
-            # алфавит — только по-сербски, как на главной (в русском режиме он скрыт)
-            scripts = ('<div class="seg" id="script" title="Srpski tekst: kao u originalu, latinicom ili ćirilicom">'
+            # алфавит — только по-сербски, как на главной; по-русски он невидим, но держит место — кнопки там же
+            hide = ' style="visibility:hidden" aria-hidden="true"' if lang == "ru" else ""
+            scripts = (f'<div class="seg" id="script" title="Srpski tekst: kao u originalu, latinicom ili ćirilicom"{hide}>'
                        '<button data-v="orig">Original</button><button data-v="lat">Lat</button>'
-                       '<button data-v="cyr">Ћир</button></div>' if lang == "sr" else "")
+                       '<button data-v="cyr">Ћир</button></div>')
             site = (f'<div class="topline" id="info"></div><header class="site"><div class="bar"><div class="brand">'
                     f'<a class="name" href="{home}"><img class="logo" src="/icon.svg" width="28" height="28" alt="Vestomat">'
                     f'{e(L["site"])}</a><span class="updated" id="updated"><b>Vestomat</b> · {L["updated"]} '

@@ -91,10 +91,14 @@ header {
   max-width: 1300px; margin: 0 auto; padding: 14px 20px;
   display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center;
 }
-.brand { display: flex; align-items: baseline; gap: 12px; margin-right: auto; }
-.brand h1 { margin: 0; font-size: 29px; font-weight: 700; line-height: 1.4; white-space: nowrap; }
+/* кнопки везде на одних и тех же местах: у каждой ширина по самой длинной подписи (во всех языках и алфавитах),
+   группа прижата вправо. «Обновлено…» — под названием: рядом с ним оно не помещалось и сталкивало кнопки вниз.
+   Ширина названия одна на оба языка (влезает «Сербия: новости»), поэтому кнопки уходят на вторую строку
+   при одной и той же ширине окна на всех страницах */
+.brand { display: flex; flex-direction: column; align-items: flex-start; flex: 1 1 0; min-width: 280px; }
+.brand h1 { margin: 0; font-size: 29px; font-weight: 700; line-height: 1.2; white-space: nowrap; }
 .brand .logo { width: 28px; height: 28px; vertical-align: -4px; margin-right: 10px; }
-.updated { color: var(--muted); font-size: 13px; }
+.updated { color: var(--muted); font-size: 13px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .updated b { font-weight: 800; }  /* название сайта: заголовок описательный, а запомнить надо имя */
 /* вышла новая сборка, а страница открыта давно: плашка сверху и ссылка рядом с «обновлено» */
 .refresh {
@@ -117,9 +121,12 @@ header {
   font-size: 14px; font-weight: 700; color: var(--muted);
 }
 .seg button:hover { color: var(--text); }
-/* три кнопки вида — в ширину прежних двух с полем поиска: шапка не переносится и не прыгает при смене языка.
-   Не меньше 76px, а не ровно: кириллицей «Све вести» шире и иначе залезала на соседнюю кнопку */
-#view button { min-width: 76px; padding-left: 8px; padding-right: 8px; }
+/* ширины по самой длинной подписи: «Оригинал», «Русский», «Све вести» */
+#script [data-v="orig"] { width: 92px; }
+#script [data-v="lat"] { width: 50px; }
+#script [data-v="cyr"] { width: 54px; }
+#lang button { width: 80px; }
+#view button { width: 84px; padding-left: 4px; padding-right: 4px; }
 .seg button[aria-pressed="true"] { background: var(--tip-bg); color: var(--tip-text); }
 .search {
   border: 1.5px solid var(--soft); background: var(--bg); color: var(--text);
@@ -333,9 +340,9 @@ footer a { color: var(--text); }
   /* «обновлено…» всегда второй строкой: по-русски оно не влезает рядом с названием, по-сербски влезает —
      без этого шапка меняла высоту, и кнопки под ней прыгали при смене языка */
   .brand { grid-row: 1; grid-column: 1 / -1; flex-direction: column; align-items: flex-start; gap: 0; margin: 0; min-width: 0; }
-  .brand h1 { font-size: 21px; }
+  .brand h1 { font-size: 21px; line-height: 1.4; }  /* на телефоне как было */
   .brand .logo { width: 22px; height: 22px; vertical-align: -3px; margin-right: 8px; }
-  .updated { font-size: 12px; }
+  .updated { font-size: 12px; white-space: normal; }
   #lang { grid-row: 2; grid-column: 1; }
   #lang .full { display: none; }
   #lang .short { display: inline; }
@@ -344,7 +351,7 @@ footer a { color: var(--text); }
   #view { grid-row: 3; grid-column: 1 / -1; }
   #view button { flex: 1; }
   .search-box { grid-row: 4; grid-column: 1 / -1; min-width: 0; }
-  .seg button, #view button { width: auto; padding: 8px 14px; font-size: 15px; }
+  .seg button, #view button, #script button[data-v], #lang button { width: auto; padding: 8px 14px; font-size: 15px; }
   /* 16px — меньше iPhone приближает страницу при нажатии на поле */
   .search { width: 100%; height: 100%; font-size: 16px; }
   .search-clear { width: 26px; height: 26px; line-height: 26px; font-size: 18px; }
@@ -1228,7 +1235,10 @@ function render() {
   }
   for (const el of document.querySelectorAll("[data-t]")) el.textContent = t(el.dataset.t);
   document.documentElement.lang = ru() ? "ru" : state.script === "cyr" ? "sr-Cyrl" : "sr-Latn";
-  document.getElementById("script").hidden = ru();
+  // по-русски алфавит не нужен, но место его остаётся: кнопки языка и вида стоят там же, где по-сербски
+  const scriptSeg = document.getElementById("script");
+  scriptSeg.style.visibility = ru() ? "hidden" : "";
+  scriptSeg.ariaHidden = ru() ? "true" : null;
   const notice = document.getElementById("notice");
   // в русском режиме всегда объясняем, что переведено и кем; если перевода не хватает — говорим и об этом
   notice.hidden = !ru();
