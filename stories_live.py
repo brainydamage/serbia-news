@@ -1135,9 +1135,9 @@ def sr_headlines(state: dict, vectors: dict, ask) -> int:
 SR_SPECTRUM = ["independent", "mainstream", "state", "progov"]
 SR_FIRST = 5  # сколько свежих новостей сюжета видно на главной; все — на странице сюжета
 SR_CAMP_FIRST = 8  # на странице сюжета — сколько новостей каждой стороны видно сразу
-SR_COLORS = {"independent": "#1d4ed8", "investigations": "#0d9488", "progov": "#dc2626", "state": "#c084fc",
-             "mainstream": "#6b7280", "economy": "#ca8a04", "foreign-sr": "#92400e", "foreign": "#d97706",
-             "reddit": "#ff4500", "trends": "#1a73e8", "regional": "#65a30d"}  # как --c-* в template.html
+SR_COLORS = {"independent": "#1d4ed8", "investigations": "#8ec7c3", "progov": "#dc2626", "state": "#c084fc",
+             "mainstream": "#71827a", "economy": "#9e8f55", "foreign-sr": "#e6b690", "foreign": "#ef7f16",
+             "reddit": "#8a423a", "trends": "#3087b3", "regional": "#38d64e"}  # как --c-* в template.html
 SR_STYLE = """:root{--bg:#fff;--text:#333;--strong:#000;--muted:#8a8a8a;--faint:#a8a8a8;--soft:#ececec;--hover:#9b9b9b;--tip-bg:#282c35;--tip-text:#ddd;COLORS}
 @media (prefers-color-scheme:dark){:root{--bg:#282c35;--text:#ddd;--strong:#fff;--muted:#9a9ca3;--faint:#7c7f87;--soft:#383d49;--tip-bg:#3a404d;--tip-text:#eee}}
 *{box-sizing:border-box}
