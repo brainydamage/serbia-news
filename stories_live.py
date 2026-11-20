@@ -1175,7 +1175,13 @@ h1{margin:14px 0 4px;font-size:32px;font-weight:900;color:var(--strong);line-hei
 .seg{display:inline-flex;background:var(--soft);border-radius:20px;padding:3px;margin:18px 0 6px}
 .seg button{border:0;background:none;padding:5px 14px;border-radius:20px;cursor:pointer;font:inherit;font-size:14px;color:var(--muted)}
 .seg button[aria-pressed=true]{background:var(--strong);color:var(--bg);font-weight:700}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0 4px}
+.chip{border:1.5px solid var(--soft);background:var(--bg);color:var(--text);border-radius:20px;padding:3px 12px 3px 9px;font:inherit;font-size:14px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.chip:hover{border-color:var(--muted)}
+.chip.none{cursor:default;opacity:.55;font-weight:400}.chip.none:hover{border-color:var(--soft)}
+.chip[aria-pressed=true]{background:var(--tip-bg);color:var(--tip-text);border-color:var(--tip-bg)}
 .group{margin:22px 0 4px;font-size:17px;font-weight:700;color:var(--strong);display:flex;align-items:center;gap:8px}
+.group.none{opacity:.55;font-weight:400}
 .group .n{color:var(--faint);font-weight:400;font-size:14px}
 .more summary{cursor:pointer;color:var(--muted);font-size:14px;font-weight:700;padding:2px 0 8px;list-style:none}
 .more summary::-webkit-details-marker{display:none}.more summary::after{content:" ↓"}.more[open] summary::after{content:" ↑"}
@@ -1226,6 +1232,7 @@ h1{margin:14px 0 4px;font-size:32px;font-weight:900;color:var(--strong);line-hei
 .search{width:100%;height:100%;font-size:16px}.search-clear{width:26px;height:26px;line-height:26px;font-size:18px}
 .topline{padding:8px 16px 0;text-align:left;font-size:12px}#info .unit{display:none}
 .to-top{position:fixed;right:16px;bottom:calc(16px + env(safe-area-inset-bottom));z-index:6;width:44px;height:44px;border:0;border-radius:50%;cursor:pointer;background:var(--tip-bg);color:var(--tip-text);font:inherit;font-size:20px;font-weight:700;box-shadow:0 4px 16px rgb(0 0 0 / .25)}}
+@media (max-width:640px){.chip{padding:7px 14px 7px 11px;font-size:15px}.chips{gap:8px}}
 @media (max-width:600px){.wrap{padding:14px 16px 32px}h1{font-size:26px}.story h2{font-size:19px;gap:8px}.indent{margin-left:0}.head{font-size:15px}}
 """.replace("COLORS", "".join(f"--c-{c}:{v};" for c, v in SR_COLORS.items()))
 SR_HEAD = """<!doctype html><html lang="{lang}"><head><meta charset="utf-8">
@@ -1256,6 +1263,33 @@ document.querySelectorAll('.wrap .seg button').forEach(b => b.addEventListener('
   document.querySelectorAll('.wrap .seg button').forEach(x => x.setAttribute('aria-pressed', x === b));
   document.querySelectorAll('[data-view]').forEach(v => v.hidden = v.dataset.view !== b.dataset.show);
 }));
+// фильтр на странице темы — только в виде «По времени» (в «По сторонам» стороны и так колонками), как в общей ленте: «Все» или выбранные разделы. Первый клик по разделу оставляет
+// только его, следующие добавляют или убирают; убрали последний — снова «Все»
+const chips = document.querySelectorAll('.chips button.chip');
+if (chips.length) {
+  const ids = [...chips].map(c => c.dataset.s).filter(Boolean);
+  let on = new Set(ids);
+  const apply = next => {
+    on = next.size ? next : new Set(ids);
+    const all = on.size === ids.length;
+    chips.forEach(c => c.setAttribute('aria-pressed', c.dataset.s ? !all && on.has(c.dataset.s) : all));
+    document.querySelectorAll('.items .row[data-s]').forEach(r => r.hidden = !on.has(r.dataset.s));
+    // день без новостей выбранных разделов — без заголовка
+    document.querySelectorAll('[data-view=time] .items').forEach(ul => {
+      const h = ul.previousElementSibling, empty = !ul.querySelector('.row:not([hidden])');
+      ul.hidden = empty;
+      if (h && h.matches('h3.group')) h.hidden = empty;
+    });
+  };
+  chips.forEach(c => c.addEventListener('click', () => {
+    const all = on.size === ids.length, s = c.dataset.s;
+    if (!s) return apply(new Set(ids));
+    if (all) return apply(new Set([s]));
+    const next = new Set(on);
+    next.has(s) ? next.delete(s) : next.add(s);
+    apply(next);
+  }));
+}
 </script>"""
 
 # шапка как на главной: курс, погода и воздух — из /version.json (их пишет build.py), алфавит и поиск — на месте.
@@ -1476,7 +1510,7 @@ def _write_reader(state: dict, vectors: dict, archive: dict) -> None:
 
         def row(u: str) -> str:
             it = state["items"][u]
-            return (f'<li class="row"><time class="time" datetime="{e(when(u))}">{local(when(u), "%H:%M")}</time>'
+            return (f'<li class="row" data-s="{e(it["section"])}"><time class="time" datetime="{e(when(u))}">{local(when(u), "%H:%M")}</time>'
                     f'<a class="head" href="{e(u)}" target="_blank" rel="noopener" draggable="false"><span class="src">{dot(it["section"])}'
                     f'{e(it["source"])}</span>{e(news_title(u))}</a></li>')
 
@@ -1564,7 +1598,26 @@ def _write_reader(state: dict, vectors: dict, archive: dict) -> None:
                         f'{count(n, *L["outlets"])} · {count(len(mine), *L["news"])}</span></h3>'
                         f'<ul class="items">{"".join(row(u) for u in mine[:SR_CAMP_FIRST])}</ul>{more}</section>')
 
-            by_camp = "".join(camp_block(c, n) for c, n in camps)
+            # не писавшая основная сторона — на своём месте приглушённым заголовком «не писали», как кнопка в фильтре
+            def silent_block(c: str) -> str:
+                return (f'<section class="col"><h3 class="group none">{dot(c)}{e(camp_names.get(c, c))}: '
+                        f'{L["silent"]}</h3></section>')
+
+            blocks = [(c, camp_block(c, n)) for c, n in camps] + [(c, silent_block(c)) for c in core if not per_camp.get(c)]
+            blocks.sort(key=lambda cb: camp_order.index(cb[0]) if cb[0] in camp_order else 99)
+            by_camp = "".join(b for _, b in blocks)
+            # фильтр по разделам заменяет на странице «Писали»: разделы, что писали, в порядке сторон, а не писавшая
+            # основная сторона — приглушённой некликабельной кнопкой «не писали». Один раздел — фильтровать нечего,
+            # тогда остаётся «Писали»
+            def chip(c: str) -> str:
+                name = e(camp_names.get(c, c))
+                if per_camp.get(c):
+                    return f'<button class="chip" data-s="{e(c)}" aria-pressed="false">{dot(c)}{name}</button>'
+                return f'<span class="chip none">{dot(c)}{name}: {L["silent"]}</span>'
+            order = [c for c in camp_order if per_camp.get(c) or c in core] + [c for c, _ in camps if c not in camp_order]
+            chips = ("" if len(camps) < 2 else
+                     f'<nav class="chips" data-view="time"><button class="chip" aria-pressed="true">{L["all"]}</button>'
+                     + "".join(chip(c) for c in order) + '</nav>')
             by_day, current = [], None
             for u in news:
                 d = day_name(when(u))
@@ -1579,8 +1632,9 @@ def _write_reader(state: dict, vectors: dict, archive: dict) -> None:
 <a class="back" href="{L["home"]}#teme">← {L["title"]}</a>
 <h1>{e(title)}</h1>
 <p class="meta">{k}. {L["nth"]} · {meta} · {L["last"]} {local(story["updated"], "%d.%m.")} {L["at"]} {local(story["updated"], "%H:%M")}</p>
-{balance}
+{"" if chips else balance}
 <div class="seg" role="group"><button data-show="time" aria-pressed="true">{L["by_time"]}</button><button data-show="camps" aria-pressed="false">{L["by_side"]}</button></div>
+{chips}
 <div data-view="time" class="narrow">{"".join(by_day)}</div>
 <div data-view="camps" class="cols" hidden>{by_camp}</div>
 <nav class="nav">{prev}{after}</nav>
