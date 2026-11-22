@@ -90,7 +90,8 @@ LOCAL_TZ = ZoneInfo("Europe/Belgrade")
 # новом названии пишется заново. На раскладку не влияет, поэтому и не в отпечатке правил
 NAME_PROMPT = """Ты называешь темы агрегатора новостей о Сербии. Название — заголовок темы для читателя.
 Вход — JSON: stories — темы, id вида S…: name — прежнее название, если было; news — свежие и самые типичные новости темы (что произошло).
-Для каждой темы верни name — по-русски, от двух до семи слов: о чём тема сейчас, по свежим новостям. Как рубрика: именительный падеж, без глагола в личной форме («Учредительное заседание Скупщины Сербии», «Крах «Алта банка»», «Травмы детей на эскалаторе в ТЦ «Галерия»»). Только слова, которые правда говорят по-русски. Отглагольное существительное — лишь привычное («задержание», «избиение», «поджог», «отставка»); не сочиняй таких, как «облитие», «закидывание», «подписание заявления об уходе». Если привычного слова нет, назови событие другим существительным или через участника: не «Облитие йогуртом депутатки Лидии Вукичевич», а «Нападение на депутатку Лидию Вукичевич» или «Инцидент с йогуртом у Скупщины». Если прежнее название нарушает эти правила — исправь его. Ситуация целиком, а не один её эпизод и не одно заявление. Если прежнее название ещё верно — верни его как есть. Без оценок, без кавычек вокруг и без точки в конце."""
+Для каждой темы верни name — по-русски, от двух до семи слов: о чём тема сейчас, по свежим новостям. Как рубрика: именительный падеж, без глагола в личной форме («Учредительное заседание Скупщины Сербии», «Крах «Алта банка»», «Травмы детей на эскалаторе в ТЦ «Галерия»»). Только слова, которые правда говорят по-русски. Отглагольное существительное — лишь привычное («задержание», «избиение», «поджог», «отставка»); не сочиняй таких, как «облитие», «закидывание», «подписание заявления об уходе». Если привычного слова нет, назови событие другим существительным или через участника: не «Облитие йогуртом депутатки Лидии Вукичевич», а «Нападение на депутатку Лидию Вукичевич» или «Инцидент с йогуртом у Скупщины». Если прежнее название нарушает эти правила — исправь его. Ситуация целиком, а не один её эпизод и не одно заявление. Если прежнее название ещё верно — верни его как есть. Без оценок, без кавычек вокруг и без точки в конце.
+У большой темы есть event — её ситуация — и whole — самые типичные её новости за всё время. Её название — про всю ситуацию по event и whole: о ней пишут несколько дней, и под названием читатель видит все её новости. Свежие news — только чтобы заметить, что ситуация перешла в следующий этап; последний эпизод, спор или заявление — не название большой темы (не «Жалоба СНС на захват постов в Скупщине», а «Учредительное заседание Скупщины Сербии»)."""
 NAME_SCHEMA = {
     "type": "object",
     "properties": {
@@ -113,6 +114,10 @@ NAME_NEW = 5
 NAME_RECENT = timedelta(hours=24)  # свежие новости темы — за столько до её последней
 NAME_SHOWN = 8  # сколько новостей темы видит модель: самые типичные из свежих
 NAME_MAX = 80
+# большая тема — по всей ситуации: 22.11 s9278 (1999 новостей за неделю учредительного заседания Скупщины) называлась
+# «Жалоба СНС на захват постов в Скупщине» — по последним суткам, а с новым названием и карточку переписывали по ним
+NAME_BIG = 60  # с стольких новостей тема большая
+NAME_WHOLE = 300  # из скольких её новостей (равномерно за всё время) выбираем самые типичные
 
 
 def load_state() -> tuple[dict, dict]:
@@ -248,7 +253,7 @@ def _apply(state: dict, vectors: dict, now: str, c: dict, by_n: dict) -> str:
             return f"{news} уже в {c['to']}"
         return f"{news}: {', '.join(olds)} → {c['to']} (часть {', '.join(sorted(set(parts)))})"
     if c["do"] == "fix":  # кнопка отчёта проверки дня
-        return stories_audit.apply_fix(state, c["day"], c["which"], now)
+        return stories_audit.apply_fix(state, c["day"], c["which"], now, vectors)
     if c["do"] == "split":
         known = {it["part"] for it in state["items"].values() if it.get("story")}
         missing = [p for p in c["parts"] if p not in known]
@@ -274,7 +279,8 @@ def make_client():
 def step_of(system: str) -> str:
     """Шаг сборки по системному промпту запроса — для расхода по шагам."""
     return {stories.SYSTEM_PROMPT: "раскладка", stories.RECHECK_PROMPT: "перепроверка", stories.MERGE_PROMPT: "склейка",
-            stories.LINES_PROMPT: "деление", NAME_PROMPT: "имена", stories.CARD_PROMPT: "карточки", stories_audit.AUDIT_PROMPT: "аудит",
+            stories.LINES_PROMPT: "деление", NAME_PROMPT: "имена", stories.CARD_PROMPT: "карточки",
+            stories_audit.AUDIT_PROMPT: "аудит", stories_audit.PARTS_PROMPT: "аудит", stories_audit.PLACE_PROMPT: "аудит",
             stories_audit.ADVICE_PROMPT: "аудит", SR_HEAD_PROMPT: "заголовки sr"}.get(system, "другое")
 
 
@@ -449,6 +455,7 @@ def name_stories(state: dict, vectors: dict, ask, now: str) -> int:
     for start in range(0, len(todo), NAME_BATCH):
         chunk = todo[start:start + NAME_BATCH]
         content = json.dumps({"stories": [{"id": f"S{n}"} | ({"name": names[sid]} if sid in names else {})
+                                          | (big_theme(state, vectors, sid) if is_big(state, sid) else {})
                                           | {"news": recent_news(state, vectors, sid)} for n, sid in enumerate(chunk)]},
                              ensure_ascii=False)
         answer, _ = ask(NAME_PROMPT, content, NAME_SCHEMA)
@@ -457,12 +464,31 @@ def name_stories(state: dict, vectors: dict, ask, now: str) -> int:
             if n.isdigit() and int(n) < len(chunk) and named["name"].strip():
                 name, sid = stories.clean_name(named["name"]), chunk[int(n)]
                 name = name if len(name) <= NAME_MAX else name[:NAME_MAX].rsplit(" ", 1)[0]  # по словам
-                if sid in names and names[sid] != name:
-                    state.get("cards", {}).pop(sid, None)  # ситуация сменилась — и карточка заново
+                if sid in names and names[sid] != name and not is_big(state, sid):
+                    # ситуация сменилась — и карточка заново. У большой — нет: карточку пишут по последним новостям,
+                    # а она про всю тему, и название большой темы берётся из неё
+                    state.get("cards", {}).pop(sid, None)
                 names[sid] = name
                 named_at[sid] = len(state["stories"][sid]["urls"])
                 named_t[sid] = now
     return len(todo)
+
+
+def is_big(state: dict, sid: str) -> bool:
+    return len(state["stories"][sid]["urls"]) >= NAME_BIG
+
+
+def big_theme(state: dict, vectors: dict, sid: str) -> dict:
+    """Что модель видит о большой теме целиком: event — карточка, whole — NAME_SHOWN самых типичных новостей из
+    NAME_WHOLE, взятых равномерно за всё время, по времени."""
+    urls = state["stories"][sid]["urls"]
+    pool = [u for u in urls[::max(len(urls) // NAME_WHOLE, 1)] if u in vectors]
+    if len(pool) > NAME_SHOWN:
+        v = np.stack([vectors[u] for u in pool]).astype(np.float32)
+        keep = set(np.argsort(-(v @ v.T).mean(axis=1))[:NAME_SHOWN])
+        pool = [u for k, u in enumerate(pool) if k in keep]
+    return ({"event": state["cards"][sid]} if sid in state.get("cards", {}) else {}) | {
+        "whole": list(dict.fromkeys(stories.text_of(state["items"][u]) for u in pool))}
 
 
 def recent_news(state: dict, vectors: dict, sid: str) -> list[str]:
@@ -586,17 +612,12 @@ def run(archive: dict, sections: dict) -> None:
             if "audit" in arrived:
                 sent, answers, spent_usd = arrived["audit"]
                 audit_day = sent["day"]
-                audit = stories_audit.finish(state, audit_day, sent["sids"], sent["chunks"], sent["sizes"], answers,
-                                             spent_usd, ask)
+                audit = stories_audit.finish(state, sent, answers, spent_usd, ask, vectors, now)
             else:
                 audit_day = stories_audit.due(state, now, LOCAL_TZ)
-                sids, chunks = stories_audit.todo(state, audit_day)
-                calls = [(stories_audit.AUDIT_PROMPT, stories_audit.request(state, chunk), stories_audit.AUDIT_SCHEMA,
-                          stories_audit.AUDIT_EFFORT, stories_audit.AUDIT_MODEL, stories_audit.AUDIT_PRICE) for chunk in chunks]
-                sizes = stories_audit.sizes(state, chunks, now)
-                sent = {"day": audit_day, "sids": sids, "chunks": chunks, "sizes": sizes}
+                calls, sent = stories_audit.prepare(state, audit_day, now)
                 if got := send(client, state, "audit", calls, sent, now, ask):
-                    audit = stories_audit.finish(state, audit_day, sids, chunks, sizes, *got, ask)
+                    audit = stories_audit.finish(state, sent, *got, ask, vectors, now)
         except Exception as exc:  # noqa: BLE001
             traceback.print_exc()
             print(f"Сюжеты: проверка дня не прошла — {type(exc).__name__}: {exc}"[:300], file=sys.stderr)
