@@ -1269,16 +1269,16 @@ h1{margin:14px 0 4px;font-size:32px;font-weight:900;color:var(--strong);line-hei
 .more summary{cursor:pointer;color:var(--muted);font-size:14px;font-weight:700;padding:2px 0 8px;list-style:none}
 .more summary::-webkit-details-marker{display:none}.more summary::after{content:" ↓"}.more[open] summary::after{content:" ↑"}
 .more summary:hover{color:var(--strong)}
-.ep{border-bottom:1.5px solid var(--soft)}
-.ep>summary{cursor:pointer;list-style:none;padding:12px 0;display:flex;gap:12px;align-items:baseline;justify-content:space-between}
-.ep>summary::-webkit-details-marker{display:none}
-.ep-t{font-weight:700;color:var(--strong);font-size:17px;line-height:1.3}
-.ep-t::after{content:" ↓";color:var(--muted)}.ep[open] .ep-t::after{content:" ↑"}
-.ep>summary:hover .ep-t{color:var(--hover)}
-.ep .n{flex:none;color:var(--faint);font-size:13px;white-space:nowrap}
-.ep .group:first-of-type{margin-top:4px}
-.ep[open]{padding-bottom:14px}
-@media (max-width:600px){.ep>summary{flex-direction:column;gap:3px}}
+/* «По сюжетам»: каждый сюжет раскрыт — название, полоска по дням, 3 свежие новости и «Ещё», остальные по дням */
+.ep{padding:18px 0 8px;border-bottom:1.5px solid var(--soft)}
+.ep-t{margin:0;font-size:19px;line-height:1.3;color:var(--strong)}
+.ep-line{display:flex;gap:10px;align-items:center;margin:4px 0 10px;color:var(--faint);font-size:13px}
+.spark{display:inline-flex;gap:2px;align-items:flex-end;height:16px}
+.spark i{display:block;width:6px;background:var(--muted);border-radius:1px;opacity:.55}
+.spark i.z{opacity:.2}
+.ep .group:first-of-type{margin-top:6px}
+.ep-more{border:0;background:none;padding:2px 0 8px;font:inherit;font-size:14px;font-weight:700;color:var(--muted);cursor:pointer}
+.ep-more:hover{color:var(--strong)}
 .nav{display:flex;justify-content:space-between;gap:16px;margin-top:28px;font-size:14px;font-weight:700;color:var(--muted)}
 .nav a{text-decoration:none}.nav a:hover{color:var(--strong)}
 /* компьютер: на главной сюжет в две колонки — слева заголовок и стороны, справа новости; на странице сюжета
@@ -1356,6 +1356,43 @@ document.querySelectorAll('.wrap .seg button').forEach(b => b.addEventListener('
   document.querySelectorAll('.wrap .seg button').forEach(x => x.setAttribute('aria-pressed', x === b));
   document.querySelectorAll('[data-view]').forEach(v => v.hidden = !v.dataset.view.split(' ').includes(b.dataset.show));
 }));
+// «По сюжетам»: в свёрнутом сюжете — EP_FIRST свежих новостей из тех, что проходят фильтр разделов (secOn) и поиск
+// (qHit), без заголовков дней; «Ещё» раскрывает остальные по дням. Число новостей — сколько проходят. Сюжет, в котором
+// не осталось ни одной, прячется; при поиске сюжеты с находками раскрыты
+const EP_FIRST = 3;
+window.layoutEps = layoutEps;
+function layoutEps() {
+  const box = document.querySelector('[data-view=eps]');
+  if (!box) return;
+  const [one, few, many] = box.dataset.forms.split('|');
+  const news = n => n + ' ' + (n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? few : many);
+  box.querySelectorAll('section.ep').forEach(ep => {
+    const rows = [...ep.querySelectorAll('.row')];
+    const ok = rows.filter(r => (!window.secOn || window.secOn.has(r.dataset.s)) && (!window.qHit || window.qHit(r)));
+    const open = ep.dataset.open === '1' || !!window.qHit;
+    rows.forEach(r => r.hidden = true);
+    ok.forEach((r, i) => r.hidden = !open && i >= EP_FIRST);
+    ep.querySelectorAll('.items').forEach(ul => {
+      const any = !!ul.querySelector('.row:not([hidden])'), h = ul.previousElementSibling;
+      ul.hidden = !any;
+      if (h && h.matches('h3.group')) h.hidden = !any || !open;
+    });
+    ep.hidden = !ok.length;
+    ep.querySelector('.k').textContent = news(ok.length);
+    const more = ep.querySelector('.ep-more');
+    more.hidden = ok.length <= EP_FIRST || !!window.qHit;
+    more.textContent = open ? box.dataset.less + ' ↑' : box.dataset.more + ' ' + news(ok.length - EP_FIRST) + ' ↓';
+  });
+}
+document.addEventListener('click', ev => {
+  const b = ev.target.closest('.ep-more');
+  if (!b) return;
+  const ep = b.closest('section.ep'), closing = ep.dataset.open === '1';
+  ep.dataset.open = closing ? '0' : '1';
+  layoutEps();
+  if (closing && ep.getBoundingClientRect().top < 0) ep.scrollIntoView();  // свернули длинный — назад к его началу
+});
+layoutEps();
 // фильтр на странице темы — только в виде «По времени» (в «По сторонам» стороны и так колонками), как в общей ленте: «Все» или выбранные разделы. Первый клик по разделу оставляет
 // только его, следующие добавляют или убирают; убрали последний — снова «Все»
 const chips = document.querySelectorAll('.chips button.chip');
@@ -1368,18 +1405,13 @@ if (chips.length) {
     chips.forEach(c => c.setAttribute('aria-pressed', c.dataset.s ? !all && on.has(c.dataset.s) : all));
     document.querySelectorAll('.items .row[data-s]').forEach(r => r.hidden = !on.has(r.dataset.s));
     // день без новостей выбранных разделов — без заголовка
-    document.querySelectorAll('[data-view=time] .items, [data-view=eps] .items').forEach(ul => {
+    document.querySelectorAll('[data-view=time] .items').forEach(ul => {
       const h = ul.previousElementSibling, empty = !ul.querySelector('.row:not([hidden])');
       ul.hidden = empty;
       if (h && h.matches('h3.group')) h.hidden = empty;
     });
-    // эпизод без новостей выбранных разделов — тоже прячем, а число в нём — сколько осталось
-    document.querySelectorAll('details.ep').forEach(d => {
-      const n = d.querySelectorAll('.row:not([hidden])').length;
-      d.hidden = !n;
-      const c = d.querySelector('.n .k');
-      if (c) c.textContent = all ? '' : n + ' / ';
-    });
+    window.secOn = all ? null : on;
+    layoutEps();
   };
   chips.forEach(c => c.addEventListener('click', () => {
     const all = on.size === ids.length, s = c.dataset.s;
@@ -1505,15 +1537,13 @@ function search() {
     a.hidden = !!q && !title && !a.querySelector('li:not([hidden])');
   });
   document.querySelectorAll('.wrap details.more').forEach(d => d.open = !!q);
-  document.querySelectorAll('.wrap details.ep').forEach(d => {
-    d.hidden = !!q && !d.querySelector('li:not([hidden])');
-    d.open = !!q && !d.hidden;  // нашли — эпизоды с находками раскрыты; стёрли поиск — снова свёрнуты
-  });
   document.querySelectorAll('.wrap section.col').forEach(s => s.hidden = !!q && !s.querySelector('li:not([hidden])'));
   document.querySelectorAll('.wrap h3.group').forEach(h => {
     const ul = h.nextElementSibling;
     if (ul && ul.tagName === 'UL') h.hidden = !!q && !ul.querySelector('li:not([hidden])');
   });
+  window.qHit = q ? (li => hit(li, q)) : null;  // «По сюжетам» раскладывает свои новости сам (layoutEps)
+  if (window.layoutEps) layoutEps();
 }
 qInput.addEventListener('input', search);
 qInput.addEventListener('keydown', e => { if (e.key === 'Escape' && qInput.value) { qInput.value = ''; search(); } });
@@ -1543,7 +1573,7 @@ READER = {
                  "aqi": ["dobar", "prihvatljiv", "umeren", "loš", "veoma loš", "izuzetno loš"]}, "updated": "ažurirano", "at": "u",
         "since": "od", "all": "Sve", "page": "Stranica teme", "wrote": "Pisali su:", "silent": "nisu pisali",
         "others": "Ostali mediji:", "nth": "tema dana", "last": "poslednja", "by_time": "Po vremenu",
-        "by_side": "Po stranama", "by_ep": "Po događajima", "more": "Još", "prev": "Prethodna tema", "next": "Sledeća tema",
+        "by_side": "Po stranama", "by_ep": "Po događajima", "more": "Još", "less": "Skupi", "prev": "Prethodna tema", "next": "Sledeća tema",
         "none": "Još nema tema.", "min": "min", "h": "h",
         "days": ["ponedeljak", "utorak", "sreda", "četvrtak", "petak", "subota", "nedelja"],
         "months": ["januara", "februara", "marta", "aprila", "maja", "juna", "jula", "avgusta", "septembra",
@@ -1558,7 +1588,7 @@ READER = {
                  "aqi": ["хороший", "приемлемый", "умеренный", "плохой", "очень плохой", "крайне плохой"]}, "updated": "обновлено", "at": "в",
         "since": "с", "all": "Все", "page": "Страница темы", "wrote": "Писали:", "silent": "не писали",
         "others": "Остальные издания:", "nth": "тема дня", "last": "последняя", "by_time": "По времени",
-        "by_side": "По сторонам", "by_ep": "По сюжетам", "more": "Ещё", "prev": "Предыдущая тема", "next": "Следующая тема",
+        "by_side": "По сторонам", "by_ep": "По сюжетам", "more": "Ещё", "less": "Свернуть", "prev": "Предыдущая тема", "next": "Следующая тема",
         "none": "Тем пока нет.", "min": "мин", "h": "ч",
         "days": ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"],
         "months": ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября",
@@ -1858,12 +1888,24 @@ def _write_reader(state: dict, vectors: dict, archive: dict) -> None:
             by_day = [by_days(news)]
             # большая тема — по эпизодам: список свёрнутых эпизодов, внутри — по дням. Этот вид — первым
 
+            theme_days = sorted({local(when(u), "%Y-%m-%d") for u in urls})
+
+            def spark(members: list[str]) -> str:  # полоска по дням темы: высота — сколько новостей сюжета в этот день
+                per_day = Counter(local(when(u), "%Y-%m-%d") for u in members)
+                top = max(per_day.values())
+                title = ", ".join(f"{d[8:]}.{d[5:7]}.: {per_day[d]}" for d in theme_days)
+                return (f'<span class="spark" title="{title}">' + "".join(
+                    f'<i{"" if per_day[d] else " class=z"} style="height:{max(2, round(16 * per_day[d] / top))}px"></i>'
+                    for d in theme_days) + '</span>')
+
             def episode(ep: dict, members: list[str]) -> str:
                 first, last = local(when(members[0]), "%d.%m."), local(when(members[-1]), "%d.%m.")
                 span = first if first == last else f"{first}–{last}"
-                return (f'<details class="ep"><summary><span class="ep-t">{e(ep[lang])}</span>'
-                        f'<span class="n">{span} · <span class="k"></span>{count(len(members), *L["news"])}</span></summary>'
-                        f'{by_days(sorted(members, key=lambda u: (when(u), state["items"][u]["n"]), reverse=True))}</details>')
+                return (f'<section class="ep" data-open="0"><h3 class="ep-t">{e(ep[lang])}</h3>'
+                        f'<div class="ep-line">{spark(members)}<span>{span} · <span class="k">'
+                        f'{count(len(members), *L["news"])}</span></span></div>'
+                        f'{by_days(sorted(members, key=lambda u: (when(u), state["items"][u]["n"]), reverse=True))}'
+                        f'<button class="ep-more" type="button"></button></section>')
             by_ep = "".join(episode(ep, m) for ep, m in eps)
             prev = f'<a href="../{shown[k - 2]}/">← {L["prev"]}</a>' if k > 1 else "<span></span>"
             after = f'<a href="../{shown[k]}/">{L["next"]} →</a>' if k < len(shown) else "<span></span>"
@@ -1874,7 +1916,7 @@ def _write_reader(state: dict, vectors: dict, archive: dict) -> None:
 {"" if chips else balance}
 <div class="seg" role="group">{f'<button data-show="eps" aria-pressed="true">{L["by_ep"]}</button>' if eps else ""}<button data-show="time" aria-pressed="{"false" if eps else "true"}">{L["by_time"]}</button><button data-show="camps" aria-pressed="false">{L["by_side"]}</button></div>
 {chips}
-{f'<div data-view="eps" class="narrow">{by_ep}</div>' if eps else ""}
+{f'<div data-view="eps" class="narrow" data-forms="{"|".join(L["news"])}" data-more="{L["more"]}" data-less="{L["less"]}">{by_ep}</div>' if eps else ""}
 <div data-view="time" class="narrow"{" hidden" if eps else ""}>{"".join(by_day)}</div>
 <div data-view="camps" class="cols" hidden>{by_camp}</div>
 <nav class="nav">{prev}{after}</nav>
