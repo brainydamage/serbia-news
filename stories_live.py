@@ -48,6 +48,10 @@ COMMANDS_SHOWN = 30  # последних команд с итогом — на 
 START = "2026-11-12T16:05:00+00:00"
 # новость без перевода ждёт одну сборку (перевод мог опоздать), потом идёт по оригинальному заголовку
 WAIT_TRANSLATION = timedelta(minutes=20)
+# новость, опубликованная раньше, чем мы её увидели, на столько, в темы не идёт: это расследования и длинные тексты,
+# которые издание отдаёт в RSS с опозданием (BIRN, KRIK, DW). 22.11 DW от 5.11 о делах против СНС попала в тему
+# учредительного заседания Скупщины и та на странице «началась 5 ноября». В ленте сайта такие новости остаются
+LATE = timedelta(days=3)
 # константы stories.py, которые не меняют раскладку, — не в отпечатке: их правка не раскладывает всё заново
 NOT_RULES = {"LINES_STEP", "MERGE_EVERY"}
 # прежние отпечатки, при которых раскладку не пересобираем — новые правила действуют на следующие новости:
@@ -146,12 +150,17 @@ def known_sources() -> set[str]:
     return {src["name"] for s in json.loads(SOURCES_FILE.read_text("utf-8"))["sections"] for src in s.get("sources", [])}
 
 
-def drop_gone_sources(state: dict, vectors: dict, known: set[str]) -> int:
-    """Новости изданий, которых больше нет в sources.json, — вон из сюжетов и из памяти вместе с векторами, а сюжеты,
-    в которых ничего не осталось, — тоже (имена, карточки и прочее за ними подчистит forget_old). Иначе убранное
-    издание (18.11 — Google News EN и RU, мелкие сайты со всего мира) ещё дни сидело бы в растущих сюжетах и в счёте
-    изданий. Архив помнит их ARCHIVE_DAYS — новые новости таких изданий в сюжеты не берём (run). Возвращает, сколько убрано."""
-    gone = [u for u, it in state["items"].items() if it["source"] not in known]
+def late(published: str | None, seen: str) -> bool:
+    """Опубликована больше чем за LATE до того, как мы её увидели."""
+    try:
+        return bool(published) and datetime.fromisoformat(seen) - datetime.fromisoformat(published) > LATE
+    except (ValueError, TypeError):  # нет даты или она без часового пояса
+        return False
+
+
+def drop_items(state: dict, vectors: dict, gone: list[str]) -> int:
+    """Новости — вон из сюжетов и из памяти вместе с векторами, а сюжеты, в которых ничего не осталось, — тоже (имена,
+    карточки и прочее за ними подчистит forget_old). Возвращает, сколько убрано."""
     for u in gone:
         it = state["items"].pop(u)
         vectors.pop(u, None)
@@ -161,6 +170,18 @@ def drop_gone_sources(state: dict, vectors: dict, known: set[str]) -> int:
     for sid in [sid for sid, story in state["stories"].items() if not story["urls"]]:
         del state["stories"][sid]
     return len(gone)
+
+
+def drop_gone_sources(state: dict, vectors: dict, known: set[str]) -> int:
+    """Новости изданий, которых больше нет в sources.json, — вон из сюжетов. Иначе убранное издание (18.11 — Google
+    News EN и RU, мелкие сайты со всего мира) ещё дни сидело бы в растущих сюжетах и в счёте изданий. Архив помнит их
+    ARCHIVE_DAYS — новые новости таких изданий в сюжеты не берём (run)."""
+    return drop_items(state, vectors, [u for u, it in state["items"].items() if it["source"] not in known])
+
+
+def drop_late(state: dict, vectors: dict) -> int:
+    """Поздние новости (LATE), разложенные до 22.11, — вон из тем; новые такие в темы не берём (run)."""
+    return drop_items(state, vectors, [u for u, it in state["items"].items() if late(it.get("published"), it["seen"])])
 
 
 def forget_old(state: dict, vectors: dict, now: str) -> None:
@@ -182,6 +203,7 @@ def forget_old(state: dict, vectors: dict, now: str) -> None:
                       for sid, name in state.get("names", {}).items() if sid in state["stories"]}
     state["named_at"] = {sid: n for sid, n in state.get("named_at", {}).items() if sid in state["stories"]}
     state["named_t"] = {sid: t for sid, t in state.get("named_t", {}).items() if sid in state["stories"]}
+    state["episodes"] = {sid: ep for sid, ep in state.get("episodes", {}).items() if sid in state["stories"]}
     state.pop("names_whole", None)  # прежняя разовая чистка обрезанных имён; теперь имена обновляются, когда сюжет вырос
     state["lines"] = {sid: v for sid, v in state.get("lines", {}).items() if sid in state["stories"]}
     state["spun"] = {sid: p for sid, p in state.get("spun", {}).items() if sid in state["stories"]}
@@ -281,7 +303,7 @@ def step_of(system: str) -> str:
     return {stories.SYSTEM_PROMPT: "раскладка", stories.RECHECK_PROMPT: "перепроверка", stories.MERGE_PROMPT: "склейка",
             stories.LINES_PROMPT: "деление", NAME_PROMPT: "имена", stories.CARD_PROMPT: "карточки",
             stories_audit.AUDIT_PROMPT: "аудит", stories_audit.PARTS_PROMPT: "аудит", stories_audit.PLACE_PROMPT: "аудит",
-            stories_audit.ADVICE_PROMPT: "аудит", SR_HEAD_PROMPT: "заголовки sr"}.get(system, "другое")
+            stories_audit.ADVICE_PROMPT: "аудит", SR_HEAD_PROMPT: "заголовки sr", EPISODE_PROMPT: "эпизоды"}.get(system, "другое")
 
 
 def spender(state: dict, day: str):
@@ -532,11 +554,14 @@ def run(archive: dict, sections: dict) -> None:
     known = known_sources()
     if gone := drop_gone_sources(state, vectors, known):
         print(f"Сюжеты: убрано {gone} новостей изданий, которых больше нет в sources.json", file=sys.stderr)
+    if gone := drop_late(state, vectors):
+        print(f"Сюжеты: убрано из тем {gone} поздних новостей (опубликованы раньше, чем пришли, больше чем на "
+              f"{LATE.days} дня)", file=sys.stderr)
     since = max(START, (datetime.fromisoformat(now) - stories.LIVE).isoformat())
     wait = (datetime.fromisoformat(now) - WAIT_TRANSLATION).isoformat()
     items = [(u, a) for u, a in archive.items()
              if u not in state["items"] and a["source"] in known and stories.eligible(a) and a["seen"] >= since
-             and (a.get("ru") or a.get("what") or a["seen"] < wait)]
+             and not late(a.get("date"), a["seen"]) and (a.get("ru") or a.get("what") or a["seen"] < wait)]
     items.sort(key=lambda x: x[1]["seen"])
     print(f"Сюжеты: новых новостей {len(items)}{f' (раскладываем заново: {rebuilt})' if rebuilt else ''}", file=sys.stderr)
 
@@ -586,6 +611,11 @@ def run(archive: dict, sections: dict) -> None:
               "имена и поиск отдельных событий в больших сюжетах…", file=sys.stderr)
     recheck_later(client, state, now, ask)
     name_stories(state, vectors, ask, now)
+    try:  # эпизоды больших тем — для страниц тем; не вышло — темы покажутся без них, по дням
+        name_episodes(state, vectors, ask, page_stories(state, now)[0])
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        print(f"Сюжеты: эпизоды не названы — {type(exc).__name__}: {exc}"[:300], file=sys.stderr)
     # сюжеты, которые сейчас в топе, — для вечерней проверки и деления: на отдельные события проверяем только топ
     # (сюжеты за день, хоть раз бывшие в нём), остальные читатель почти не открывает
     cutoff = (datetime.fromisoformat(now) - PAGE_WINDOW).isoformat()
@@ -1156,6 +1186,38 @@ def sr_headlines(state: dict, vectors: dict, ask) -> int:
 SR_SPECTRUM = ["independent", "mainstream", "state", "progov"]
 SR_FIRST = 5  # сколько свежих новостей сюжета видно на главной; все — на странице сюжета
 SR_CAMP_FIRST = 8  # на странице сюжета — сколько новостей каждой стороны видно сразу
+# большая тема на странице — по эпизодам: 22.11 s9278 (учредительное заседание Скупщины, 2000 новостей за неделю)
+# сплошной лентой по дням читать было невозможно. Эпизоды — группы похожих новостей (k-means по векторам), названия
+# им даёт Haiku по самым типичным новостям группы (EPISODE_PROMPT); на странице — самые горячие сверху, как темы. Склеенные части
+# тут не помогают: 1400 новостей s9278 раскладка сразу положила в саму тему. Подписывать эпизод самой типичной новостью
+# — обманчиво: 163 новости о нападении на Вукичевич и споре в Скупщине об извинениях звались «Лидию облили йогуртом».
+# Эпизоды хранятся в state["episodes"]: заново — когда тема выросла в EPISODES_REDO раза, а пока новые новости идут в
+# ближайший эпизод. Иначе от сборки к сборке менялись бы и группы, и названия (и запросы к модели)
+EPISODES_FROM = 100  # со скольких новостей тема показывается по эпизодам
+EPISODE_SIZE = 150  # примерно столько новостей на эпизод
+EPISODES_MIN, EPISODES_MAX = 4, 12
+EPISODE_SMALL = 0.015  # эпизод меньше этой доли темы (и меньше 5 новостей) уходит в ближайший
+EPISODES_REDO = 1.25
+EPISODE_SHOWN = 8  # сколько самых типичных новостей эпизода видит модель
+EPISODE_PROMPT = """Ты делишь большую тему агрегатора новостей о Сербии на эпизоды для читателя. Новости уже разбиты на группы; ты даёшь каждой группе название.
+Вход — JSON: theme — название всей темы; episodes — группы, id вида E…: count — сколько в ней новостей, from и to — даты первой и последней, news — самые типичные её новости.
+Для каждой группы верни ru — название по-русски и sr — то же по-сербски латиницей. Название — от двух до шести слов, как подзаголовок раздела: именительный падеж, без глагола в личной форме, без оценок, без кавычек вокруг и без точки в конце («Выбор председателя Скупщины», «Нападение на Лидию Вукичевич», «Выборы вице-спикеров»). Оно о том, что объединяет новости группы, а не об одной из них. Не повторяй название темы и не давай двум группам одинаковых названий: если группы похожи, назови, чем они различаются. Имена людей и организаций по-сербски — в сербском написании (Vukićević, Čupić, SNS)."""
+EPISODE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "episodes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"id": {"type": "string"}, "ru": {"type": "string"}, "sr": {"type": "string"}},
+                "required": ["id", "ru", "sr"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["episodes"],
+    "additionalProperties": False,
+}
 SR_COLORS = {"independent": "#1d4ed8", "investigations": "#8ec7c3", "progov": "#dc2626", "state": "#c084fc",
              "mainstream": "#71827a", "economy": "#9e8f55", "foreign-sr": "#e6b690", "foreign": "#ef7f16",
              "reddit": "#8a423a", "trends": "#3087b3", "regional": "#38d64e"}  # как --c-* в template.html
@@ -1207,6 +1269,16 @@ h1{margin:14px 0 4px;font-size:32px;font-weight:900;color:var(--strong);line-hei
 .more summary{cursor:pointer;color:var(--muted);font-size:14px;font-weight:700;padding:2px 0 8px;list-style:none}
 .more summary::-webkit-details-marker{display:none}.more summary::after{content:" ↓"}.more[open] summary::after{content:" ↑"}
 .more summary:hover{color:var(--strong)}
+.ep{border-bottom:1.5px solid var(--soft)}
+.ep>summary{cursor:pointer;list-style:none;padding:12px 0;display:flex;gap:12px;align-items:baseline;justify-content:space-between}
+.ep>summary::-webkit-details-marker{display:none}
+.ep-t{font-weight:700;color:var(--strong);font-size:17px;line-height:1.3}
+.ep-t::after{content:" ↓";color:var(--muted)}.ep[open] .ep-t::after{content:" ↑"}
+.ep>summary:hover .ep-t{color:var(--hover)}
+.ep .n{flex:none;color:var(--faint);font-size:13px;white-space:nowrap}
+.ep .group:first-of-type{margin-top:4px}
+.ep[open]{padding-bottom:14px}
+@media (max-width:600px){.ep>summary{flex-direction:column;gap:3px}}
 .nav{display:flex;justify-content:space-between;gap:16px;margin-top:28px;font-size:14px;font-weight:700;color:var(--muted)}
 .nav a{text-decoration:none}.nav a:hover{color:var(--strong)}
 /* компьютер: на главной сюжет в две колонки — слева заголовок и стороны, справа новости; на странице сюжета
@@ -1282,7 +1354,7 @@ document.addEventListener('click', ev => {
 });
 document.querySelectorAll('.wrap .seg button').forEach(b => b.addEventListener('click', () => {
   document.querySelectorAll('.wrap .seg button').forEach(x => x.setAttribute('aria-pressed', x === b));
-  document.querySelectorAll('[data-view]').forEach(v => v.hidden = v.dataset.view !== b.dataset.show);
+  document.querySelectorAll('[data-view]').forEach(v => v.hidden = !v.dataset.view.split(' ').includes(b.dataset.show));
 }));
 // фильтр на странице темы — только в виде «По времени» (в «По сторонам» стороны и так колонками), как в общей ленте: «Все» или выбранные разделы. Первый клик по разделу оставляет
 // только его, следующие добавляют или убирают; убрали последний — снова «Все»
@@ -1296,10 +1368,17 @@ if (chips.length) {
     chips.forEach(c => c.setAttribute('aria-pressed', c.dataset.s ? !all && on.has(c.dataset.s) : all));
     document.querySelectorAll('.items .row[data-s]').forEach(r => r.hidden = !on.has(r.dataset.s));
     // день без новостей выбранных разделов — без заголовка
-    document.querySelectorAll('[data-view=time] .items').forEach(ul => {
+    document.querySelectorAll('[data-view=time] .items, [data-view=eps] .items').forEach(ul => {
       const h = ul.previousElementSibling, empty = !ul.querySelector('.row:not([hidden])');
       ul.hidden = empty;
       if (h && h.matches('h3.group')) h.hidden = empty;
+    });
+    // эпизод без новостей выбранных разделов — тоже прячем, а число в нём — сколько осталось
+    document.querySelectorAll('details.ep').forEach(d => {
+      const n = d.querySelectorAll('.row:not([hidden])').length;
+      d.hidden = !n;
+      const c = d.querySelector('.n .k');
+      if (c) c.textContent = all ? '' : n + ' / ';
     });
   };
   chips.forEach(c => c.addEventListener('click', () => {
@@ -1426,6 +1505,10 @@ function search() {
     a.hidden = !!q && !title && !a.querySelector('li:not([hidden])');
   });
   document.querySelectorAll('.wrap details.more').forEach(d => d.open = !!q);
+  document.querySelectorAll('.wrap details.ep').forEach(d => {
+    d.hidden = !!q && !d.querySelector('li:not([hidden])');
+    d.open = !!q && !d.hidden;  // нашли — эпизоды с находками раскрыты; стёрли поиск — снова свёрнуты
+  });
   document.querySelectorAll('.wrap section.col').forEach(s => s.hidden = !!q && !s.querySelector('li:not([hidden])'));
   document.querySelectorAll('.wrap h3.group').forEach(h => {
     const ul = h.nextElementSibling;
@@ -1460,7 +1543,7 @@ READER = {
                  "aqi": ["dobar", "prihvatljiv", "umeren", "loš", "veoma loš", "izuzetno loš"]}, "updated": "ažurirano", "at": "u",
         "since": "od", "all": "Sve", "page": "Stranica teme", "wrote": "Pisali su:", "silent": "nisu pisali",
         "others": "Ostali mediji:", "nth": "tema dana", "last": "poslednja", "by_time": "Po vremenu",
-        "by_side": "Po stranama", "more": "Još", "prev": "Prethodna tema", "next": "Sledeća tema",
+        "by_side": "Po stranama", "by_ep": "Po događajima", "more": "Još", "prev": "Prethodna tema", "next": "Sledeća tema",
         "none": "Još nema tema.", "min": "min", "h": "h",
         "days": ["ponedeljak", "utorak", "sreda", "četvrtak", "petak", "subota", "nedelja"],
         "months": ["januara", "februara", "marta", "aprila", "maja", "juna", "jula", "avgusta", "septembra",
@@ -1475,7 +1558,7 @@ READER = {
                  "aqi": ["хороший", "приемлемый", "умеренный", "плохой", "очень плохой", "крайне плохой"]}, "updated": "обновлено", "at": "в",
         "since": "с", "all": "Все", "page": "Страница темы", "wrote": "Писали:", "silent": "не писали",
         "others": "Остальные издания:", "nth": "тема дня", "last": "последняя", "by_time": "По времени",
-        "by_side": "По сторонам", "more": "Ещё", "prev": "Предыдущая тема", "next": "Следующая тема",
+        "by_side": "По сторонам", "by_ep": "По сюжетам", "more": "Ещё", "prev": "Предыдущая тема", "next": "Следующая тема",
         "none": "Тем пока нет.", "min": "мин", "h": "ч",
         "days": ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"],
         "months": ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября",
@@ -1483,6 +1566,128 @@ READER = {
     },
 }
 THEMES_FILE = ROOT / "site" / "themes.json"
+
+
+def _when(state: dict, u: str) -> str:
+    return state["items"][u].get("published", state["items"][u]["seen"])
+
+
+def _unit(v: np.ndarray) -> np.ndarray:
+    return v / (np.linalg.norm(v, axis=-1, keepdims=True) + 1e-9)
+
+
+def clusters(vectors: dict, urls: list[str]) -> list[list[str]]:
+    """Группы похожих новостей (k-means по векторам, примерно EPISODE_SIZE в группе, от EPISODES_MIN до EPISODES_MAX);
+    маленькие уходят в ближайшие. Новости без вектора — в самую большую."""
+    good = [u for u in urls if u in vectors]
+    if len(good) < EPISODES_MIN:
+        return []
+    v = _unit(np.stack([vectors[u] for u in good]).astype(np.float32))
+    k = min(EPISODES_MAX, max(EPISODES_MIN, round(len(good) / EPISODE_SIZE)))
+    rng = np.random.default_rng(0)  # одни и те же группы для одной и той же темы
+    centers = [v[int(rng.integers(len(good)))]]
+    for _ in range(k - 1):  # k-means++: следующий центр — подальше от уже выбранных
+        far = np.clip(1 - (v @ np.stack(centers).T).max(axis=1), 0, None) ** 2
+        centers.append(v[int(rng.choice(len(good), p=far / far.sum()))] if far.sum() else v[int(rng.integers(len(good)))])
+    c = np.stack(centers)
+    alive = np.ones(k, bool)
+    for _ in range(30):
+        label = np.where(alive, v @ c.T, -9).argmax(axis=1)
+        sizes = np.bincount(label, minlength=k)
+        small = alive & (sizes < max(5, EPISODE_SMALL * len(good)))
+        if small.any() and alive.sum() > EPISODES_MIN:  # самую маленькую — в соседние, и считаем заново
+            alive[int(np.where(small, sizes, 10 ** 9).argmin())] = False
+            continue
+        new = _unit(np.stack([v[label == j].mean(axis=0) if alive[j] and sizes[j] else c[j] for j in range(k)]))
+        if np.allclose(new, c):
+            break
+        c = new
+    label = np.where(alive, v @ c.T, -9).argmax(axis=1)
+    groups = [[good[i] for i in np.where(label == j)[0]] for j in range(k) if (label == j).any()]
+    max(groups, key=len).extend(u for u in urls if u not in vectors)
+    return groups
+
+
+def typical_of(vectors: dict, urls: list[str], n: int) -> list[str]:
+    """n новостей, больше всех похожих на остальные (из не больше 400 — равномерно)."""
+    pool = [u for u in urls[::max(len(urls) // 400, 1)] if u in vectors]
+    if len(pool) <= n:
+        return pool
+    v = _unit(np.stack([vectors[u] for u in pool]).astype(np.float32))
+    return [pool[i] for i in np.argsort(-(v @ v.mean(axis=0)))[:n]]
+
+
+def sample_of(state: dict, vectors: dict, urls: list[str]) -> list[str]:
+    """Что модель видит об эпизоде: половина — самые типичные новости, половина — взятые равномерно по времени, чтобы
+    название было про всю группу, а не про её середину. Копии — одной строкой."""
+    by_time = sorted(urls, key=lambda u: _when(state, u))
+    spread = by_time[::max(len(by_time) // (EPISODE_SHOWN // 2), 1)]
+    texts = [stories.text_of(state["items"][u]) for u in typical_of(vectors, urls, EPISODE_SHOWN * 2) + spread]
+    core, rest = list(dict.fromkeys(texts[:EPISODE_SHOWN * 2]))[:EPISODE_SHOWN // 2], texts[EPISODE_SHOWN * 2:]
+    return list(dict.fromkeys(core + rest))[:EPISODE_SHOWN]
+
+
+def name_episodes(state: dict, vectors: dict, ask, sids: list[str]) -> int:
+    """Эпизоды больших тем страницы (EPISODES_FROM): тем, у которых их ещё нет или которые выросли в EPISODES_REDO
+    раза, — группы заново и названия от модели, по запросу на тему. Возвращает, скольких спросили."""
+    store = state.setdefault("episodes", {})
+    asked = 0
+    for sid in sids:
+        urls = state["stories"][sid]["urls"]
+        if len(urls) < EPISODES_FROM or sid in store and len(urls) < store[sid]["size"] * EPISODES_REDO:
+            continue
+        groups = sorted(clusters(vectors, urls), key=lambda g: sorted(_when(state, u) for u in g)[len(g) // 2])
+        if not groups:
+            continue
+        content = json.dumps({"theme": state.get("names", {}).get(sid, ""), "episodes": [
+            {"id": f"E{k}", "count": len(g), "from": min(_when(state, u) for u in g)[:10],
+             "to": max(_when(state, u) for u in g)[:10],
+             "news": sample_of(state, vectors, g)}
+            for k, g in enumerate(groups)]}, ensure_ascii=False)
+        answer, _ = ask(EPISODE_PROMPT, content, EPISODE_SCHEMA)
+        asked += 1
+        named = {x["id"]: x for x in answer["episodes"]}
+        eps = []
+        for k, g in enumerate(groups):
+            x = named.get(f"E{k}", {})
+            head = state["items"][typical_of(vectors, g, 1)[0]] if typical_of(vectors, g, 1) else state["items"][g[0]]
+            eps.append({"ns": sorted(state["items"][u]["n"] for u in g),
+                        "ru": stories.clean_name(x.get("ru", "")) or head["title"],
+                        "sr": stories.clean_name(x.get("sr", "")) or head.get("orig") or head["title"]})
+        store[sid] = {"size": len(urls), "eps": eps}
+    return asked
+
+
+def episodes(state: dict, vectors: dict, sid: str) -> list[tuple[dict, list[str]]]:
+    """Эпизоды темы для страницы: [(эпизод с ru и sr, его новости)], самые горячие сверху — как темы на главной
+    (stories.heat): каждое издание даёт очко за свою последнюю новость в эпизоде, очко вдвое тает за 12 часов. Так
+    наверху то, о чём много изданий пишут сейчас, а одна запоздалая новость старый эпизод не поднимает. По середине
+    времени эпизода порядок выглядел случайным: почти у всех эпизодов s9278 — одни и те же 16.11–22.11. Новость, пришедшая после
+    того, как эпизоды составили, — в эпизод с самыми похожими новостями. Эпизодов нет — []."""
+    stored = state.get("episodes", {}).get(sid)
+    urls = state["stories"][sid]["urls"]
+    if not stored or len(urls) < EPISODES_FROM:
+        return []
+    of = {n: k for k, ep in enumerate(stored["eps"]) for n in ep["ns"]}
+    members = [[] for _ in stored["eps"]]
+    late = []
+    for u in urls:
+        k = of.get(state["items"][u]["n"])
+        (members[k] if k is not None else late).append(u)
+    centers = [_unit(np.stack([vectors[u] for u in m if u in vectors]).astype(np.float32).mean(axis=0))
+               if any(u in vectors for u in m) else None for m in members]
+    for u in late:
+        sims = [float(vectors[u] @ c) if c is not None and u in vectors else -9 for c in centers]
+        members[int(np.argmax(sims)) if max(sims) > -9 else max(range(len(members)), key=lambda k: len(members[k]))].append(u)
+    out = [(ep, sorted(m, key=lambda u: _when(state, u))) for ep, m in zip(stored["eps"], members) if m]
+    now = datetime.fromisoformat(state.get("built") or datetime.now(timezone.utc).isoformat())
+
+    def hotness(members: list[str]) -> float:
+        latest = {}
+        for u in members:
+            latest[state["items"][u]["source"]] = max(latest.get(state["items"][u]["source"], ""), _when(state, u))
+        return sum(0.5 ** ((now - datetime.fromisoformat(t)) / stories.HEAT_HALF_LIFE) for t in latest.values())
+    return sorted(out, key=lambda em: (hotness(em[1]), _when(state, em[1][-1])), reverse=True)
 
 
 def write_sr_page(state: dict, vectors: dict, archive: dict) -> None:
@@ -1591,6 +1796,7 @@ def _write_reader(state: dict, vectors: dict, archive: dict) -> None:
             balance = (f'<p class="cov"><span class="what">{L["wrote"]}</span><span class="sides">{pairs}</span>'
                        + (f'<span class="rest">{L["others"]} {" · ".join(others)}</span>' if others else "") + '</p>')
             news = sorted(urls, key=lambda u: (when(u), state["items"][u]["n"]), reverse=True)
+            eps = episodes(state, vectors, sid)
             outlets = len({it["source"] for it in items})
             meta = (f'{count(len(urls), *L["news"])} · {count(outlets, *L["outlets"])} · '
                     f'{L["since"]} {local(story["created"], "%d.%m.")}')
@@ -1637,16 +1843,28 @@ def _write_reader(state: dict, vectors: dict, archive: dict) -> None:
                 return f'<span class="chip none">{dot(c)}{name}: {L["silent"]}</span>'
             order = [c for c in camp_order if per_camp.get(c) or c in core] + [c for c, _ in camps if c not in camp_order]
             chips = ("" if len(camps) < 2 else
-                     f'<nav class="chips" data-view="time"><button class="chip" aria-pressed="true">{L["all"]}</button>'
+                     f'<nav class="chips" data-view="{"eps time" if eps else "time"}"><button class="chip" aria-pressed="true">{L["all"]}</button>'
                      + "".join(chip(c) for c in order) + '</nav>')
-            by_day, current = [], None
-            for u in news:
-                d = day_name(when(u))
-                if d != current:
-                    by_day.append(("</ul>" if current else "") + f'<h3 class="group">{e(d)}</h3><ul class="items">')
-                    current = d
-                by_day.append(row(u))
-            by_day.append("</ul>")
+            def by_days(urls_: list[str]) -> str:  # новости по дням, свежие сверху
+                out, current = [], None
+                for u in urls_:
+                    d = day_name(when(u))
+                    if d != current:
+                        out.append(("</ul>" if current else "") + f'<h3 class="group">{e(d)}</h3><ul class="items">')
+                        current = d
+                    out.append(row(u))
+                return "".join(out) + "</ul>"
+
+            by_day = [by_days(news)]
+            # большая тема — по эпизодам: список свёрнутых эпизодов, внутри — по дням. Этот вид — первым
+
+            def episode(ep: dict, members: list[str]) -> str:
+                first, last = local(when(members[0]), "%d.%m."), local(when(members[-1]), "%d.%m.")
+                span = first if first == last else f"{first}–{last}"
+                return (f'<details class="ep"><summary><span class="ep-t">{e(ep[lang])}</span>'
+                        f'<span class="n">{span} · <span class="k"></span>{count(len(members), *L["news"])}</span></summary>'
+                        f'{by_days(sorted(members, key=lambda u: (when(u), state["items"][u]["n"]), reverse=True))}</details>')
+            by_ep = "".join(episode(ep, m) for ep, m in eps)
             prev = f'<a href="../{shown[k - 2]}/">← {L["prev"]}</a>' if k > 1 else "<span></span>"
             after = f'<a href="../{shown[k]}/">{L["next"]} →</a>' if k < len(shown) else "<span></span>"
             pages[sid] = f"""{head(f"{title} — Vestomat", f"{sid}/")}
@@ -1654,9 +1872,10 @@ def _write_reader(state: dict, vectors: dict, archive: dict) -> None:
 <h1>{e(title)}</h1>
 <p class="meta">{k}. {L["nth"]} · {meta} · {L["last"]} {local(story["updated"], "%d.%m.")} {L["at"]} {local(story["updated"], "%H:%M")}</p>
 {"" if chips else balance}
-<div class="seg" role="group"><button data-show="time" aria-pressed="true">{L["by_time"]}</button><button data-show="camps" aria-pressed="false">{L["by_side"]}</button></div>
+<div class="seg" role="group">{f'<button data-show="eps" aria-pressed="true">{L["by_ep"]}</button>' if eps else ""}<button data-show="time" aria-pressed="{"false" if eps else "true"}">{L["by_time"]}</button><button data-show="camps" aria-pressed="false">{L["by_side"]}</button></div>
 {chips}
-<div data-view="time" class="narrow">{"".join(by_day)}</div>
+{f'<div data-view="eps" class="narrow">{by_ep}</div>' if eps else ""}
+<div data-view="time" class="narrow"{" hidden" if eps else ""}>{"".join(by_day)}</div>
 <div data-view="camps" class="cols" hidden>{by_camp}</div>
 <nav class="nav">{prev}{after}</nav>
 </div>{script}</body></html>"""
