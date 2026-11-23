@@ -68,8 +68,11 @@ NOT_RULES = {"LINES_STEP", "MERGE_EVERY"}
 # ebdeb2625d — до 18.11, когда склейка стала называть development / consequence / reaction только при прямой причине
 # или том же деле (MERGE_PROMPT): уже склеенное остаётся, новое правило — для следующих пар;
 # a965920995 — до 18.11, когда из контрпримеров убран арест владельца банка: по RULES это то же дело, что его крах
+# f4bbf5a47d — до 23.11, когда в RULES цепочку этапов остановили на новом процессе: формирование правительства — не этап
+# учредительного заседания. 19–20.11 склейка 4 раза влила его в s9278 как «развитие», ровно по прежнему правилу;
+# проверка тем 22.11 вынесла 35 новостей. Уже разложенное остаётся, новое правило — для следующих новостей
 SAME_RULES = {"93f151fd03", "dfadd2988f", "9e34e14300", "a0cbf341ea", "74b3c97a3d", "37beed8aa5", "842ae523cb",
-              "a4183da04a", "ebdeb2625d", "a965920995"}
+              "a4183da04a", "ebdeb2625d", "a965920995", "f4bbf5a47d"}
 # сюжет, который не обновлялся дольше, убираем из состояния вместе с его новостями: архив их уже забыл
 # (ARCHIVE_DAYS в build.py — 4 дня), так что заново раскладывать их не придётся
 FORGET = timedelta(days=5)
@@ -1359,7 +1362,6 @@ document.addEventListener('click', ev => {
 document.querySelectorAll('.wrap .seg button').forEach(b => b.addEventListener('click', () => {
   document.querySelectorAll('.wrap .seg button').forEach(x => x.setAttribute('aria-pressed', x === b));
   document.querySelectorAll('[data-view]').forEach(v => v.hidden = !v.dataset.view.split(' ').includes(b.dataset.show));
-
   window.resetChips?.();  // другой вид — фильтр разделов снимается
 }));
 // «По сюжетам»: в свёрнутом сюжете — EP_FIRST свежих новостей из тех, что проходят фильтр разделов (secOn) и поиск
