@@ -457,8 +457,8 @@ const state = {
   lang: PAGE_LANG === "ru" ? "ru" : store.get("lang", "sr"),
   view: store.get("view", "sources"),
   script: store.get("script", "orig"),
-  // храним скрытые разделы, а не видимые: новые разделы из sources.json сразу показываются
-  sections: new Set(DATA.sections.map(s => s.id).filter(id => !store.get("hiddenSections", []).includes(id))),
+  // фильтр разделов не запоминаем: при смене вида и при новом заходе снова «Все»
+  sections: new Set(DATA.sections.map(s => s.id)),
   q: "",
   read: new Set(store.get("read", [])),
   open: null,  // на телефоне: адрес новости с раскрытой подводкой — раскрыта всегда только одна
@@ -473,6 +473,7 @@ if (HASH_VIEWS[location.hash]) {
 }
 // пришли по ссылке на /ru/ — запоминаем русский, чтобы и главная потом открывалась по-русски
 if (PAGE_LANG === "ru") store.set("lang", "ru");
+try { localStorage.removeItem("hiddenSections"); } catch {}  // раньше фильтр хранился между заходами
 function markRead(url) {
   state.read.add(url);
   store.set("read", [...state.read].slice(-3000));
@@ -1176,7 +1177,6 @@ function renderFilterChips(chips) {
   const all = ids.every(id => state.sections.has(id));
   const apply = sections => {
     state.sections = sections.size ? sections : new Set(ids);
-    store.set("hiddenSections", ids.filter(id => !state.sections.has(id)));
     state.feedLimit = FEED_PAGE;
     render();
   };
@@ -1319,6 +1319,8 @@ for (const [id, key] of [["lang", "lang"], ["view", "view"], ["script", "script"
     const v = e.target.closest("button")?.dataset.v;
     if (!v) return;
     if (v !== state[key]) track(`${key}/${v}`);
+    // другой вид — фильтр разделов снимается
+    if (key === "view" && v !== state.view) { state.sections = new Set(DATA.sections.map(s => s.id)); state.feedLimit = FEED_PAGE; }
     state[key] = v; store.set(key, v); render();
   });
 }

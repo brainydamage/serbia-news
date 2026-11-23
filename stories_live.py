@@ -1355,6 +1355,8 @@ document.addEventListener('click', ev => {
 document.querySelectorAll('.wrap .seg button').forEach(b => b.addEventListener('click', () => {
   document.querySelectorAll('.wrap .seg button').forEach(x => x.setAttribute('aria-pressed', x === b));
   document.querySelectorAll('[data-view]').forEach(v => v.hidden = !v.dataset.view.split(' ').includes(b.dataset.show));
+
+  window.resetChips?.();  // другой вид — фильтр разделов снимается
 }));
 // «По сюжетам»: в свёрнутом сюжете — EP_FIRST свежих новостей из тех, что проходят фильтр разделов (secOn) и поиск
 // (qHit), без заголовков дней; «Ещё» раскрывает остальные по дням. Число новостей — сколько проходят. Сюжет, в котором
@@ -1413,6 +1415,7 @@ if (chips.length) {
     window.secOn = all ? null : on;
     layoutEps();
   };
+  window.resetChips = () => { if (on.size !== ids.length) apply(new Set(ids)); };
   chips.forEach(c => c.addEventListener('click', () => {
     const all = on.size === ids.length, s = c.dataset.s;
     if (!s) return apply(new Set(ids));
