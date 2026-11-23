@@ -28,6 +28,7 @@ AUDIT_DAYS = 14  # сколько дней итогов хранить — дл�
 MESSAGE = 1000  # приёмник жалоб режет сообщение до 1000 знаков
 MESSAGES = 20  # и берёт не больше 20 за раз: отчёт длиннее уходит несколькими порциями
 REPORT_MAX = 40  # больше сообщений за одну проверку не шлём
+PLOT_URL = "https://vestomat.rs/plot/"  # страница темы (stories_live), #n<номер> — новость на ней
 ADVICE_AT = (6, "23")  # советы по правилам — раз в неделю: воскресенье (weekday), проверка в 23 — по ошибкам за 7 дней
 ADVICE_PER_FINDING = 5  # сколько новостей находки идёт в советы
 
@@ -593,25 +594,25 @@ def report(state: dict, slot: str, result: dict) -> list[dict]:
                 + (f", в прошлый раз {before[-1]['flagged'] / max(before[-1]['news'], 1) * 100:.1f}%" if before else "") + ").")
         done = [f for f in found if "done" in f]
         left = [f for f in found if "done" not in f]
-        lines, k = [], 0  # (строка, кнопка или None)
+        lines, k = [], 0  # (строка, кнопка или None, ссылка — отдельной строкой под ней)
         if done:
-            lines.append(("\nИсправила сама — ошиблась, нажми «Вернуть»:", None))
+            lines.append(("\nИсправила сама — ошиблась, нажми «Вернуть»:", None, ""))
             for f in done:
                 k += 1
                 to = f["done"]["to"]
                 where = f"«{_name(state, to)}»" if f["done"]["how"] == "to" else "отдельная тема"
                 lines.append((f"{k}. «{_name(state, f['story'])}» → {where}: {_short(f, by_n)} — {f['why']}",
-                               {"text": f"Вернуть {k}", "data": f"fix:{day}:{f['id']}"}))
+                               {"text": f"Вернуть {k}", "data": f"fix:{day}:{f['id']}"}, _link(state, f, by_n)))
         if left:
-            lines.append(("\nНе уверена, оставила — можно не трогать:", None))
+            lines.append(("\nНе уверена, оставила — можно не трогать:", None, ""))
             for f in left:
                 k += 1
                 doubt = " (раскладчик считает, что на месте)" if f.get("stay") else ""
                 lines.append((f"{k}. «{_name(state, f['story'])}»: {_short(f, by_n)} — {f['why']}{doubt}",
-                               {"text": f"Убрать {k}", "data": f"fix:{day}:{f['id']}"}))
+                               {"text": f"Убрать {k}", "data": f"fix:{day}:{f['id']}"}, _link(state, f, by_n)))
         cur, buttons = head, []
-        for line, button in lines:
-            line = line[:MESSAGE // 2]
+        for line, button, link in lines:
+            line = line[:MESSAGE // 2] + (f"\n   {link}" if link else "")  # обрезаем находку, ссылку — нет
             if len(cur) + len(line) + 1 > MESSAGE:
                 messages.append({"text": cur, "buttons": _rows(buttons)})
                 cur, buttons = line.lstrip("\n"), []
@@ -634,10 +635,18 @@ def _name(state: dict, sid: str) -> str:
 
 
 def _short(f: dict, by_n: dict) -> str:
-    """Новости находки коротко: до трёх — номерами, больше — сколько."""
-    if len(f["news"]) <= 3:
-        return ", ".join(f"№{n}" for n in f["news"])
-    return f"{len(f['news'])} новостей"
+    """Новости находки коротко: до трёх — номерами, больше — первые три и сколько ещё."""
+    shown = ", ".join(f"№{n}" for n in f["news"][:3])
+    return shown if len(f["news"]) <= 3 else f"{shown} и ещё {len(f['news']) - 3}"
+
+
+def _link(state: dict, f: dict, by_n: dict) -> str:
+    """Ссылка на первую новость находки — на странице темы, где она лежит сейчас (исправленная уже переехала).
+    У темы из одного издания страницы нет — тогда без ссылки."""
+    sid = by_n[f["news"][0]]["story"]
+    if sid not in state["stories"] or not stories.visible(state, sid):
+        return ""
+    return f"{PLOT_URL}{sid}/#n{f['news'][0]}"
 
 
 def _rows(buttons: list[dict]) -> list[list[dict]]:  # по три в ряд

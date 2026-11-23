@@ -831,7 +831,8 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
 
     def item_row(u: str, it: dict, extra: str) -> str:
         what = it.get("what", "")
-        return (f'<li><span class="meta">№{it.get("n", "")} · {local_time(it.get("published", it["seen"]))} · {e(it["source"])} · '
+        anchor = f' id="n{it["n"]}"' if it.get("n") is not None else ""  # ссылки из отчёта проверки тем ведут сюда
+        return (f'<li{anchor}><span class="meta">№{it.get("n", "")} ·{local_time(it.get("published", it["seen"]))} · {e(it["source"])} · '
                 f'{e(sections.get(it["section"], it["section"]))}{extra}</span><br>'
                 f'<a href="{e(u)}" rel="noopener" target="_blank">{e(it["title"])}</a>'
                 f'{f"<br><span class=what>{e(what)}</span>" if what and what != it["title"] else ""}</li>')
@@ -1036,7 +1037,7 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
     total = len(state["stories"])
     style = """<style>body{font:15px/1.45 system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#222;background:#fff}
 summary{cursor:pointer;padding:6px 0}details{border-bottom:1px solid #eee}ul{margin:4px 0 12px;padding-left:20px}
-li{margin:6px 0}.meta{color:#888;font-size:13px}a{color:#1a5fb4}table{border-collapse:collapse;font-size:13px}
+li{margin:6px 0}li:target{background:#fff3b0}.meta{color:#888;font-size:13px}a{color:#1a5fb4}table{border-collapse:collapse;font-size:13px}
 td{padding:2px 14px 2px 0}.what{color:#777;font-size:13px}
 .toc ol{padding-left:3em;font-size:13px}.toc li{margin:3px 0}
 @media (min-width:1400px){.toc{position:fixed;left:16px;top:16px;width:calc(50vw - 490px);max-height:calc(100vh - 32px);overflow:auto}}
