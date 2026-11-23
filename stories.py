@@ -177,6 +177,10 @@ FOREIGN_HEAT = 0.25
 # (остальные отметки не трогаем — правило их только расширяло). 2 — с 16.11: Косово и косовские политики где угодно,
 # сербские организации и СМИ — serbia; первая разметка отправила приговор Тачи в Гааге в foreign
 SERBIA_MARKS = 2
+# регулярная сводка (ночная сводка скорой помощи Белграда, ДТП без погибших, прогноз погоды, пробки, плановые
+# отключения — карточка: routine) горяча вчетверо меньше, как зарубежное: каждое утро 8–10 изданий перепечатывают
+# сводку Hitna pomoć, и до 23.11 она стояла в топе выше политики. Со страницы не пропадает — только ниже
+ROUTINE_HEAT = 0.25
 
 MERGE_PROMPT = f"""Ты проверяешь темы агрегатора новостей о Сербии на дубли. {RULES}
 
@@ -288,7 +292,8 @@ CARD_PROMPT = f"""Ты заводишь карточки тем агрегато
 Потом serbia — связь события с Сербией:
 - serbia — событие в Сербии или в Косове и Метохии; или его участники — сербские или косовские государство, политики, партии, организации, СМИ, компании, клубы, сборные, граждане, где бы это ни было: суд в Гааге над косовскими политиками, переговоры Белграда и Приштины в Брюсселе, выступление сербской сборной за рубежом — тоже serbia;
 - affects — событие за рубежом, которое прямо касается Сербии или сербов: решения ЕС, США, России, соседей о Сербии; сербы в Республике Сербской, Черногории, Хорватии; санкции, цены, перебои, эпидемия или кризис, которые доходят до Сербии;
-- foreign — событие за рубежом без прямой связи с Сербией, даже если о нём пишут сербские издания и даже если оно похоже на сербские дела: протесты, выборы, коррупция, происшествия в других странах."""
+- foreign — событие за рубежом без прямой связи с Сербией, даже если о нём пишут сербские издания и даже если оно похоже на сербские дела: протесты, выборы, коррупция, происшествия в других странах.
+И routine — true, если тема — регулярная сводка, которая выходит почти каждый день и ничего особенного не сообщает: сводка скорой помощи или полиции за ночь, обычные ДТП и травмы без погибших, прогноз погоды и обычная погода, пробки и обстановка на границах, плановые отключения воды, света и тепла, курс валют и цены на топливо по графику. false — всё остальное, и сводка тоже, если в ней необычное: погибшие, массовая авария, крупный пожар, стихийное бедствие, непогода с последствиями, большие перебои."""
 CARD_SCHEMA = {
     "type": "object",
     "properties": {
@@ -297,8 +302,9 @@ CARD_SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {"id": {"type": "string"}, "event": {"type": "string"},
-                               "serbia": {"type": "string", "enum": ["serbia", "affects", "foreign"]}},
-                "required": ["id", "event", "serbia"],
+                               "serbia": {"type": "string", "enum": ["serbia", "affects", "foreign"]},
+                               "routine": {"type": "boolean"}},
+                "required": ["id", "event", "serbia", "routine"],
                 "additionalProperties": False,
             },
         }
@@ -516,6 +522,7 @@ def heat(state: dict, sid: str, now: str) -> float:
         latest[it["source"]] = max(latest.get(it["source"], ""), it.get("published", it["seen"]))
     moment = datetime.fromisoformat(now)
     weight = FOREIGN_HEAT if state.get("serbia", {}).get(sid) == "foreign" else 1
+    weight *= ROUTINE_HEAT if state.get("routine", {}).get(sid) else 1
     return weight * sum(0.5 ** ((moment - datetime.fromisoformat(t)) / HEAT_HALF_LIFE) for t in latest.values())
 
 
@@ -533,16 +540,17 @@ def _when(iso: str) -> str:
 
 def cards(state: dict, vectors: dict, ask, now: str) -> int:
     """Карточки событий видимым сюжетам, у которых их ещё нет, и связь сюжета с Сербией (state["serbia"]: serbia,
-    affects, foreign) — Haiku, пачками. Живым сюжетам с карточкой до 16.11 — только связь: карточка остаётся.
-    Возвращает, скольких спросили."""
+    affects, foreign) и регулярная ли это сводка (state["routine"]) — Haiku, пачками. Живым сюжетам с карточкой, но без
+    отметки (до 16.11 — связи, до 23.11 — сводки) — только отметки: карточка остаётся. Возвращает, скольких спросили."""
     have, marks = state.setdefault("cards", {}), state.setdefault("serbia", {})
+    routine = state.setdefault("routine", {})
     if state.get("serbia_marks", 1) != SERBIA_MARKS:
         for sid in [sid for sid, mark in marks.items() if mark == "foreign"]:
             del marks[sid]
         state["serbia_marks"] = SERBIA_MARKS
     cutoff = (datetime.fromisoformat(now) - LIVE).isoformat()
     todo = [sid for sid, story in state["stories"].items() if visible(state, sid)
-            and (sid not in have or sid not in marks and story["updated"] >= cutoff)]
+            and (sid not in have or (sid not in marks or sid not in routine) and story["updated"] >= cutoff)]
     for start in range(0, len(todo), CARD_BATCH):
         chunk = todo[start:start + CARD_BATCH]
         content = json.dumps({"stories": [{"id": f"S{n}"} | ({"event": have[sid]} if sid in have else {})
@@ -554,6 +562,7 @@ def cards(state: dict, vectors: dict, ask, now: str) -> int:
             if n.isdigit() and int(n) < len(chunk) and card["event"].strip():
                 have.setdefault(chunk[int(n)], card["event"].strip())
                 marks[chunk[int(n)]] = card["serbia"]
+                routine[chunk[int(n)]] = card["routine"]
     return len(todo)
 
 

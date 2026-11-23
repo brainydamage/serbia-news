@@ -219,6 +219,7 @@ def forget_old(state: dict, vectors: dict, now: str) -> None:
     # карточка склеенного сюжета живёт, пока жива его часть: unmerge вернёт сюжет с ней
     state["cards"] = {sid: c for sid, c in state.get("cards", {}).items() if sid in state["stories"] or sid in parts}
     state["serbia"] = {sid: c for sid, c in state.get("serbia", {}).items() if sid in state["cards"]}
+    state["routine"] = {sid: c for sid, c in state.get("routine", {}).items() if sid in state["cards"]}
     for u in set(vectors) - set(state["items"]):
         del vectors[u]
 
@@ -960,6 +961,8 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
                  f'{" · выделен из " + page_link(state["spun"][sid]) if sid in state.get("spun", {}) else ""}')
         mark = {"serbia": "в Сербии", "affects": "за рубежом, касается Сербии",
                 "foreign": f"за рубежом, без связи с Сербией — горячесть ×{stories.FOREIGN_HEAT}"}.get(state.get("serbia", {}).get(sid))
+        if state.get("routine", {}).get(sid):
+            mark = (f"{mark} · " if mark else "") + f"регулярная сводка — горячесть ×{stories.ROUTINE_HEAT}"
         card = (f'<p class="meta">Событие сюжета: {e(state["cards"][sid])}{f" · {e(mark)}" if mark else ""}</p>'
                 if sid in state.get("cards", {}) else "")
         return headline(urls), about, card + chain_note(sid) + lines_note(sid), body
