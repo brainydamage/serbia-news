@@ -658,7 +658,7 @@ def run(archive: dict, sections: dict) -> None:
                 audit = stories_audit.finish(state, sent, answers, spent_usd, ask, vectors, now)
             else:
                 audit_day = stories_audit.due(state, now, LOCAL_TZ)
-                calls, sent = stories_audit.prepare(state, audit_day, now)
+                calls, sent = stories_audit.prepare(state, audit_day, now, vectors)
                 if got := send(client, state, "audit", calls, sent, now, ask):
                     audit = stories_audit.finish(state, sent, *got, ask, vectors, now)
         except Exception as exc:  # noqa: BLE001

@@ -32,10 +32,15 @@ PLOT_URL = "https://vestomat.rs/plot/"  # страница темы (stories_liv
 ADVICE_AT = (6, "23")  # советы по правилам — раз в неделю: воскресенье (weekday), проверка в 23 — по ошибкам за 7 дней
 ADVICE_PER_FINDING = 5  # сколько новостей находки идёт в советы
 
+# 24.11 проверка была строже правил: 47 «чужих» (8.7%), из них 13 — перепалка Вучича и Фриц на том же заседании.
+# Большую тему она видела по карточке первого эпизода (s13840 — «консультации по формированию комитетов»), и любой другой
+# эпизод заседания казался чужим. Теперь у большой темы — название и вся тема (theme_view), в промпте — что на месте и что
+# чужое, на примерах того дня
 AUDIT_PROMPT = f"""Ты проверяешь темы агрегатора новостей о Сербии перед показом читателям. {stories.RULES}
 
-Вход — JSON: stories — темы, id вида S…: name — название темы, event — её ситуация (если определена), known — несколько её новостей, проверенных раньше (чтобы понять, о чём тема); news — новые новости темы, их и проверяешь: n — номер, t — время UTC, source — издание, what — что произошло.
+Вход — JSON: stories — темы, id вида S…: name — название темы, event — её ситуация (если определена), whole — у большой темы: самые типичные её новости за всё время; ситуация большой темы — вся тема по name и whole, а не её первый эпизод; known — несколько её последних новостей, проверенных раньше; news — новые новости темы, их и проверяешь: n — номер, t — время UTC, source — издание, what — что произошло.
 Для каждой темы верни findings — новые новости, которым в ней не место: они про другую ситуацию, а общие с темой только участник, ведомство, город или область. Эпизоды, развитие, последствия, реакции и споры той же ситуации — на месте, даже если это отдельное событие.
+Сверяй новость с ситуацией всей темы, а не с одним её эпизодом. Всё, что сказано или случилось на том же заседании, съезде или процессе, — его эпизод, о чём бы ни говорили: выступления на любой предмет, перепалки, инциденты в зале и на галерее, мелочи о самих участниках; пресс-конференции и заявления участников о нём — реакция. Так, в теме учредительного заседания Скупщины на месте перепалка Вучича и Фриц в зале о навесе в Нови-Саде, перевязанный палец Вучича на заседании и пресс-конференция депутатов после него. Чужое — другое дело или событие, с которым тему связывают только общие люди, ведомство или слова: в теме «Задержания по делу фонда ПИО в Бачкой Паланке» — задержание Павле Бихали по делу о деньгах на избирательную кампанию.
 У находки: kind — foreign; news — номера n (новости про одну и ту же чужую ситуацию — в одной находке); why — одной фразой, почему им здесь не место; sure — true, если повод новости явно другой (другое дело, событие или процесс) и с темой её связывают только участник, место или фон; false — если она может оказаться эпизодом, развитием или реакцией на ситуацию темы. Уверенные находки исправляются сами, без редактора. Всё на месте — пустой findings."""
 
 # Разбор состава больших тем: тема собирается из частей (сюжетов, влитых склейкой), и проверка новых новостей не видит
@@ -50,7 +55,7 @@ AUTO_SHARE = 0.4  # сама выносит не больше этой доли 
 PARTS_PROMPT = f"""Ты проверяешь состав больших тем агрегатора новостей о Сербии. {stories.RULES}
 
 Тема собрана из частей: часть — сюжет, который раскладка завела отдельно, а потом склейка или раскладка влила в тему. Разрастаясь, тема могла вобрать части про другую ситуацию — с теми же участниками, местом или фоном.
-Вход — JSON: name — название темы, event — её ситуация, parts — части, id вида P…: news — сколько в ней новостей, from и to — даты первой и последней новости, what — что произошло в первой и в последней новости части; у ядра темы core — true, его не трогаешь.
+Вход — JSON: name — название темы, event — её ситуация (если определена), whole — у большой темы: самые типичные её новости за всё время; ситуация большой темы — вся тема по name и whole, а не её первый эпизод; parts — части, id вида P…: news — сколько в ней новостей, from и to — даты первой и последней новости, what — что произошло в первой и в последней новости части; у ядра темы core — true, его не трогаешь.
 Верни findings — части про другую ситуацию: другое дело, событие или процесс. Например, переговоры о составе правительства — другой процесс, чем учредительное заседание парламента; а выступление на том же заседании о другом — эпизод заседания, на месте. Части про одну и ту же чужую ситуацию — в одной находке. Эпизоды, развитие, последствия, реакции и споры ситуации темы — на месте.
 У находки: parts — id частей; why — одной фразой, почему им здесь не место; sure — true, если ситуация явно другая и с темой её связывают только участники, место или фон; false — если это может быть эпизодом или развитием ситуации темы. Уверенные находки исправляются сами. Всё на месте — пустой findings."""
 
@@ -78,7 +83,7 @@ PARTS_SCHEMA = {
 # кандидатов: выберет её — находку сама не исправляем (две модели разошлись)
 PLACE_PROMPT = f"""Ты переносишь новости между темами агрегатора новостей о Сербии. {stories.RULES}
 
-Проверка сочла группы новостей чужими в их теме. Вход — JSON: groups — группы, id вида G…: from — тема, где они сейчас, news — что произошло (несколько новостей группы), candidates — id тем, похожих по словам (from среди них); stories — эти темы, id вида S…: name — название, event — ситуация, news — несколько её новостей.
+Проверка сочла группы новостей чужими в их теме. Вход — JSON: groups — группы, id вида G…: from — тема, где они сейчас, news — что произошло (несколько новостей группы), candidates — id тем, похожих по словам (from среди них); stories — эти темы, id вида S…: name — название, event — ситуация (если определена), whole — у большой темы: самые типичные её новости за всё время; ситуация большой темы — вся тема по name и whole, а не её первый эпизод; news — несколько её новостей (у темы from — без новостей самих групп).
 Для каждой группы: event — повод её новостей одной фразой; target — тема из её candidates, к ситуации которой они относятся (та же ситуация, её эпизод, развитие, последствие или реакция именно на неё), или пустая строка, если ни к одной — тогда у них будет своя тема. Если группа всё-таки про ситуацию темы from — target равен from. Общий участник, ведомство, место или область — ещё не повод выбрать тему."""
 
 PLACE_SCHEMA = {
@@ -231,7 +236,19 @@ def new_news(state: dict, sid: str, since: str) -> list[str]:
     return [u for u in state["stories"][sid]["urls"] if arrived(state["items"][u], sid) > since]
 
 
-def request(state: dict, chunk: list[str]) -> str:
+def theme_view(state: dict, sid: str, vectors: dict | None) -> dict:
+    """Как модель видит тему: название; у маленькой — карточка; у большой — вместо карточки (она застыла на первом
+    эпизоде) самые типичные новости за всё время (stories.whole). 24.11 проверка видела s13840 (всё учредительное
+    заседание) как «консультации по формированию комитетов» и находила в ней «чужие» перепалки того же заседания."""
+    view = {"name": state.get("names", {}).get(sid, "")}
+    if event := stories.merge_event(state, sid):
+        view["event"] = event
+    if vectors and stories.is_big(state, sid):
+        view["whole"] = stories.whole(state, vectors, sid)
+    return view
+
+
+def request(state: dict, chunk: list[str], vectors: dict | None = None) -> str:
     """Запрос проверки пачки тем: новые новости каждой и несколько уже проверенных. Системный промпт — AUDIT_PROMPT."""
     items, seen = state["items"], state.get("audit_seen", {})
 
@@ -243,8 +260,7 @@ def request(state: dict, chunk: list[str]) -> str:
     for k, sid in enumerate(chunk):
         new = new_news(state, sid, seen.get(sid, ""))
         known = [u for u in state["stories"][sid]["urls"] if u not in set(new)][-AUDIT_KNOWN:]
-        out.append({"id": f"S{k}", "name": state.get("names", {}).get(sid, "")}
-                   | ({"event": state["cards"][sid]} if sid in state.get("cards", {}) else {})
+        out.append({"id": f"S{k}"} | theme_view(state, sid, vectors)
                    | {"known": [items[u].get("what") or items[u]["title"] for u in known],
                       "news": [row(u) for u in new]})
     return json.dumps({"stories": out}, ensure_ascii=False)
@@ -268,7 +284,7 @@ def _core(state: dict, sid: str) -> str:
     return sid if sid in sizes else sizes.most_common(1)[0][0]
 
 
-def parts_request(state: dict, sid: str) -> tuple[str, list[str]]:
+def parts_request(state: dict, sid: str, vectors: dict | None = None) -> tuple[str, list[str]]:
     """Запрос разбора состава темы: (содержимое, части по порядку их id P…)."""
     items = state["items"]
     by_part = {}
@@ -282,19 +298,18 @@ def parts_request(state: dict, sid: str) -> tuple[str, list[str]]:
         what = list(dict.fromkeys((it.get("what") or it["title"]) for it in (news[0], news[-1])))
         rows.append({"id": f"P{k}", "news": len(news), "from": news[0]["seen"][5:10], "to": news[-1]["seen"][5:10],
                      "what": what} | ({"core": True} if p == core else {}))
-    content = {"name": state.get("names", {}).get(sid, "")} | (
-        {"event": state["cards"][sid]} if sid in state.get("cards", {}) else {}) | {"parts": rows}
+    content = theme_view(state, sid, vectors) | {"parts": rows}
     return json.dumps(content, ensure_ascii=False), order
 
 
-def prepare(state: dict, slot: str, now: str) -> tuple[list[tuple], dict]:
+def prepare(state: dict, slot: str, now: str, vectors: dict | None = None) -> tuple[list[tuple], dict]:
     """Запросы проверки (новые новости тем топа пачками, затем разбор состава больших тем) и что понадобится finish."""
     sids, chunks = todo(state, slot)
     big = parts_todo(state, sids)
-    calls = [(AUDIT_PROMPT, request(state, chunk), AUDIT_SCHEMA, AUDIT_EFFORT, AUDIT_MODEL, AUDIT_PRICE) for chunk in chunks]
+    calls = [(AUDIT_PROMPT, request(state, chunk, vectors), AUDIT_SCHEMA, AUDIT_EFFORT, AUDIT_MODEL, AUDIT_PRICE) for chunk in chunks]
     orders = {}
     for sid in big:
-        content, orders[sid] = parts_request(state, sid)
+        content, orders[sid] = parts_request(state, sid, vectors)
         calls.append((PARTS_PROMPT, content, PARTS_SCHEMA, AUDIT_EFFORT, AUDIT_MODEL, AUDIT_PRICE))
     return calls, {"day": slot, "sids": sids, "chunks": chunks, "sizes": sizes(state, chunks, now),
                    "big": big, "orders": orders}
@@ -392,7 +407,7 @@ def finish(state: dict, sent: dict, answers: dict[int, dict], usd: float, ask, v
 
 def run(state: dict, slot: str, ask, now: str, vectors: dict) -> dict:
     """Проверка сразу: запросы (prepare) — к модели один за другим, итоги — finish."""
-    calls, sent = prepare(state, slot, now)
+    calls, sent = prepare(state, slot, now, vectors)
     answers, usd = {}, 0.0
     for k, call in enumerate(calls):
         answers[k], usage = ask(*call)
@@ -458,8 +473,7 @@ def place(state: dict, found: list[dict], vectors: dict, ask) -> float:
             found_urls.setdefault(f["story"], set()).update(by_n[n] for n in f["news"] if n in by_n)
         content = {"groups": [{"id": f"G{k}", "from": alias[f["story"]], "news": what,
                                "candidates": [alias[c] for c in cands]} for k, (f, cands, what) in enumerate(batch)],
-                   "stories": [{"id": alias[sid], "name": state.get("names", {}).get(sid, "")}
-                               | ({"event": state["cards"][sid]} if sid in state.get("cards", {}) else {})
+                   "stories": [{"id": alias[sid]} | theme_view(state, sid, vectors)
                                | {"news": _seen_of(state, sid, skip=found_urls.get(sid, set()))} for sid in ids]}
         answer, usage = ask(PLACE_PROMPT, json.dumps(content, ensure_ascii=False), PLACE_SCHEMA, stories.RECHECK_EFFORT,
                             stories.MODEL, None)
