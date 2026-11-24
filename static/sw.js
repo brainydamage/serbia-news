@@ -14,6 +14,7 @@
 // Просто удалить файл нельзя: на 404 браузер оставляет старый service worker работать.
 
 const VERSION = 2;  // поднять, если поменялось устройство кеша: старые кеши удалятся при активации
+// имя PAGES знает и template.html (reloadFresh кладёт туда свежую страницу) — при смене VERSION поправить и там
 const PAGES = `pages-v${VERSION}`;
 const ASSETS = `assets-v${VERSION}`;
 const PAGE_PATHS = ["/", "/ru/"];
@@ -54,9 +55,12 @@ async function store(path, response) {
 
 async function page(path, event) {
   const cached = await (await caches.open(PAGES)).match(path);
-  // no-cache: GitHub Pages разрешает браузеру держать страницу 10 минут, а нам нужна последняя сборка
-  const network = fetch(path, { cache: "no-cache" }).then(async r => { await store(path, r.clone()); return r; });
-  event.waitUntil(network.catch(() => {}));
+  // no-cache: GitHub Pages разрешает браузеру держать страницу 10 минут, а нам нужна последняя сборка.
+  // Гонку с TIMEOUT выигрывает уже ответ сервера, а не скачанная и записанная в кеш страница: страница весит
+  // ~600 КБ сжатой, на мобильной сети за 3 секунды она не докачивалась, и «обновить» раз за разом отдавало
+  // старую копию из кеша. Теперь браузер получает поток сразу, а копия в кеш пишется параллельно.
+  const network = fetch(path, { cache: "no-cache" });
+  event.waitUntil(network.then(r => store(path, r.clone())).catch(() => {}));
   if (!cached) return network;
   const timeout = new Promise(resolve => setTimeout(resolve, TIMEOUT));
   return Promise.race([network, timeout]).then(r => (r?.ok ? r : cached), () => cached);

@@ -1265,22 +1265,62 @@ function render() {
 // и предлагаем обновиться — перерисовывать новости под читателем не стоит, он может быть посреди ленты
 let newer = false;
 const refreshBtn = document.getElementById("refresh");
-refreshBtn.addEventListener("click", () => location.reload());
+// Просто location.reload() мало: перезагрузку перехватывает service worker и при медленной сети отдаёт свою
+// старую копию — кнопка «обновить» тогда ничего не меняла. Поэтому сначала сами скачиваем свежую страницу
+// мимо service worker'а (он перехватывает только переходы, не fetch) и кладём её в его кеш — так что
+// после перезагрузки свежая окажется и в сети, и в кеше. Имя кеша — PAGES из /sw.js.
+let reloading = false;
+async function reloadFresh() {
+  if (reloading) return;
+  reloading = true;
+  refreshBtn.textContent = `↻ ${t("loading")}`;
+  try {
+    if (navigator.serviceWorker?.controller && self.caches) {
+      const path = location.pathname;
+      const r = await fetch(path, { cache: "no-store" });
+      if (r.ok) await (await caches.open("pages-v2")).put(path, r);
+    }
+  } catch {}
+  location.reload();
+}
+refreshBtn.addEventListener("click", reloadFresh);
 // «72 издания», а не «72 изданий»
 const outletCount = n => `${n} ${ru() ? plural(n, "издание", "издания", "изданий") : tx(plural(n, "medij", "medija", "medija"))}`;
 function renderUpdated() {
   document.getElementById("updated").replaceChildren(
     h("b", {}, "Vestomat"), " · ",
-    `${t("updated")} ${timeFmt.format(new Date(DATA.generated))} · ${outletCount(DATA.sources.length)}`,
-    newer ? " · " : "", newer ? h("button", { class: "refresh-link", type: "button", onclick: () => location.reload() }, t("reload")) : "");
+    `${t("updated")} ${updatedAt()} · ${outletCount(DATA.sources.length)}`,
+    newer ? " · " : "", newer ? h("button", { class: "refresh-link", type: "button", onclick: reloadFresh }, t("reload")) : "");
   refreshBtn.textContent = `↻ ${t("freshNews")} · ${t("reload")}`;
 }
+// сборка не сегодняшняя — пишем и дату: «обновлено 02:31» на странице четырёхдневной давности выглядит свежей
+function updatedAt() {
+  const d = new Date(DATA.generated);
+  return dayKey(d) === dayKey(new Date()) ? timeFmt.format(d)
+    : fmt({ day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(d);
+}
+// Приложение с экрана «Домой» (особенно Firefox на Android) не открывает страницу заново, а возвращает
+// ту же вкладку, что была днями раньше. Если страница старше часа и читатель её сейчас не читает — только что
+// открыл или вернулся после долгого перерыва, — обновляемся сами, без кнопки. Одна попытка на сборку:
+// если service worker снова отдал старую копию (плохая сеть), остаётся кнопка, а не цикл перезагрузок.
+const openedAt = Date.now();
+let hiddenAt = document.hidden ? Date.now() : 0;
+const idleReturn = () => Date.now() - openedAt < 15e3 && scrollY < 200;
+let returned = false;
 async function checkVersion() {
   if (newer || document.hidden) return;
+  let latest;
   try {
     const r = await fetch(`/version.json?t=${Date.now()}`, { cache: "no-store" });
-    if (new Date((await r.json()).generated) <= new Date(DATA.generated)) return;
+    latest = (await r.json()).generated;
+    if (new Date(latest) <= new Date(DATA.generated)) return;
   } catch {
+    return;
+  }
+  if ((returned || idleReturn()) && Date.now() - new Date(DATA.generated) > 3600e3
+      && sessionStorage.getItem("autoReload") !== latest) {
+    sessionStorage.setItem("autoReload", latest);
+    reloadFresh();
     return;
   }
   newer = true;
@@ -1288,9 +1328,18 @@ async function checkVersion() {
   renderUpdated();
 }
 setInterval(checkVersion, 5 * 60e3);
-document.addEventListener("visibilitychange", checkVersion);
-// страницу мог отдать кеш service worker'а (плохая сеть) — тогда она старше сборки, проверяем сразу
-if (navigator.serviceWorker?.controller) checkVersion();
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) { hiddenAt = Date.now(); return; }
+  returned = hiddenAt > 0 && Date.now() - hiddenAt > 30 * 60e3;
+  hiddenAt = 0;
+  renderUpdated();
+  checkVersion().finally(() => { returned = false; });
+});
+// вкладку вернули из bfcache или снова появилась сеть — тоже проверяем
+addEventListener("pageshow", e => { if (e.persisted) { returned = true; checkVersion().finally(() => { returned = false; }); } });
+addEventListener("online", checkVersion);
+// без service worker'а Firefox тоже может показать старую страницу из своего кеша — проверяем всегда
+checkVersion();
 // «12 мин» и «последний пост 2 ч назад» иначе так и застынут с момента открытия
 setInterval(() => {
   now = Date.now();
