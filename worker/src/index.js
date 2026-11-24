@@ -13,7 +13,7 @@
 //   если вышла новость, или «отбой», если у издания выходной (resting). Кого уже прислали, лежит в ключе KV "feeds".
 // POST /telegram — webhook бота: строки «Air Serbia = Air Serbia» или «удалить Air Serbia» из нашего чата
 //   worker коммитит в glossary.json на GitHub (секрет GITHUB_TOKEN), а коммит запускает сборку.
-//   Команды сюжетам (теневой режим, vestomat.rs/plot/) — «/move 1234 s471», «/split s191», «/unmerge s102» —
+//   Команды сюжетам (теневой режим, vestomat.rs/plot/) — «/move 1234 s471», «/split s191», «/unmerge s102», «/merge s1 s2» —
 //   так же дописывает в stories-commands.json; сборка их применяет (stories_live.py).
 // POST /stories {results: [{message, text, buttons}]} — от сборки: чем кончились команды сюжетам, ответом на сообщение
 //   с командой; отчёт проверки сюжетов — с кнопками (buttons — ряды {text, data}). Нажатая кнопка «fix:день:находка»
@@ -58,6 +58,7 @@ const GLOSSARY_HELP = [
   "/move 1234 1240 1302 new — несколько новостей вместе в один новый сюжет (или в s471)",
   "/split s191 s298 — части s191 и s298 в отдельный сюжет",
   "/unmerge s102 — отменить склейку: s102 снова отдельный сюжет",
+  "/merge s12970 s13840 — склеить: тема s12970 целиком в s13840 (отменить — /unmerge s12970)",
 ].join("\n");
 
 export default {
@@ -353,7 +354,7 @@ async function telegramUpdate(request, env) {
   return json({ ok: true });
 }
 
-// «/move 1234 s471», «/move №1234 new», «/move 1234 1240 new» (вместе), «/split s191 s298», «/unmerge s102»; в группе Telegram дописывает к команде
+// «/move 1234 s471», «/move №1234 new», «/move 1234 1240 new» (вместе), «/split s191 s298», «/unmerge s102», «/merge s1 s2»; в группе Telegram дописывает к команде
 // @имя_бота — его отбрасываем. Не команда сюжетам — null
 function storyCommand(line) {
   const [head, ...args] = line.replace(/^(\/\w+)@\w+/, "$1").split(/[\s,]+/);
@@ -365,7 +366,8 @@ function storyCommand(line) {
   }
   if (head === "/split" && args.length && args.every(a => story.test(a))) return { do: "split", parts: args };
   if (head === "/unmerge" && args.length === 1 && story.test(args[0])) return { do: "unmerge", story: args[0] };
-  return head.startsWith("/") && ["/move", "/split", "/unmerge"].includes(head) ? { do: "bad" } : null;
+  if (head === "/merge" && args.length === 2 && args.every(a => story.test(a))) return { do: "merge", story: args[0], to: args[1] };
+  return head.startsWith("/") && ["/move", "/split", "/unmerge", "/merge"].includes(head) ? { do: "bad" } : null;
 }
 
 // кнопка под отчётом проверки сюжетов: «fix:2026-11-14:7» — убрать находку 7 («:s» в конце — она уверенная),
@@ -417,7 +419,8 @@ async function addStoryCommands(env, commands, messageId) {
     const kept = list.slice(-COMMANDS_KEEP);
     const text = `{\n  "commands": [\n${kept.map(c => `    ${JSON.stringify(c)}`).join(",\n")}\n  ]\n}\n`;
     const label = commands.map(c => c.do === "move" ? `move ${[c.news].flat().join(" ")} → ${c.to}` : c.do === "split" ? `split ${c.parts.join(" ")}`
-      : c.do === "fix" ? `fix ${c.day} ${c.which === "sure" ? "все уверенные" : "находка " + c.which}` : `unmerge ${c.story}`);
+      : c.do === "fix" ? `fix ${c.day} ${c.which === "sure" ? "все уверенные" : "находка " + c.which}`
+      : c.do === "merge" ? `merge ${c.story} → ${c.to}` : `unmerge ${c.story}`);
     const saved = await fetch(api, {
       method: "PUT", headers,
       body: JSON.stringify({ message: `Stories from Telegram: ${label.join(", ")}`.slice(0, 200), content: toBase64(text), sha, branch: "main" }),

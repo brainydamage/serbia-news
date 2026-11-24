@@ -184,8 +184,8 @@ ROUTINE_HEAT = 0.25
 
 MERGE_PROMPT = f"""Ты проверяешь темы агрегатора новостей о Сербии на дубли. {RULES}
 
-Вход — JSON: stories — темы, id вида S…: event — ситуация темы, если уже определена, news — несколько новостей (дата время UTC · издание: что произошло); pairs — пары тем, похожих по словам, id вида P…: a и b — темы пары.
-Для каждой пары сначала event_a — ситуация темы a. Есть у темы event — это она: оставь event_a пустой строкой. Нет event — назови ситуацию одной фразой по новостям темы: что происходит, где, с кем. Потом так же event_b — ситуация темы b.
+Вход — JSON: stories — темы, id вида S…: name — название темы на сайте, если есть; event — ситуация темы, если уже определена; whole — у большой темы: самые типичные её новости за всё время; news — несколько новостей (дата время UTC · издание: что произошло); pairs — пары тем, похожих по словам или с одинаковым названием, id вида P…: a и b — темы пары.
+Для каждой пары сначала event_a — ситуация темы a. Есть у темы event — это она: оставь event_a пустой строкой. Нет event — назови ситуацию одной фразой по name, whole и news: что происходит, где, с кем; у большой темы — вся её ситуация, а не первый или последний эпизод. Потом так же event_b — ситуация темы b.
 Потом link — как связаны ситуации:
 {LINKS}
 Перед same, development, consequence или reaction сверь, об одной ли ситуации речь: то же заседание, то же дело, тот же процесс в суде, те же вкладчики того же банка, та же кампания. Общие люди, ведомство, прокуратура, партия, город или день без общей ситуации — topic. Так, topic или repeat:
@@ -245,6 +245,13 @@ MERGE_FILTER_DROP = ("other",)
 MERGE_CONTROL = 10
 MERGE_EFFORT = "medium"
 MERGE_SHOWN = 5  # сколько новостей каждого сюжета видит модель при склейке
+# большая тема (от BIG новостей): её карточка не переписывается и остаётся про первый эпизод — склейка видит вместо неё
+# название и WHOLE_SHOWN самых типичных новостей из WHOLE_POOL, взятых равномерно за всё время. 24.11 s12970 (196 новостей
+# учредительного заседания с 21.11) с карточкой «Заявления Вучича о противниках… и воде» склейка сочла другой темой,
+# чем s13840 (консультации о комитетах того же заседания), — и обе висели в топе как «Учредительное заседание Скупщины Сербии»
+BIG = 60
+WHOLE_POOL = 300
+WHOLE_SHOWN = 6
 MERGE_SURE_SIM = 0.9  # пары похожее этого идут к модели и без общих участников (у MiniLM было 0.7)
 SONNET = "claude-sonnet-5-5"
 PRICES = {MODEL: (0.10, 0.50), SONNET: (2.0, 10.0)}  # вход / выход за 1M токенов, $
@@ -713,7 +720,28 @@ def merge_todo(state: dict, now: str, vectors: dict) -> list[tuple[str, str]]:
             continue
         if sim >= MERGE_SURE_SIM or _share_entities(state, a, b):
             todo.append((a, b))
-    return todo
+    return todo + _same_names(state, page, set(owners), set(todo))
+
+
+def _same_names(state: dict, page: set[str], live: set[str], todo: set[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Живые темы с одинаковым названием, хотя бы одна на странице, — к склейке сразу: без сходства, общих участников и
+    ожидания, пока одна вырастет вдвое. Одинаковое название — почти наверняка одна ситуация (24.11 две темы
+    «Учредительное заседание Скупщины Сербии» в топе). Признанные разными с тем же названием — снова не спрашиваем
+    (state["checked_names"]), пока одна из них не сменит название."""
+    names, asked = state.get("names", {}), state.setdefault("checked_names", {})
+    by_name = {}
+    for sid in sorted(live, key=lambda s: int(s[1:])):
+        if sid in names:
+            by_name.setdefault(names[sid].strip().lower(), []).append(sid)
+    pairs = []
+    for name, sids in by_name.items():
+        for i, a in enumerate(sids):
+            for b in sids[i + 1:]:
+                key = f"{a}|{b}"
+                if (a in page or b in page) and (a, b) not in todo and asked.get(key) != name and not _apart(state, a, b):
+                    asked[key] = name
+                    pairs.append((a, b))
+    return pairs
 
 
 def _mark_checked(state: dict, a: str, b: str) -> None:
@@ -779,9 +807,30 @@ def merge_note(state: dict, now: str, todo: list[tuple[str, str]], haiku: list[s
             stats[key] = stats.get(key, 0) + 1
 
 
+def is_big(state: dict, sid: str) -> bool:
+    return len(state["stories"][sid]["urls"]) >= BIG
+
+
+def whole(state: dict, vectors: dict, sid: str, count: int = WHOLE_SHOWN) -> list[str]:
+    """Самые типичные новости темы за всё время: count из WHOLE_POOL, взятых равномерно, по времени."""
+    urls = state["stories"][sid]["urls"]
+    pool = [u for u in urls[::max(len(urls) // WHOLE_POOL, 1)] if u in vectors]
+    if len(pool) > count:
+        v = np.stack([vectors[u] for u in pool]).astype(np.float32)
+        keep = set(np.argsort(-(v @ v.T).mean(axis=1))[:count])
+        pool = [u for k, u in enumerate(pool) if k in keep]
+    return list(dict.fromkeys(text_of(state["items"][u]) for u in pool))
+
+
+def merge_event(state: dict, sid: str) -> str:
+    """Ситуация темы для склейки — её карточка, кроме большой темы: её карточка — про первый эпизод (BIG)."""
+    return "" if is_big(state, sid) else state.get("cards", {}).get(sid, "")
+
+
 def merge_requests(state: dict, todo: list[tuple[str, str]], vectors: dict) -> list[str]:
-    """Запросы склейки: пачки по MERGE_BATCH пар, k-я — пары todo[k * MERGE_BATCH:…]. Системный промпт — MERGE_PROMPT."""
-    contents = []
+    """Запросы склейки: пачки по MERGE_BATCH пар, k-я — пары todo[k * MERGE_BATCH:…]. Системный промпт — MERGE_PROMPT.
+    У каждой темы — название, у большой вместо карточки — whole: склейка сравнивает темы целиком, а не первые эпизоды."""
+    contents, names = [], state.get("names", {})
     for start in range(0, len(todo), MERGE_BATCH):
         chunk = todo[start:start + MERGE_BATCH]
         aliases = {}
@@ -789,8 +838,10 @@ def merge_requests(state: dict, todo: list[tuple[str, str]], vectors: dict) -> l
             for s in (a, b):
                 aliases.setdefault(s, f"S{len(aliases)}")
         contents.append(json.dumps({"stories": [{"id": al}
-                                                | ({"event": state["cards"][s]} if s in state.get("cards", {}) else {})
-                                                | {"news": _shown(state, s, vectors, MERGE_SHOWN_CARD if s in state.get("cards", {})
+                                                | ({"name": names[s]} if s in names else {})
+                                                | ({"event": merge_event(state, s)} if merge_event(state, s) else {})
+                                                | ({"whole": whole(state, vectors, s)} if is_big(state, s) else {})
+                                                | {"news": _shown(state, s, vectors, MERGE_SHOWN_CARD if merge_event(state, s)
                                                                   else MERGE_SHOWN, detail=True)}
                                                 for s, al in aliases.items()],
                                     "pairs": [{"id": f"P{n}", "a": aliases[a], "b": aliases[b]}
@@ -800,14 +851,16 @@ def merge_requests(state: dict, todo: list[tuple[str, str]], vectors: dict) -> l
 
 def merge_answer(state: dict, todo: list[tuple[str, str]], answer: dict, k: int) -> dict[int, tuple[str, str]]:
     """Ответ на k-ю пачку: номера пар в todo, чья связь — из KEEP_LINKS, → (поводы обоих сюжетов «a | b» — один,
-    если совпали; связь). Повод сюжета с карточкой — карточка, без неё — как его назвала модель. Повода нет —
+    если совпали; связь). Повод сюжета с карточкой — карточка (кроме большой темы, merge_event), без неё — как его
+    назвала модель. Повода нет —
     не склеиваем."""
-    same, cards = {}, state.get("cards", {})
+    same = {}
     for p in answer["pairs"]:
         n = k * MERGE_BATCH + int(p["id"][1:]) if p["id"][1:].isdigit() else -1
         if p["link"] not in KEEP_LINKS or not 0 <= n < len(todo):
             continue
-        a, b = (cards.get(sid) or event.strip() for sid, event in zip(todo[n], (p["event_a"], p["event_b"])))
+        a, b = ((merge_event(state, sid) if sid in state["stories"] else "") or event.strip()
+                for sid, event in zip(todo[n], (p["event_a"], p["event_b"])))
         if a and b:
             same[n] = (a if a == b else f"{a} | {b}", p["link"])
     return same
@@ -846,22 +899,7 @@ def merge_apply(state: dict, now: str, todo: list[tuple[str, str]], same: dict[i
         while keep in moved:
             keep = moved[keep]
         moved[gone] = keep
-        # связь — в журнал и в историю: 16.11 из 16 склеек три соединили разные события (обыск в фонде PIO — с задержанием
-        # декана, протест SMER — со словами Ракич, пробки после каникул — с возвращением в школу), а какую связь
-        # модель назвала, видно не было
-        state.setdefault("merges", []).append(
-            {"t": now, "keep": keep, "gone": gone, "parts": sorted({state["items"][u]["part"] for u in stories[gone]["urls"]}),
-             "event": event, "link": link})
-        for u in stories[gone]["urls"]:
-            it = state["items"][u]
-            it["story"] = keep
-            it.setdefault("history", []).append({"t": now, "why": "merge", "story": keep, "part": it["part"], "from": gone,
-                                                    "event": event, "link": link})
-        stories[keep]["urls"] = sorted(stories[keep]["urls"] + stories[gone]["urls"],
-                                       key=lambda u: state["items"][u]["seen"])
-        stories[keep]["updated"] = max(stories[keep]["updated"], stories[gone]["updated"])
-        state.setdefault("merged", {})[gone] = keep
-        del stories[gone]
+        join(state, keep, gone, now, event, link)
     # склеенный сюжет вырос, но updated у него — время новостей, а не склейки: без пометки его пары, отложенные
     # из-за «не больше одного раза за проход», ждали бы новой новости
     grown = set()
@@ -871,6 +909,26 @@ def merge_apply(state: dict, now: str, todo: list[tuple[str, str]], same: dict[i
         grown.add(keep)
     state["merge_again"] = sorted(set(state.get("merge_again", [])) | grown)
     return len(merges)
+
+
+def join(state: dict, keep: str, gone: str, now: str, event: str, link: str) -> None:
+    """Тема gone — в тему keep, со всеми частями; запись в журнал склеек, по ней unmerge её отменит."""
+    stories = state["stories"]
+    # связь — в журнал и в историю: 16.11 из 16 склеек три соединили разные события (обыск в фонде PIO — с задержанием
+    # декана, протест SMER — со словами Ракич, пробки после каникул — с возвращением в школу), а какую связь
+    # модель назвала, видно не было
+    state.setdefault("merges", []).append(
+        {"t": now, "keep": keep, "gone": gone, "parts": sorted({state["items"][u]["part"] for u in stories[gone]["urls"]}),
+         "event": event, "link": link})
+    for u in stories[gone]["urls"]:
+        it = state["items"][u]
+        it["story"] = keep
+        it.setdefault("history", []).append({"t": now, "why": "merge", "story": keep, "part": it["part"], "from": gone,
+                                                "event": event, "link": link})
+    stories[keep]["urls"] = sorted(stories[keep]["urls"] + stories[gone]["urls"], key=lambda u: state["items"][u]["seen"])
+    stories[keep]["updated"] = max(stories[keep]["updated"], stories[gone]["updated"])
+    state.setdefault("merged", {})[gone] = keep
+    del stories[gone]
 
 
 def merge(state: dict, now: str, vectors: dict, ask) -> dict:

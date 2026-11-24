@@ -71,8 +71,10 @@ NOT_RULES = {"LINES_STEP", "MERGE_EVERY"}
 # f4bbf5a47d — до 23.11, когда в RULES цепочку этапов остановили на новом процессе: формирование правительства — не этап
 # учредительного заседания. 19–20.11 склейка 4 раза влила его в s9278 как «развитие», ровно по прежнему правилу;
 # проверка тем 22.11 вынесла 35 новостей. Уже разложенное остаётся, новое правило — для следующих новостей
+# 2d392b8fc8 — до 24.11, когда склейка стала видеть название темы, а у большой темы вместо застывшей первой карточки —
+# самые типичные новости за всё время (stories.merge_requests). Раскладка новостей не меняется
 SAME_RULES = {"93f151fd03", "dfadd2988f", "9e34e14300", "a0cbf341ea", "74b3c97a3d", "37beed8aa5", "842ae523cb",
-              "a4183da04a", "ebdeb2625d", "a965920995", "f4bbf5a47d"}
+              "a4183da04a", "ebdeb2625d", "a965920995", "f4bbf5a47d", "2d392b8fc8"}
 # сюжет, который не обновлялся дольше, убираем из состояния вместе с его новостями: архив их уже забыл
 # (ARCHIVE_DAYS в build.py — 4 дня), так что заново раскладывать их не придётся
 FORGET = timedelta(days=5)
@@ -123,8 +125,7 @@ NAME_SHOWN = 8  # сколько новостей темы видит модел
 NAME_MAX = 80
 # большая тема — по всей ситуации: 22.11 s9278 (1999 новостей за неделю учредительного заседания Скупщины) называлась
 # «Жалоба СНС на захват постов в Скупщине» — по последним суткам, а с новым названием и карточку переписывали по ним
-NAME_BIG = 60  # с стольких новостей тема большая
-NAME_WHOLE = 300  # из скольких её новостей (равномерно за всё время) выбираем самые типичные
+# с stories.BIG новостей тема большая; самые типичные — из stories.WHOLE_POOL её новостей, равномерно за всё время
 
 
 def load_state() -> tuple[dict, dict]:
@@ -200,6 +201,8 @@ def forget_old(state: dict, vectors: dict, now: str) -> None:
         state["audited_news"] = [n for n in state["audited_news"] if n in known]
     state["checked"] = {k: v for k, v in state.get("checked", {}).items()
                         if all(s in state["stories"] for s in k.split("|"))}
+    state["checked_names"] = {k: v for k, v in state.get("checked_names", {}).items()
+                              if all(s in state["stories"] for s in k.split("|"))}
     state.pop("merged", None)  # кто в кого склеился — только для разбора прогонов; журнал склеек — merges
     # до 13.11 у имени срезалась и закрывающая кавычка названия внутри: «Разрешение на «Югославию»
     state["names"] = {sid: name + "»" * (name.count("«") - name.count("»"))
@@ -288,6 +291,16 @@ def _apply(state: dict, vectors: dict, now: str, c: dict, by_n: dict) -> str:
         olds = sorted({it["story"] for it in state["items"].values() if it.get("story") and it["part"] in c["parts"]})
         sid = stories.split(state, c["parts"], now)
         return f"{', '.join(c['parts'])}: {', '.join(olds)} → свой сюжет {sid}"
+    if c["do"] == "merge":  # тема story — в тему to целиком; /unmerge story отменит
+        for sid in (c["story"], c["to"]):
+            if sid not in stories_:
+                raise ValueError(f"сюжета {sid} нет")
+        if c["story"] == c["to"]:
+            raise ValueError("это один сюжет")
+        size = len(stories_[c["story"]]["urls"])
+        stories.join(state, c["to"], c["story"], now, "склейка командой /merge", "command")
+        state["merge_again"] = sorted(set(state.get("merge_again", [])) | {c["to"]})
+        return f"{c['story']} ({size} новостей) влит в {c['to']}: теперь {len(stories_[c['to']]['urls'])}"
     if c["do"] == "unmerge":
         if not any(m["gone"] == c["story"] for m in state.get("merges", [])):
             raise ValueError(f"склейки {c['story']} в журнале нет")
@@ -501,20 +514,14 @@ def name_stories(state: dict, vectors: dict, ask, now: str) -> int:
 
 
 def is_big(state: dict, sid: str) -> bool:
-    return len(state["stories"][sid]["urls"]) >= NAME_BIG
+    return stories.is_big(state, sid)
 
 
 def big_theme(state: dict, vectors: dict, sid: str) -> dict:
-    """Что модель видит о большой теме целиком: event — карточка, whole — NAME_SHOWN самых типичных новостей из
-    NAME_WHOLE, взятых равномерно за всё время, по времени."""
-    urls = state["stories"][sid]["urls"]
-    pool = [u for u in urls[::max(len(urls) // NAME_WHOLE, 1)] if u in vectors]
-    if len(pool) > NAME_SHOWN:
-        v = np.stack([vectors[u] for u in pool]).astype(np.float32)
-        keep = set(np.argsort(-(v @ v.T).mean(axis=1))[:NAME_SHOWN])
-        pool = [u for k, u in enumerate(pool) if k in keep]
+    """Что модель видит о большой теме целиком: event — карточка, whole — NAME_SHOWN самых типичных новостей за всё
+    время (stories.whole)."""
     return ({"event": state["cards"][sid]} if sid in state.get("cards", {}) else {}) | {
-        "whole": list(dict.fromkeys(stories.text_of(state["items"][u]) for u in pool))}
+        "whole": stories.whole(state, vectors, sid, NAME_SHOWN)}
 
 
 def recent_news(state: dict, vectors: dict, sid: str) -> list[str]:
@@ -1030,6 +1037,7 @@ def write_page(state: dict, vectors: dict, sections: dict, error: str = "") -> N
     def command(c: dict) -> str:
         args = {"move": lambda: f"{' '.join(map(str, c['news'])) if isinstance(c['news'], list) else c['news']} {c['to']}",
                 "split": lambda: " ".join(c["parts"]), "unmerge": lambda: c["story"],
+                "merge": lambda: f"{c['story']} {c['to']}",
                 "fix": lambda: f"{c['day']} {c['which']} (кнопка отчёта)"}.get(c["do"], lambda: "")()
         return f"<li>{e(local_time(c['applied']))} · /{e(c['do'])} {e(args)} — {e(c['result'])}</li>"
 
