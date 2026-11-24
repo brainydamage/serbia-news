@@ -406,9 +406,11 @@ def sizes(state: dict, chunks: list[list[str]], now: str) -> dict[str, dict]:
     return {sid: {"t": now, "n": len(new_news(state, sid, seen.get(sid, "")))} for c in chunks for sid in c}
 
 
-def _seen_of(state: dict, sid: str, k: int = 3) -> list[str]:
-    """Несколько новостей темы для модели: первая и последние."""
-    urls = state["stories"][sid]["urls"]
+def _seen_of(state: dict, sid: str, k: int = 3, skip: set[str] = frozenset()) -> list[str]:
+    """Несколько новостей темы для модели: первая и последние, кроме skip — новостей самих находок. 24.11 последними
+    в s13415 (фонд ПИО) были новости о задержании Бихали, и Haiku на вопрос, к ней ли эти новости, ответил «на месте»:
+    тема выглядела как они сами — 30 уверенно чужих новостей остались в теме."""
+    urls = [u for u in state["stories"][sid]["urls"] if u not in skip] or state["stories"][sid]["urls"]
     chosen = list(dict.fromkeys([urls[0]] + urls[-(k - 1):]))
     return list(dict.fromkeys(state["items"][u].get("what") or state["items"][u]["title"] for u in chosen))
 
@@ -451,11 +453,14 @@ def place(state: dict, found: list[dict], vectors: dict, ask) -> float:
         batch = groups[start:start + PLACE_BATCH]
         ids = list(dict.fromkeys(sid for _, cands, _ in batch for sid in cands))
         alias = {sid: f"S{k}" for k, sid in enumerate(ids)}
+        found_urls = {}  # тема → новости её находок в этой пачке: модель видит тему без них
+        for f, _, _ in batch:
+            found_urls.setdefault(f["story"], set()).update(by_n[n] for n in f["news"] if n in by_n)
         content = {"groups": [{"id": f"G{k}", "from": alias[f["story"]], "news": what,
                                "candidates": [alias[c] for c in cands]} for k, (f, cands, what) in enumerate(batch)],
                    "stories": [{"id": alias[sid], "name": state.get("names", {}).get(sid, "")}
                                | ({"event": state["cards"][sid]} if sid in state.get("cards", {}) else {})
-                               | {"news": _seen_of(state, sid)} for sid in ids]}
+                               | {"news": _seen_of(state, sid, skip=found_urls.get(sid, set()))} for sid in ids]}
         answer, usage = ask(PLACE_PROMPT, json.dumps(content, ensure_ascii=False), PLACE_SCHEMA, stories.RECHECK_EFFORT,
                             stories.MODEL, None)
         usd += usage["usd"]
