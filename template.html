@@ -781,7 +781,9 @@ function essenceSlot(item) {
 function fillEssence(slot, relayout) {
   if (!slot || slot.asked) return;
   slot.asked = true;
-  const late = new Promise(done => setTimeout(done, ESSENCE_WAIT_MS, null));
+  // подводки нет (у Tanjug её в ленте не бывает) — подменять нечем: ждём фразу, пока её пишут (до 25 с запроса),
+  // иначе через 3 с плашка оставалась пустой (25.11)
+  const late = slot.lead ? new Promise(done => setTimeout(done, ESSENCE_WAIT_MS, null)) : new Promise(() => {});
   Promise.race([essenceOf(slot.item, ru() ? "ru" : "sr"), late]).then(text => {
     const apply = () => {
       if (slot.lead) slot.lead.hidden = false;
