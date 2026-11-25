@@ -971,7 +971,7 @@ function renderItem(item, src, { showSource = false, showVia = false } = {}) {
   if (slot && (slot.lead = summary.find(n => n.classList?.contains("lead")))) slot.lead.hidden = true;
   const li = h("li", { class: "item" + (state.read.has(item.url) ? " read" : ""), lang: v.lang });
 
-  const opened = () => { markRead(item.url); li.classList.add("read"); track(`click/${src.section}/${src.name}`); };
+  const opened = () => { markRead(item.url); li.classList.add("read"); track(`click/${src.section}/${src.name}`); trackNews("read", item); };
   const reportable = REPORT_URL && v.translated;
   // жалоба на перевод — под текстом, у оригинала; справа кнопки «Читать на …» и ✕ (на телефоне втроём в ряд не влезали)
   const details = () => h("div", { class: "details" }, h("div", { class: "details-text" }, visible(summary),
@@ -1003,6 +1003,7 @@ function renderItem(item, src, { showSource = false, showVia = false } = {}) {
     }
     openLi = li;
     state.open = item.url;
+    trackNews("open", item);
     markRead(item.url);
     li.classList.add("read");
     let box = li.querySelector(".details");
@@ -1543,9 +1544,13 @@ setInterval(() => {
 // ---------- статистика ----------
 // GoatCounter: без cookies, считает просмотры страницы сам. Здесь — события: что кликают и как читают.
 // Скрипт грузится асинхронно и может быть заблокирован — тогда события просто теряются
-function track(path) {
-  window.goatcounter?.count?.({ path, event: true });
+function track(path, title) {
+  window.goatcounter?.count?.({ path, title, event: true });
 }
+// какие новости раскрывают и по каким уходят читать: путь — сама статья (сайт и адрес без https://), название — заголовок
+// (по-русски, если есть перевод): в GoatCounter у каждой новости своя строка, видно и сколько, и что именно
+const newsPath = (kind, item) => `${kind}/${item.url.replace(/^https?:\/\/(www\.)?/, "").replace(/[?#].*$/, "")}`;
+const trackNews = (kind, item) => track(newsPath(kind, item), item.ru?.title || item.title);
 // на каком языке и алфавите открывают сайт (с учётом сохранённого выбора) — один раз за визит
 addEventListener("load", () => track(`visit/${ru() ? "ru" : state.script}`));
 // не считать свой браузер: то же, что /#toggle-goatcounter, но и там, где адресной строки нет (приложение с экрана
