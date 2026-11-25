@@ -482,17 +482,19 @@ async function daily(request, env) {
   const send = (method, payload) => fetch(`${api}/${method}`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chat_id: to, ...payload }),
   });
+  // текст не обрезаем: лимит Telegram — на видимые знаки, а обрезка по разметке рвёт теги (26.11 так не ушла первая
+  // сводка — ссылки длинные). Длину держит сборка (daily.LIMIT)
   // rich message (Bot API 10.1+: заголовки, таблицы, до 32768 знаков); не прошёл — простой HTML, чтобы сводка всё равно вышла
   let kind = "rich", richError = "", response = null;
   if (typeof rich === "string" && rich) {
     const draft = channel ? "" : "<p><i>Черновик для @vestomat_daily: в канал пойдёт, когда у worker будет DAILY_CHAT_ID</i></p><hr/>";
-    response = await send("sendRichMessage", { rich_message: { html: draft + rich.slice(0, 30000) } });
+    response = await send("sendRichMessage", { rich_message: { html: draft + rich } });
     if (!response.ok) richError = `${response.status}: ${(await response.text()).slice(0, 200)}`;
   }
   if (!response?.ok) {
     kind = "plain";
     const draft = channel ? "" : "Черновик для @vestomat_daily (в канал пойдёт, когда у worker будет DAILY_CHAT_ID):\n\n";
-    response = await send("sendMessage", { text: draft + text.slice(0, 4000), parse_mode: "HTML", link_preview_options: { is_disabled: true } });
+    response = await send("sendMessage", { text: draft + text, parse_mode: "HTML", link_preview_options: { is_disabled: true } });
     if (!response.ok) return json({ error: `telegram ${response.status}: ${(await response.text()).slice(0, 300)}`, rich_error: richError }, 502);
   }
   await env.REPORTS.put(key, String((await response.json()).result?.message_id || 1), { expirationTtl: KEEP_SECONDS });

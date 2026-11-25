@@ -285,7 +285,7 @@ def _post(state: dict, vectors: dict, now: str, tz, spend) -> None:
     today = done.setdefault(day, {})
     if today.get("sent"):
         return
-    if "text" not in today:
+    if "rich" not in today:  # нет rich — текст от прежней версии сводки (до 26.11): пишем заново
         themes = pick(state, since, until)
         if not themes:
             print("Сводка дня: тем за сутки нет", file=sys.stderr)

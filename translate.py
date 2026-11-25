@@ -643,7 +643,8 @@ def reports_api(data: dict | None = None, path: str = "reports") -> dict | None:
         with urllib.request.urlopen(request, timeout=15) as response:
             return json.load(response)
     except Exception as exc:  # noqa: BLE001 — без жалоб сборка всё равно должна пройти
-        print(f"Приёмник жалоб не ответил: {type(exc).__name__}: {exc}"[:200], file=sys.stderr)
+        body = exc.read().decode("utf-8", "replace") if hasattr(exc, "read") else ""  # что ответил worker — причина
+        print(f"Приёмник жалоб не ответил: {type(exc).__name__}: {exc} {body}"[:500], file=sys.stderr)
         return None
 
 
