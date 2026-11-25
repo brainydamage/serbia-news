@@ -297,6 +297,11 @@ a.card-name:hover { color: var(--hover); }
   background: color-mix(in srgb, var(--tip-text) 14%, transparent); color: inherit; font-size: 17px; line-height: 1;
 }
 .details-close::before { content: ""; position: absolute; inset: -8px; }
+/* на телефоне ссылки «Плохой …» — с местом под палец, и кнопки ниже них: вплотную легко промахнуться (отзыв 25.11) */
+@media (hover: none) {
+  .flag-link { margin-top: 2px; padding: 8px 0; }
+  .details-actions { margin-top: 22px; }
+}
 .read-link {
   min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
   padding: 10px 14px; border-radius: 999px; background: var(--tip-text); color: var(--tip-bg);
