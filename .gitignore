@@ -10,3 +10,4 @@ audit_terms.json
 # Cloudflare Worker: локальные секреты и служебные файлы wrangler
 worker/.dev.vars
 worker/.wrangler/
+worker/node_modules/

@@ -1028,6 +1028,9 @@ def main() -> int:
         for item in r["items"]:
             for field in ARCHIVE_ONLY:
                 item.pop(field, None)
+    # суть одной фразой (essences.py): тексты новых статей — в worker, у новости в data.json — номер пачки "tx"
+    import essences
+    essences.safe_attach(results)
 
     data = {
         "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),

@@ -252,6 +252,16 @@ a.card-name:hover { color: var(--hover); }
 .tip p, .details p { margin: 0; }
 .tip p + p, .details p + p { margin-top: 10px; }
 .tip .orig, .details .orig { font-size: 13px; opacity: .65; }
+/* суть одной фразой (Haiku по тексту статьи, worker /essence): пока пишется — бледные полоски на её месте,
+   примерно той же высоты, чтобы пришедшая фраза почти не сдвигала остальное */
+.essence { font-weight: 500; animation: essence-in .3s ease-out; }
+.essence.loading { animation: none; }
+.essence.loading .bar { display: block; height: .75em; margin: .35em 0; border-radius: 4px; background: currentColor;
+  animation: essence-wait 1.1s ease-in-out infinite alternate; }
+.essence.loading .bar:last-child { width: 55%; }
+@keyframes essence-wait { from { opacity: .07; } to { opacity: .18; } }
+@keyframes essence-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .essence, .essence.loading .bar { animation: none; opacity: 1; } .essence.loading .bar { opacity: .12; } }
 
 /* жалоба на перевод: на компьютере флажок в конце строки при наведении, на телефоне — ссылка в подводке */
 .report-flag {
@@ -736,27 +746,81 @@ function summaryOf(item, src) {
   ].filter(Boolean);
 }
 
+// ---------- суть одной фразой ----------
+// Фразу пишет Haiku по тексту статьи (worker /essence), только когда новость раскрыли (на телефоне) или задержались
+// на подсказке (на компьютере): читателей мало, писать заранее для всех — платить за то, что никто не откроет.
+// Текст статьи сборка заранее кладёт в worker (essences.py), у такой новости в data.json есть "tx". Только по-русски
+const ESSENCE_URL = location.hostname === "localhost" ? "http://localhost:8787/essence" : "https://vestomat-reports.vestomat.workers.dev/essence";
+const ESSENCE_HOVER_MS = 500;  // подсказка мелькает, пока мышь едет через список, — за такие не платим
+const essences = new Map();  // адрес → Promise<фраза или null>: одна просьба на новость за визит
+function essenceOf(item) {
+  if (!essences.has(item.url)) {
+    track("essence");
+    essences.set(item.url, fetch(ESSENCE_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: item.url }) })
+      .then(r => r.ok ? r.json() : {}).then(d => d.text || null).catch(() => null));
+  }
+  return essences.get(item.url);
+}
+// место под фразу: полоски, пока не пришла; не пришла (нет текста, лимит, ошибка) — место исчезает
+function essenceSlot(item) {
+  if (!ESSENCE_URL || !item.tx || !item.ru || !ru()) return null;
+  const slot = h("p", { class: "essence loading", "aria-busy": "true" }, ...[1, 2, 3, 4].map(() => h("span", { class: "bar" })));
+  slot.item = item;
+  return slot;
+}
+// relayout(apply) — вызывающий меняет раскладку вокруг apply (высота плашки, место подсказки); без неё — просто подставить
+function fillEssence(slot, relayout) {
+  if (!slot || slot.asked) return;
+  slot.asked = true;
+  essenceOf(slot.item).then(text => {
+    const apply = () => {
+      if (text) {
+        slot.replaceChildren(text);
+        slot.classList.remove("loading");
+        slot.removeAttribute("aria-busy");
+      } else {
+        slot.gone = true;
+        slot.remove();
+      }
+    };
+    if (slot.isConnected && relayout) relayout(apply);
+    else apply();
+  });
+}
+const visible = nodes => nodes.filter(n => !n.gone);
+
 const tipEl = h("div", { class: "tip", hidden: true });
 document.body.append(tipEl);
 let tipTimer;
+let essenceTimer;
+function placeTip(anchor) {
+  const r = anchor.getBoundingClientRect();
+  const left = Math.max(8, Math.min(r.left, innerWidth - tipEl.offsetWidth - 8));
+  let top = r.bottom + 8;
+  if (top + tipEl.offsetHeight > innerHeight - 8) top = Math.max(8, r.top - tipEl.offsetHeight - 8);
+  tipEl.style.left = left + "px";
+  tipEl.style.top = top + "px";
+}
 function showTip(anchor, nodes) {
   clearTimeout(tipTimer);
+  clearTimeout(essenceTimer);
   // небольшая задержка, чтобы подсказки не мелькали, пока мышь едет через список
   tipTimer = setTimeout(() => {
-    tipEl.replaceChildren(...nodes);
+    tipEl.replaceChildren(...visible(nodes));
     tipEl.hidden = false;
-    const r = anchor.getBoundingClientRect();
-    const left = Math.max(8, Math.min(r.left, innerWidth - tipEl.offsetWidth - 8));
-    let top = r.bottom + 8;
-    if (top + tipEl.offsetHeight > innerHeight - 8) top = Math.max(8, r.top - tipEl.offsetHeight - 8);
-    tipEl.style.left = left + "px";
-    tipEl.style.top = top + "px";
+    placeTip(anchor);
+    const slot = nodes.find(n => n.classList?.contains("essence"));
+    const relayout = apply => { apply(); if (!tipEl.hidden) placeTip(anchor); };
+    // уже просили (у этой новости в этот визит) — подставляем сразу, иначе ждём, что мышь задержится
+    if (slot && essences.has(slot.item.url)) fillEssence(slot, relayout);
+    else if (slot) essenceTimer = setTimeout(() => { if (!tipEl.hidden && tipEl.contains(slot)) fillEssence(slot, relayout); }, ESSENCE_HOVER_MS - 150);
   }, 150);
 }
-function hideTip() { clearTimeout(tipTimer); tipEl.hidden = true; }
+function hideTip() { clearTimeout(tipTimer); clearTimeout(essenceTimer); tipEl.hidden = true; }
 // с заголовка на подсказку можно перейти мышью — тогда она остаётся, и из неё можно выделить и скопировать текст
 function leaveHead() {
   clearTimeout(tipTimer);
+  clearTimeout(essenceTimer);
   tipTimer = setTimeout(() => { if (!tipEl.matches(":hover")) tipEl.hidden = true; }, 200);
 }
 tipEl.addEventListener("mouseleave", () => { if (!String(getSelection()).trim() || !tipEl.contains(getSelection().anchorNode)) hideTip(); });
@@ -859,7 +923,18 @@ function finishClose(li) {
   if (openLi === li) openLi = null;
 }
 function startDetails(li, to, t0) {
+  li._grow?.cancel();  // высоту снова ведёт цикл кадров
   li._anim = { from: li._p || 0, b0: li._b || 0, to, t0 };
+}
+// пришла суть (или её место убрали) — плашка меняет высоту плавно. Если она как раз раскрывается или сворачивается,
+// новую высоту подхватит цикл кадров
+function reflowDetails(li, apply) {
+  const box = li.querySelector(".details");
+  const before = box.getBoundingClientRect().height;
+  apply();
+  li._h = box.scrollHeight;
+  if (li._anim || li !== openLi || reducedMotion()) return;
+  li._grow = box.animate([{ height: before + "px" }, { height: li._h + "px" }], { duration: 240, easing: "cubic-bezier(.4, 0, .2, 1)" });
 }
 function tickDetails(now) {
   detailsFrame = 0;
@@ -915,13 +990,14 @@ function renderItem(item, src, { showSource = false, showVia = false } = {}) {
   const fresh = item.date && now - new Date(item.date) < FRESH_MS;
   const v = textOf(item, src);
   const via = item.via || (showVia ? src.name : null);
-  const summary = summaryOf(item, src);
+  const slot = essenceSlot(item);
+  const summary = [slot, ...summaryOf(item, src)].filter(Boolean);
   const li = h("li", { class: "item" + (state.read.has(item.url) ? " read" : ""), lang: v.lang });
 
   const opened = () => { markRead(item.url); li.classList.add("read"); hideTip(); track(`click/${src.section}/${src.name}`); };
   const reportable = REPORT_URL && v.translated;
   // жалоба на перевод — под текстом, у оригинала; справа кнопки «Читать на …» и ✕ (на телефоне втроём в ряд не влезали)
-  const details = () => h("div", { class: "details" }, h("div", { class: "details-text" }, summary,
+  const details = () => h("div", { class: "details" }, h("div", { class: "details-text" }, visible(summary),
       reportable ? h("button", { class: "flag-link", type: "button", onclick: () => openReport(item) }, t("report")) : null),
     h("div", { class: "details-actions" },
       h("a", { class: "read-link", href: item.url, target: "_blank", rel: "noopener", onclick: opened }, `${t("readOn")} ${via || src.name} ↗`),
@@ -977,6 +1053,7 @@ function renderItem(item, src, { showSource = false, showVia = false } = {}) {
     startDetails(li, 1, t0);
     scrollAnim = { li, from, to, t0 };
     runDetails(t0);
+    fillEssence(slot, apply => reflowDetails(li, apply));
   }
   const onclick = e => {
     if (selecting(head)) { e.preventDefault(); return; }
@@ -1011,6 +1088,7 @@ function renderItem(item, src, { showSource = false, showVia = false } = {}) {
     const box = details();
     li.append(box);
     showOpen(li, box);
+    fillEssence(slot, apply => reflowDetails(li, apply));
   }
   return li;
 }

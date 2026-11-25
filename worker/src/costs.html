@@ -17,6 +17,7 @@
     --new: #2a78d6;
     --retry: #eb6834;
     --review: #1baf7a;
+    --essence: #8b5cf6;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -29,6 +30,7 @@
       --new: #3987e5;
       --retry: #d95926;
       --review: #199e70;
+      --essence: #9d76f8;
     }
   }
   * { box-sizing: border-box; }
@@ -82,7 +84,8 @@
 </main>
 <div class="tip" id="tip"></div>
 <script>
-const KINDS = { new: "новые", retry: "повтор", review: "жалобы" };
+// essence — суть одной фразой: её пишет не сборка, а worker, когда читатель раскрыл новость
+const KINDS = { new: "новые", retry: "повтор", review: "жалобы", essence: "суть" };
 const MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
 const MONTH_NAMES = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"];
 const WEEKDAYS = ["вс", "пн", "вт", "ср", "чт", "пт", "сб"];
@@ -156,7 +159,7 @@ function showTip(e, day, row) {
   for (const [k, name] of Object.entries(KINDS)) {
     if (row[k]) tip.append(el("i", { style: `background:var(--${k})` }), `${name}: ${usd(row[k].usd)} · ${row[k].items} нов.`, el("br"));
   }
-  tip.append(row.builds ? `итого ${usd(total(row))}, сборок: ${row.builds}` : "нет расходов");
+  tip.append(total(row) ? `итого ${usd(total(row))}, сборок: ${row.builds}` : "нет расходов");
   tip.style.display = "block";
   const x = Math.min(e.clientX + 12, innerWidth - tip.offsetWidth - 8);
   tip.style.left = x + "px";

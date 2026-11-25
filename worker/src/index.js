@@ -20,11 +20,18 @@
 //   становится командой {do: "fix"} в stories-commands.json, как набранная. Кнопки отчёта за день лежат в KV
 //   ("fix:день"): по «убрать все уверенные» снимаем кнопки уверенных находок («fix:день:находка:s») со всех его сообщений.
 //   Webhook worker подключает сам при первой сборке после выкатки (см. ensureWebhook).
+// POST /texts {id, system, items: {url: вопрос}} — от сборки (essences.py): вопросы модели для «сути одной фразой» — текст
+//   статьи с правилами и глоссарием, пачка одной сборки в ключе KV "tx:id" (одна запись на сборку: у KV на бесплатном
+//   тарифе ~1000 записей в день). Тексты статей лежат только здесь и на сайт не попадают.
+// POST /essence {url} — от читателя, когда он раскрыл новость: суть одной фразой (Haiku). Новость берём из data.json
+//   (у неё должен быть номер пачки "tx"), фразу кэшируем ("e:" + адрес). Расходы — в ключе "essence-stats" по дням;
+//   за дневным лимитом (ESSENCE_USD_PER_DAY) новые фразы не пишем, кэш отдаём.
 // GET /costs — страница с этой статистикой, GET /stats — сами данные для неё (с ключом STATS_KEY).
 //   Ключ страница берёт из адреса после # — эта часть не уходит ни на сервер, ни в Referer.
 // Оригинал и перевод берём не из запроса, а из опубликованного data.json: так пожаловаться можно
 // только на настоящую новость с сайта, а в Telegram не попадёт чужой текст под её видом.
 
+import Anthropic from "@anthropic-ai/sdk";
 import COSTS_PAGE from "./costs.html";
 
 const ORIGINS = ["https://vestomat.rs", "http://localhost:8765"];
@@ -43,6 +50,18 @@ const UNTRANSLATED_SECONDS = 4 * 24 * 3600;  // дольше, чем новос�
 const FEEDS_MAX = 15;  // новых тревог в одном сообщении
 // сторож лент заметно отличается от «Не перевелось»: свой заголовок и значки
 const FEEDS_TITLE = "📡 СТОРОЖ ЛЕНТ";
+// суть одной фразой: Haiku 5.5 — проба 25.11 на 30 статьях: медиана 157 знаков, ~$0.0006 и ~1,5 с на фразу
+const ESSENCE_MODEL = "claude-haiku-5-5";
+const ESSENCE_PRICE = [0.10, 0.50];  // $ за миллион токенов: вход, выход
+const ESSENCE_USD_PER_DAY = 0.30;  // ~500 фраз; дальше до полуночи по Белграду — только из кэша
+const ESSENCE_PER_IP_PER_HOUR = 60;
+const ESSENCE_LIMIT = 200;  // знаков; длиннее — просим сократить, потом режем по «;»
+const ESSENCE_KEEP_SECONDS = 7 * 24 * 3600;
+const TEXTS_KEEP_SECONDS = 6 * 24 * 3600;  // сборка помнит тексты 5 дней (essences.KEEP_DAYS)
+const ESSENCE_SCHEMA = { type: "object", additionalProperties: false, required: ["essence"], properties: { essence: { type: "string" } } };
+const ESSENCE_FIX = "Ты редактор. Перепиши фразу так, чтобы она стала одним предложением по-русски не длиннее 170 знаков " +
+  "(это жёсткий предел: если фраза длиннее, обязательно выбрось одну из частей или подробностей), кириллицей (кроме " +
+  "общепринятых латинских аббревиатур и брендов). Сохрани главный факт, выбрось второстепенное. Ничего не добавляй от себя.";
 const REPO = "brainydamage/serbia-news";
 const GLOSSARY_PATH = "glossary.json";
 const COMMANDS_PATH = "stories-commands.json";
@@ -73,8 +92,8 @@ export default {
         headers: { ...cors, "Access-Control-Allow-Methods": "POST", "Access-Control-Allow-Headers": "Content-Type", "Access-Control-Max-Age": "86400" },
       });
     }
-    if (pathname === "/report" && request.method === "POST") {
-      const response = await report(request, env, ctx);
+    if ((pathname === "/report" || pathname === "/essence") && request.method === "POST") {
+      const response = await (pathname === "/report" ? report : essence)(request, env, ctx);
       for (const [k, v] of Object.entries(cors)) response.headers.set(k, v);
       return response;
     }
@@ -84,9 +103,13 @@ export default {
     }
     if (pathname === "/stats" && request.method === "GET") {
       if (!authorized(request, env.STATS_KEY)) return json({ error: "unauthorized" }, 401);
-      return json((await env.REPORTS.get("stats", "json")) || { days: {}, builds: [] });
+      const [all, essences] = await Promise.all([env.REPORTS.get("stats", "json"), env.REPORTS.get("essence-stats", "json")]);
+      const out = all || { days: {}, builds: [] };
+      // фразы пишет не сборка, а worker — свой ключ, чтобы не перезаписывать "stats" наперегонки со сборкой
+      for (const [day, spent] of Object.entries(essences?.days || {})) (out.days[day] ||= { builds: 0 }).essence = spent;
+      return json(out);
     }
-    if (["/reports", "/stats", "/untranslated", "/feeds", "/stories"].includes(pathname) && !authorized(request, env.REPORTS_TOKEN)) return json({ error: "unauthorized" }, 401);
+    if (["/reports", "/stats", "/untranslated", "/feeds", "/stories", "/texts"].includes(pathname) && !authorized(request, env.REPORTS_TOKEN)) return json({ error: "unauthorized" }, 401);
     if (pathname === "/reports" && request.method === "GET") return list(env);
     if (pathname === "/reports" && request.method === "POST") return resolve(request, env);
     if (pathname === "/stats" && request.method === "POST") {
@@ -97,6 +120,7 @@ export default {
     if (pathname === "/untranslated" && request.method === "POST") return untranslated(request, env);
     if (pathname === "/feeds" && request.method === "POST") return watchFeeds(request, env);
     if (pathname === "/stories" && request.method === "POST") return storyResults(request, env);
+    if (pathname === "/texts" && request.method === "POST") return saveTexts(request, env);
     return json({ error: "not found" }, 404);
   },
 };
@@ -145,6 +169,134 @@ async function save(env, url, comment, { item, src }) {
     comments: [...(old?.comments || []), ...(comment ? [comment] : [])].slice(-10),
     messages: [...(old?.messages || []), ...(message ? [message] : [])], reacted: old?.reacted || 0,
   }), { expirationTtl: KEEP_SECONDS });
+}
+
+async function saveTexts(request, env) {
+  const { id, system, items } = await request.json();
+  if (!/^\d{12}$/.test(id || "") || typeof system !== "string" || !items || typeof items !== "object") return json({ error: "bad batch" }, 400);
+  await env.REPORTS.put(`tx:${id}`, JSON.stringify({ system, items }), { expirationTtl: TEXTS_KEEP_SECONDS });
+  return json({ ok: true, items: Object.keys(items).length });
+}
+
+async function essence(request, env, ctx) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "bad json" }, 400);
+  }
+  const url = typeof body.url === "string" ? body.url.slice(0, 2000) : "";
+  if (!url) return json({ error: "no url" }, 400);
+  const key = "e:" + (await sha1(url));
+  const cached = await env.REPORTS.get(key, "json");
+  if (cached) return json({ text: cached.text });
+
+  const found = await findItem(url, env.DATA_URL || DATA_URL);
+  if (!found?.item.tx) return json({ error: "unknown item" }, 404);
+  const day = belgrade(Date.now()).slice(0, 10);
+  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  const limitKey = `eip:${ip}:${Math.floor(Date.now() / 3600e3)}`;
+  const [count, spent, batch] = await Promise.all([
+    env.REPORTS.get(limitKey).then(Number),
+    env.REPORTS.get("essence-stats", "json"),
+    env.REPORTS.get(`tx:${found.item.tx}`, { type: "json", cacheTtl: 3600 }),
+  ]);
+  if (count >= ESSENCE_PER_IP_PER_HOUR) return json({ error: "too many" }, 429);
+  if ((spent?.days?.[day]?.usd || 0) >= ESSENCE_USD_PER_DAY) return json({ error: "daily limit" }, 429);
+  const question = batch?.items?.[url];
+  if (!question) return json({ error: "no text" }, 404);
+
+  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, baseURL: env.ANTHROPIC_API || undefined, maxRetries: 1, timeout: 20000 });
+  const usage = { in: 0, out: 0 };
+  const ask = async (system, content) => {
+    const response = await client.messages.create({
+      model: ESSENCE_MODEL, max_tokens: 4000, system, messages: [{ role: "user", content }],
+      output_config: { effort: "low", format: { type: "json_schema", schema: ESSENCE_SCHEMA } },
+    });
+    usage.in += response.usage.input_tokens;
+    usage.out += response.usage.output_tokens;
+    const text = response.content.filter(b => b.type === "text").map(b => b.text).join("");
+    try {
+      return cyrFix(String(JSON.parse(text).essence || "").trim().replace(/\.+$/, ""));
+    } catch {
+      return "";
+    }
+  };
+  let text;
+  try {
+    text = await ask(batch.system, question);
+    const problems = text && text !== "НЕТ" ? essenceProblems(text, question) : [];
+    if (problems.length) {
+      const fixed = await ask(ESSENCE_FIX, `Заголовок: ${found.item.ru.title}\nЗамечания: ${problems.join(", ")}\n` +
+        `Сейчас ${text.length} знаков, нужно не больше 170.\nФраза: ${text}`);
+      if (fixed && fixed !== "НЕТ") text = fixed;
+    }
+  } catch (error) {
+    console.log("essence:", error?.status, error?.message);
+    return json({ error: "model" }, 502);
+  } finally {
+    ctx.waitUntil(addEssenceStats(env, day, usage));
+    ctx.waitUntil(env.REPORTS.put(limitKey, String(count + 1), { expirationTtl: 3600 }));
+  }
+  text = cutClauses(text);
+  // «НЕТ» (текст не про то) и негодное тоже кэшируем — чтобы не платить за тот же отказ снова
+  const answer = text && text !== "НЕТ" && text.length <= ESSENCE_LIMIT + 40 && !essenceProblems(text, question).some(p => !p.startsWith("длина")) ? text : null;
+  ctx.waitUntil(env.REPORTS.put(key, JSON.stringify({ text: answer }), { expirationTtl: ESSENCE_KEEP_SECONDS }));
+  return json({ text: answer });
+}
+
+async function addEssenceStats(env, day, usage) {
+  if (!usage.in) return;
+  // читаем и перезаписываем один ключ: два клика в одну и ту же миллисекунду потеряют одну строку счёта — не страшно
+  const all = (await env.REPORTS.get("essence-stats", "json")) || { days: {} };
+  const row = (all.days[day] ||= { items: 0, in: 0, out: 0, usd: 0 });
+  row.items++;
+  row.in += usage.in;
+  row.out += usage.out;
+  row.usd = Math.round((row.usd + (usage.in * ESSENCE_PRICE[0] + usage.out * ESSENCE_PRICE[1]) / 1e6) * 1e6) / 1e6;
+  await env.REPORTS.put("essence-stats", JSON.stringify(all));
+}
+
+// латинские буквы внутри русских слов и сербские ђ/ћ/ј/љ/њ/џ: Haiku пишет «Зdравкович», «Марija», «Стаматовић» —
+// правим по таблице, без модели (модель в правке сама вставляла «ј»)
+const LATIN_TO_RU = { a: "а", b: "б", c: "ц", č: "ч", ć: "ч", d: "д", đ: "дж", e: "е", f: "ф", g: "г", h: "х", i: "и", j: "ј",
+  k: "к", l: "л", m: "м", n: "н", o: "о", p: "п", r: "р", s: "с", š: "ш", t: "т", u: "у", v: "в", z: "з", ž: "ж", y: "ы",
+  x: "кс", w: "в", q: "к" };
+const SERBIAN_TO_RU = [["ија", "ия"], ["ију", "ию"], ["ије", "ии"], ["ја", "я"], ["ју", "ю"], ["је", "е"], ["ј", "й"],
+  ["ња", "ня"], ["ње", "не"], ["њу", "ню"], ["ља", "ля"], ["ље", "ле"], ["љу", "лю"],
+  ["ђ", "дж"], ["ћ", "ч"], ["љ", "ль"], ["њ", "нь"], ["џ", "дж"]];
+const keepCase = (src, dst) => src[0] && src[0] !== src[0].toLowerCase() ? dst[0].toUpperCase() + dst.slice(1) : dst;
+
+function cyrFix(text) {
+  return text.replace(/[\p{L}\p{N}_]+/gu, word => {
+    if (!/[а-яёђћјљњџ]/i.test(word)) return word;
+    if (/[a-zčćžšđ]/i.test(word)) word = [...word].map(ch => LATIN_TO_RU[ch.toLowerCase()] ? keepCase(ch, LATIN_TO_RU[ch.toLowerCase()]) : ch).join("");
+    if (/[ђћјљњџ]/i.test(word)) {
+      let low = word.toLowerCase();
+      for (const [a, b] of SERBIAN_TO_RU) low = low.split(a).join(b);
+      word = keepCase(word, low);
+    }
+    return word;
+  });
+}
+
+function essenceProblems(text, question) {
+  const problems = [];
+  if (text.length > ESSENCE_LIMIT) problems.push(`длина ${text.length}`);
+  // обычные слова латиницей, которых нет в оригинале: «following», «near» (названия пишутся с заглавной — не в счёт)
+  const source = new Set(question.toLowerCase().match(/[a-zčćžšđ]+/g) || []);
+  const latin = [...new Set(text.match(/(?<![\p{L}])[a-z]{2,}(?![\p{L}])/gu) || [])].filter(w => !source.has(w));
+  if (latin.length) problems.push("латиница: " + latin.slice(0, 3).join(", "));
+  if (/[čćžšđ]/i.test(text) && !/[а-яё]/i.test(text)) problems.push("не по-русски");
+  return problems;
+}
+
+// всё ещё длинно — отрезаем последние части после «;»: Haiku пишет «главное; подробность»
+function cutClauses(text) {
+  if (!text || text.length <= ESSENCE_LIMIT || !text.includes("; ")) return text;
+  const parts = text.split("; ");
+  while (parts.length > 1 && parts.join("; ").length > ESSENCE_LIMIT) parts.pop();
+  return parts.join("; ");
 }
 
 function authorized(request, secret) {
