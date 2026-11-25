@@ -48,9 +48,11 @@ MARKS = {"independent": "🔵", "mainstream": "⚪", "state": "🟣", "progov": 
 SIDE_NAMES = {"independent": "критичные к SNS", "mainstream": "крупные порталы", "state": "государственные",
               "progov": "близкие к SNS"}
 SITE = "https://vestomat.rs/ru/#teme"
-# «Ещё сегодня»: ссылка — на новость самого спокойного по тону издания из писавших (агентство, газеты, общественное ТВ),
-# нет таких — от первой писавшей стороны NEUTRAL. Не Pink и не Telegraf с «новым ударом по империи»
-CALM = ["Beta", "Politika", "RTS", "Dnevnik", "Euronews Srbija", "N1", "Blic", "Tanjug"]
+# «Ещё сегодня»: ссылка — на самую типичную для темы новость (ближе всех по смыслу к остальным — обычно самое сухое
+# изложение) среди изданий со спокойным тоном, без порядка между ними: издание выбирает сама новость, а не мы. В одном
+# посте издания не повторяются. Спокойных среди писавших нет — от первой писавшей стороны NEUTRAL. Не Pink и не Telegraf
+# с «новым ударом по империи»
+CALM = {"Beta", "Politika", "RTS", "Dnevnik", "Euronews Srbija", "N1", "Blic", "Tanjug"}
 NEUTRAL = ["mainstream", "state", "independent", "progov"]
 NBSP = "\u00a0"  # кружок не отрывается от названия стороны при переносе строки
 MORE = 3  # «Ещё сегодня»: столько самых обсуждаемых кандидатов, не вошедших в топ
@@ -242,15 +244,17 @@ def compose_rich(state: dict, vectors: dict, picked: list, more: list[tuple[str,
             out.append(f"<details><summary>Как подали · {marks} · {outlets}</summary>{table}</details>")
         else:
             out.append(f"{table}<p><i>{outlets}</i></p>")
-    if more:  # ссылка — на самую типичную новость самого спокойного издания (CALM, NEUTRAL)
+    if more:  # ссылка — CALM: самая типичная новость спокойных изданий, издания не повторяются; потом NEUTRAL
+        used = set()
+
         def item(sid: str, urls: list[str]) -> str:
             order = central(state, vectors, urls)
-            by_outlet = {}
-            for x in order:
-                by_outlet.setdefault(state["items"][x]["source"], x)
             sides = by_side(state, vectors, urls)
-            u = (next((by_outlet[o] for o in CALM if o in by_outlet), None)
+            source = lambda x: state["items"][x]["source"]
+            u = (next((x for x in order if source(x) in CALM and source(x) not in used), None)
+                 or next((x for x in order if source(x) in CALM), None)
                  or next((sides[s][0] for s in NEUTRAL if s in sides), None) or order[0])
+            used.add(source(u))
             n = len({state["items"][x]["source"] for x in urls})
             return (f'<li><a href="{href(u)}">{esc(name_of(state, sid, urls))}</a> · '
                     f"<i>{n} {plural(n, 'издание', 'издания', 'изданий')}</i></li>")
