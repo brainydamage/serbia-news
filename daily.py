@@ -17,7 +17,8 @@
 спрашивая модель заново.
 
 Сводку за любой день сейчас — запуск сборки руками с днём: gh workflow run build -f daily_day=2026-11-25
-(или «Run workflow» на GitHub, поле daily_day). Worker не пошлёт второй раз то, что уже отправлял за этот день.
+(или «Run workflow» на GitHub, поле daily_day). Ручной запуск отправляет и то, что уже отправляли: так видно новое
+оформление. Ответ модели за день хранится, пост из него собирается заново — повтор не стоит нового запроса.
 
     .venv/bin/python daily.py [stories.json] [archive.json]   — локально: какие темы попали бы в сводку сейчас и что
                                                                  увидела бы модель, без запроса к ней и без отправки
@@ -48,6 +49,7 @@ SIDE_NAMES = {"independent": "критичные к SNS", "mainstream": "кру�
               "progov": "близкие к SNS"}
 SITE = "https://vestomat.rs/ru/#teme"
 MORE = 3  # «Ещё сегодня»: столько самых обсуждаемых кандидатов, не вошедших в топ
+FOLD = True  # таблица подачи свёрнута под «Как подали» (<details>): пост короче; False — таблица видна сразу
 MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября",
           "декабря"]
 DAYS = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
@@ -208,9 +210,10 @@ def angles(t: dict) -> dict[str, str]:
 def compose_rich(state: dict, vectors: dict, picked: list, more: list[tuple[str, list[str]]], summary: str,
                  day: str) -> str:
     """Rich HTML поста (sendRichMessage): заголовок, «Коротко», темы с таблицей подачи, «Ещё сегодня», легенда."""
+    # ссылка на сайт — наверху, в подзаголовке: внизу, под легендой, она терялась
     out = [f"<h1>Сербия за день</h1>",
            f"<p><i>{date_of(day).capitalize()} · {len(picked)} {plural(len(picked), 'главная тема', 'главные темы', 'главных тем')}"
-           f" · как их подали разные стороны</i></p>"]
+           f' и как их подали разные стороны</i> · <a href="{SITE}">все темы на vestomat.rs</a></p>']
     if summary.strip():
         out.append(f"<blockquote><b>Коротко:</b> {esc(summary.strip())}</blockquote>")
     for k, ((sid, urls), t) in enumerate(picked):
@@ -226,14 +229,23 @@ def compose_rich(state: dict, vectors: dict, picked: list, more: list[tuple[str,
                 rows.append(f"<tr><td>{cell}</td><td>{esc(said.get(s, '—'))}</td></tr>")
             else:
                 rows.append(f"<tr><td>{MARKS[s]} {SIDE_NAMES[s]}</td><td><i>не писали</i></td></tr>")
-        out.append(f"<table bordered striped compact>{''.join(rows)}</table>")
+        table = f"<table bordered striped compact>{''.join(rows)}</table>"
         n = len({state["items"][u]["source"] for u in urls})
-        out.append(f"<p><i>{n} {plural(n, 'издание', 'издания', 'изданий')}</i></p>")
-    if more:
-        out.append("<hr/><h4>Ещё сегодня</h4><ul>"
-                   + "".join(f"<li>{esc(name_of(state, sid, urls))}</li>" for sid, urls in more) + "</ul>")
-    out.append("<hr/><p>" + " · ".join(f"{MARKS[s]} {SIDE_NAMES[s]}" for s in SIDES) + "</p>")
-    out.append(f'<p>Все темы дня — <a href="{SITE}">vestomat.rs</a></p>')
+        outlets = f"{n} {plural(n, 'издание', 'издания', 'изданий')}"
+        if FOLD:
+            marks = "".join(MARKS[s] for s in SIDES if s in sides)
+            out.append(f"<details><summary>Как подали · {marks} · {outlets}</summary>{table}</details>")
+        else:
+            out.append(f"{table}<p><i>{outlets}</i></p>")
+    if more:  # ссылка — на самую типичную новость темы
+        def item(sid: str, urls: list[str]) -> str:
+            u = central(state, vectors, urls)[0]
+            n = len({state["items"][x]["source"] for x in urls})
+            return (f'<li><a href="{href(u)}">{esc(name_of(state, sid, urls))}</a> · '
+                    f"<i>{n} {plural(n, 'издание', 'издания', 'изданий')}</i></li>")
+        out.append("<hr/><h4>Ещё сегодня</h4><ul>" + "".join(item(sid, urls) for sid, urls in more) + "</ul>")
+    out.append("<hr/><p>" + " · ".join(f"{MARKS[s]} {SIDE_NAMES[s]}" for s in SIDES)
+               + f' · <a href="{SITE}">vestomat.rs</a></p>')
     return "".join(out)
 
 
@@ -283,9 +295,12 @@ def _post(state: dict, vectors: dict, now: str, tz, spend) -> None:
     for old in [d for d in done if d < (datetime.fromisoformat(day) - timedelta(days=KEEP_DAYS)).date().isoformat()]:
         del done[old]
     today = done.setdefault(day, {})
-    if today.get("sent"):
+    forced = bool(os.environ.get("DAILY_DAY", "").strip())  # ручной запуск — отправить ещё раз, хоть и отправляли
+    if today.get("sent") and not forced:
         return
-    if "rich" not in today:  # нет rich — текст от прежней версии сводки (до 26.11): пишем заново
+    # ответ модели хранится: пост собирается из него заново при каждой отправке — правка оформления не стоит нового
+    # запроса. Нет ответа (сводка до 26.11 — только текст) — спрашиваем
+    if "answer" not in today:
         themes = pick(state, since, until)
         if not themes:
             print("Сводка дня: тем за сутки нет", file=sys.stderr)
@@ -296,13 +311,20 @@ def _post(state: dict, vectors: dict, now: str, tz, spend) -> None:
         answer, usage = stories.ask_model(client, PROMPT, request_of(state, vectors, themes), SCHEMA, EFFORT,
                                           MODEL, PRICE)
         spend("сводка", usage)
-        picked = chosen(themes, answer)
-        more = [th for th in themes if th[0] not in {sid for (sid, _), _ in picked}][:MORE]
-        today["text"] = compose(state, vectors, picked, day)
-        today["rich"] = compose_rich(state, vectors, picked, more, answer.get("summary", ""), day)
-        today["themes"] = [sid for (sid, _), _ in picked]
-        print(f"Сводка дня: {len(picked)} тем из {len(themes)} кандидатов, ≈ ${usage['usd']:.3f}", file=sys.stderr)
-    reply = translate.reports_api({"day": day, "text": today["text"], "rich": today.get("rich")}, "daily")
+        today.update({"answer": answer, "candidates": [sid for sid, _ in themes], "since": since, "until": until})
+        print(f"Сводка дня: {len(chosen(themes, answer))} тем из {len(themes)} кандидатов, ≈ ${usage['usd']:.3f}",
+              file=sys.stderr)
+    # кандидаты — в прежнем порядке (номера T… в ответе модели — по нему); тему, которую состояние уже забыло, пропускаем
+    stories_ = state["stories"]
+    themes = [(sid, [u for u in stories_[sid]["urls"] if today["since"] <= state["items"][u]["seen"] <= today["until"]]
+               if sid in stories_ else []) for sid in today["candidates"]]
+    picked = [(th, t) for th, t in chosen(themes, today["answer"]) if th[1]]
+    themes = [th for th in themes if th[1]]
+    more = [th for th in themes if th[0] not in {sid for (sid, _), _ in picked}][:MORE]
+    today["text"] = compose(state, vectors, picked, day)
+    today["rich"] = compose_rich(state, vectors, picked, more, today["answer"].get("summary", ""), day)
+    today["themes"] = [sid for (sid, _), _ in picked]
+    reply = translate.reports_api({"day": day, "text": today["text"], "rich": today["rich"], "again": forced}, "daily")
     if reply and reply.get("ok"):
         today["sent"] = now
         today["to"] = reply.get("to")

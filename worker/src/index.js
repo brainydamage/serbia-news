@@ -11,7 +11,7 @@
 //   resting: [feed], newest: {feed: дата}} — от сборки, каждую сборку: сторож лент. О ленте, которая не открывается
 //   или молчит дольше суток, пишем в Telegram один раз, а когда тревога снята — отвечаем на то сообщение: «снова пишет»,
 //   если вышла новость, или «отбой», если у издания выходной (resting). Кого уже прислали, лежит в ключе KV "feeds".
-// POST /daily {day, rich, text} — от сборки (daily.py): сводка за сутки в канал DAILY_CHAT_ID (@vestomat_daily; бот —
+// POST /daily {day, rich, text, again} — от сборки (daily.py): сводка за сутки в канал DAILY_CHAT_ID (@vestomat_daily; бот —
 //   админ канала с правом публикации). rich — rich message (sendRichMessage), text — простой HTML на случай, если rich не
 //   прошёл. Пока DAILY_CHAT_ID не задан — черновиком в чат жалоб. Одну сводку на день и чат отправляем один раз:
 //   сборка может прислать её снова, если её кэш пропал.
@@ -471,12 +471,13 @@ async function stats(request, env) {
 }
 
 async function daily(request, env) {
-  const { day, text, rich } = await request.json();
+  const { day, text, rich, again } = await request.json();
   if (!/^\d{4}-\d\d-\d\d$/.test(String(day)) || typeof text !== "string" || !text) return json({ error: "bad request" }, 400);
   const channel = env.DAILY_CHAT_ID || "";
   const to = channel || env.TELEGRAM_CHAT_ID;
   const key = `daily:${to}:${day}`;
-  if (await env.REPORTS.get(key)) return json({ ok: true, already: true, to: channel || "draft" });
+  // again — ручной запуск сборки с днём (daily_day): отправить ещё раз, например чтобы посмотреть новое оформление
+  if (!again && await env.REPORTS.get(key)) return json({ ok: true, already: true, to: channel || "draft" });
   if (!env.TELEGRAM_TOKEN || !to) return json({ error: "no telegram" }, 503);
   const api = `${env.TELEGRAM_API || "https://api.telegram.org"}/bot${env.TELEGRAM_TOKEN}`;
   const send = (method, payload) => fetch(`${api}/${method}`, {
