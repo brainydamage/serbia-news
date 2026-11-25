@@ -265,6 +265,20 @@ a.card-name:hover { color: var(--hover); }
 .row:hover .report-flag, .report-flag:focus-visible { opacity: 1; }
 .report-flag:hover { color: var(--text); }
 @media (hover: none) { .report-flag { display: none; } }
+/* под текстом плашки: жалобы («Плохой перевод?», «Плохая суть?») в одну строку */
+.flags { display: flex; flex-wrap: wrap; column-gap: 18px; }
+.flags:empty { display: none; }
+/* какую подводку показывать: суть от ИИ, подводку издания или обе (с подписями) — переключатель в самой плашке,
+   где видно, что он меняет; запоминается для всего сайта */
+.leads-mode { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 12px; font-size: 13px; }
+.leads-mode > span { opacity: .65; margin-right: 2px; }
+.leads-mode button {
+  border: 0; padding: 4px 11px; border-radius: 999px; cursor: pointer; font: inherit; color: inherit;
+  background: color-mix(in srgb, var(--tip-text) 12%, transparent);
+}
+.leads-mode button[aria-pressed="true"] { background: var(--tip-text); color: var(--tip-bg); font-weight: 700; }
+/* «обе»: над каждой подводкой — откуда она */
+.details [data-label]::before { content: attr(data-label); display: block; margin-bottom: 2px; font-size: 12px; font-weight: 400; opacity: .6; }
 .flag-link {
   display: block; margin-top: 10px; border: 0; background: none; padding: 0; cursor: pointer;
   color: inherit; opacity: .65; font: inherit; font-size: 13px; text-decoration: underline;
@@ -478,6 +492,7 @@ const state = {
   lang: PAGE_LANG === "ru" ? "ru" : store.get("lang", "sr"),
   view: store.get("view", "sources"),
   script: store.get("script", "orig"),
+  leads: store.get("leads", "ai"),  // подводка в плашке: ai — описание от ИИ (нет — подводка издания), outlet — издания, both — обе
   // фильтр разделов не запоминаем: при смене вида и при новом заходе снова «Все»
   sections: new Set(DATA.sections.map(s => s.id)),
   q: "",
@@ -520,6 +535,21 @@ const UI = {
   noThemes: "Još nema tema.",
   orig: "Original",
   scriptHint: "Srpski tekst: kao u originalu, latinicom ili ćirilicom",
+  leadsMode: "Uvod:",
+  leadsAi: "AI",
+  leadsOutlet: "medija",
+  leadsBoth: "oba",
+  labelAi: "Opis (AI)",
+  labelOutlet: "Uvod medija",
+  badEssence: "Loš opis?",
+  badEssenceTitle: "Loš opis",
+  badEssenceThanks: "Hvala! Ovaj opis više ne prikazujemo — umesto njega biće uvod medija.",
+  send: "Pošalji",
+  sending: "Šaljem…",
+  cancel: "Otkaži",
+  close: "Zatvori",
+  reportLimit: "Previše prijava zaredom — pokušajte za sat vremena.",
+  reportError: "Slanje nije uspelo. Pokušajte kasnije.",
   search: "Pretraga",
   clear: "Obriši pretragu",
   toTop: "Na vrh",
@@ -627,6 +657,15 @@ const UI_RU = {
   reportThanks: "Спасибо! Новость переведём заново моделью посильнее — обычно это занимает до 15 минут.",
   reportLimit: "Слишком много жалоб подряд — попробуйте через час.",
   reportError: "Не получилось отправить. Попробуйте позже.",
+  leadsMode: "Подводка:",
+  leadsAi: "ИИ",
+  leadsOutlet: "издания",
+  leadsBoth: "обе",
+  labelAi: "Описание от ИИ",
+  labelOutlet: "Подводка издания",
+  badEssence: "Плохое описание?",
+  badEssenceTitle: "Плохое описание",
+  badEssenceThanks: "Спасибо! Это описание больше не показываем — вместо него будет подводка издания.",
 };
 const ru = () => state.lang === "ru";
 const t = key => ru() ? (UI_RU[key] ?? UI[key] ?? key)
@@ -772,7 +811,7 @@ function essenceScript(text, item) {
 // Опоздавшая фраза остаётся в essences и покажется, когда новость откроют в следующий раз
 const ESSENCE_WAIT_MS = 3000;  // обычно 1–2 с (медиана 1,4 с); с переспросом или правкой дольше — тогда подводка
 function essenceSlot(item) {
-  if (!ESSENCE_URL || !item.tx || !item.ru) return null;
+  if (!ESSENCE_URL || !item.tx || !item.ru || state.leads === "outlet") return null;
   const slot = h("p", { class: "essence loading", "aria-busy": "true", lang: ru() ? "ru" : "sr" }, ...[1, 2, 3, 4].map(() => h("span", { class: "bar" })));
   slot.item = item;
   return slot;
@@ -783,21 +822,24 @@ function fillEssence(slot, relayout) {
   slot.asked = true;
   // подводки нет (у Tanjug её в ленте не бывает) — подменять нечем: ждём фразу, пока её пишут (до 25 с запроса),
   // иначе через 3 с плашка оставалась пустой (25.11)
-  const late = slot.lead ? new Promise(done => setTimeout(done, ESSENCE_WAIT_MS, null)) : new Promise(() => {});
+  // «обе» — подводка и так видна, ждать нечего: фраза встанет над ней, когда придёт
+  const late = slot.lead?.hidden ? new Promise(done => setTimeout(done, ESSENCE_WAIT_MS, null)) : new Promise(() => {});
   Promise.race([essenceOf(slot.item, ru() ? "ru" : "sr"), late]).then(text => {
     const apply = () => {
       if (slot.lead) slot.lead.hidden = false;
       if (text) {
-        if (slot.lead) {
+        if (slot.lead && state.leads !== "both") {
           slot.lead.gone = true;
           slot.lead.remove();
         }
+        if (slot.flag) slot.flag.hidden = false;
         slot.replaceChildren(essenceScript(text, slot.item));
         slot.classList.remove("loading");
         slot.removeAttribute("aria-busy");
       } else {
         slot.gone = true;
         slot.remove();
+        slot.lead?.removeAttribute("data-label");  // одна подводка — подписывать не с чем сравнивать
       }
     };
     if (slot.isConnected && relayout) relayout(apply);
@@ -851,6 +893,60 @@ function openReport(item) {
     h("div", { class: "buttons" }, cancel, send),
   );
   reportDlg.replaceChildren(form);
+  reportDlg.showModal();
+  if (HOVER) send.focus();
+}
+
+// переключатель «Подводка: ИИ · издания · обе» — только у новостей, для которых суть вообще бывает
+function leadsMode(item) {
+  if (!ESSENCE_URL || !item.tx || !item.ru) return null;
+  return h("div", { class: "leads-mode" }, h("span", {}, t("leadsMode")),
+    ...[["ai", "leadsAi"], ["outlet", "leadsOutlet"], ["both", "leadsBoth"]].map(([v, key]) =>
+      h("button", { type: "button", "aria-pressed": String(state.leads === v), onclick: () => {
+        if (v === state.leads) return;
+        track(`leads/${v}`);
+        state.leads = v; store.set("leads", v); render();
+      } }, t(key))));
+}
+
+// жалоба на суть: worker присылает её в Telegram и больше эту фразу не показывает (вместо неё — подводка издания)
+function openEssenceReport(item, slot) {
+  const lang = ru() ? "ru" : "sr";
+  const trap = h("input", { class: "trap", name: "website", tabindex: "-1", autocomplete: "off", "aria-hidden": "true" });
+  const status = h("p", { class: "status", hidden: true });
+  const send = h("button", { class: "primary", type: "submit" }, t("send"));
+  const cancel = h("button", { type: "button", onclick: () => reportDlg.close() }, t("cancel"));
+  const done = text => { status.textContent = text; status.hidden = false; };
+  const form = h("form", {
+    onsubmit: async e => {
+      e.preventDefault();
+      send.disabled = true;
+      send.textContent = t("sending");
+      try {
+        const r = await fetch(REPORT_URL, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: item.url, kind: "essence", lang, website: trap.value }),
+        });
+        if (!r.ok) throw r.status;
+        track("report/essence");
+        essences.set(lang + " " + item.url, Promise.resolve(null));
+        send.hidden = true; cancel.textContent = t("close");
+        done(t("badEssenceThanks"));
+      } catch (code) {
+        send.disabled = false;
+        send.textContent = t("send");
+        done(t(code === 429 ? "reportLimit" : "reportError"));
+      }
+    },
+  },
+    h("h2", {}, t("badEssenceTitle")),
+    h("p", { class: "orig" }, ru() ? item.ru.title : item.title),
+    h("p", { class: "tr" }, slot.textContent),
+    trap, status,
+    h("div", { class: "buttons" }, cancel, send),
+  );
+  reportDlg.replaceChildren(form);
+  reportDlg.addEventListener("close", () => { if (send.hidden) render(); }, { once: true });
   reportDlg.showModal();
   if (HOVER) send.focus();
 }
@@ -970,14 +1066,23 @@ function renderItem(item, src, { showSource = false, showVia = false } = {}) {
   const via = item.via || (showVia ? src.name : null);
   const slot = essenceSlot(item);
   const summary = [slot, ...summaryOf(item, src)].filter(Boolean);
-  if (slot && (slot.lead = summary.find(n => n.classList?.contains("lead")))) slot.lead.hidden = true;
+  if (slot && (slot.lead = summary.find(n => n.classList?.contains("lead")))) {
+    if (state.leads === "both") slot.lead.dataset.label = t("labelOutlet");
+    else slot.lead.hidden = true;
+  }
+  if (slot?.lead && state.leads === "both") slot.dataset.label = t("labelAi");  // без подводки издания подписывать незачем
+  // жалоба на суть — когда суть пришла
+  if (slot) slot.flag = h("button", { class: "flag-link", type: "button", hidden: true, onclick: () => openEssenceReport(item, slot) }, t("badEssence"));
   const li = h("li", { class: "item" + (state.read.has(item.url) ? " read" : ""), lang: v.lang });
 
   const opened = () => { markRead(item.url); li.classList.add("read"); track(`click/${src.section}/${src.name}`); trackNews("read", item); };
   const reportable = REPORT_URL && v.translated;
   // жалоба на перевод — под текстом, у оригинала; справа кнопки «Читать на …» и ✕ (на телефоне втроём в ряд не влезали)
   const details = () => h("div", { class: "details" }, h("div", { class: "details-text" }, visible(summary),
-      reportable ? h("button", { class: "flag-link", type: "button", onclick: () => openReport(item) }, t("report")) : null),
+      h("div", { class: "flags" },
+        reportable ? h("button", { class: "flag-link", type: "button", onclick: () => openReport(item) }, t("report")) : null,
+        slot?.flag),
+      leadsMode(item)),
     h("div", { class: "details-actions" },
       h("a", { class: "read-link", href: item.url, target: "_blank", rel: "noopener", onclick: opened }, `${t("readOn")} ${via || src.name} ↗`),
       h("button", { class: "details-close", type: "button", title: t("collapse"), "aria-label": t("collapse"), onclick: toggle }, "✕")));

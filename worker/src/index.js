@@ -160,8 +160,26 @@ async function report(request, env, ctx) {
   ]);
   if (!found) return json({ error: "unknown item" }, 404);
   // Telegram и запись жалобы — уже после ответа читателю, чтобы окно не ждало их
+  if (body.kind === "essence") {
+    ctx.waitUntil(saveEssenceReport(env, url, body.lang === "sr" ? "sr" : "ru", found));
+    return json({ ok: true });
+  }
   ctx.waitUntil(save(env, url, comment, found));
   return json({ ok: true });
+}
+
+// «Плохая суть?»: фразу больше никому не показываем (в кэше — null, читатели видят подводку издания), в Telegram —
+// что было написано, чтобы понять, что не так с вопросом или правилами
+async function saveEssenceReport(env, url, lang, { item, src }) {
+  const key = ESSENCE_CACHE + (lang === "sr" ? "sr:" : "") + (await sha1(url));
+  const cached = await env.REPORTS.get(key, "json");
+  await env.REPORTS.put(key, JSON.stringify({ text: null, reported: cached?.text || null }), { expirationTtl: ESSENCE_KEEP_SECONDS });
+  const lines = [`⚑ Плохое описание от ИИ (${lang === "sr" ? "по-сербски" : "по-русски"}) — ${src.name}`, "",
+    `Заголовок: ${lang === "sr" ? item.title : item.ru?.title || item.title}`, `Описание: ${cached?.text || cached?.reported || "(нет в кэше)"}`];
+  const lead = lang === "sr" ? item.summary : item.ru?.summary;
+  if (lead) lines.push(`Подводка: ${lead}`);
+  lines.push("", url);
+  await notify(env, lines.join("\n"));
 }
 
 async function save(env, url, comment, { item, src }) {
