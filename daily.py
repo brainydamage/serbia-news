@@ -55,7 +55,8 @@ SITE = "https://vestomat.rs/ru/#teme"
 # с «новым ударом по империи»
 CALM = {"Beta", "Politika", "RTS", "Dnevnik", "Euronews Srbija", "N1", "Blic", "Tanjug"}
 NEUTRAL = ["mainstream", "state", "independent", "progov"]
-NBSP = "\u00a0"  # кружок не отрывается от названия стороны при переносе строки
+NBSP = "\u00a0"
+EMSP = " \u2003"  # между сторонами в легенде: пробел пошире вместо точки  # кружок не отрывается от названия стороны при переносе строки
 MORE = 3  # «Ещё сегодня»: столько самых обсуждаемых кандидатов, не вошедших в топ
 VERSION = 2  # вид ответа модели: 2 — в таблице заголовки, которые выбрала модель (с 26.11; 1 — её пометки о подаче)
 FOLD = True  # таблица подачи свёрнута под «Как подали» (<details>): пост короче; False — таблица видна сразу
@@ -236,8 +237,7 @@ def compose_rich(state: dict, vectors: dict, picked: list, more: list[tuple[str,
     """Rich HTML поста (sendRichMessage): заголовок, «Коротко», темы с таблицей подачи, «Ещё сегодня», легенда."""
     # ссылка на сайт — наверху, в подзаголовке: внизу, под легендой, она терялась
     out = [f"<h1>Сербия за день</h1>",
-           f"<p><i>{date_of(day).capitalize()} · {len(picked)} {plural(len(picked), 'главная тема', 'главные темы', 'главных тем')}"
-           f' и как их подали разные стороны</i> · <a href="{SITE}">все темы на vestomat.rs</a></p>']
+           f"<p><i>{date_of(day).capitalize()}</i></p>", f'<p><a href="{SITE}">Все темы дня на vestomat.rs</a></p>']
     if summary.strip():
         out.append(f"<blockquote><b>Коротко:</b> {esc(summary.strip())}</blockquote>")
     for k, ((sid, urls), t) in enumerate(picked):
@@ -259,7 +259,7 @@ def compose_rich(state: dict, vectors: dict, picked: list, more: list[tuple[str,
         n = len({state["items"][u]["source"] for u in urls})
         outlets = f"{n} {plural(n, 'издание', 'издания', 'изданий')}"
         if FOLD:
-            out.append(f"<details><summary>Как подали · {outlets}</summary>{table}</details>")  # без кружков: пестрит
+            out.append(f"<details><summary>Как подали {outlets}</summary>{table}</details>")  # без кружков: пестрит
         else:
             out.append(f"{table}<p><i>{outlets}</i></p>")
     if more:  # ссылка — CALM: самая типичная новость спокойных изданий, издания не повторяются; потом NEUTRAL
@@ -274,18 +274,19 @@ def compose_rich(state: dict, vectors: dict, picked: list, more: list[tuple[str,
                  or next((sides[s][0] for s in NEUTRAL if s in sides), None) or order[0])
             used.add(source(u))
             n = len({state["items"][x]["source"] for x in urls})
-            return (f'<li><a href="{href(u)}">{esc(name_of(state, sid, urls))}</a> · '
-                    f"<i>{n} {plural(n, 'издание', 'издания', 'изданий')}</i></li>")
+            return (f'<li><a href="{href(u)}">{esc(name_of(state, sid, urls))}</a> '
+                    f"<i>({n} {plural(n, 'издание', 'издания', 'изданий')})</i></li>")
         out.append("<hr/><h4>Ещё сегодня</h4><ul>" + "".join(item(sid, urls) for sid, urls in more) + "</ul>")
-    out.append("<hr/><p>" + " · ".join(f"{MARKS[s]}{NBSP}{SIDE_NAMES[s].replace(' ', NBSP)}" for s in SIDES)
-               + f' · <a href="{SITE}">vestomat.rs</a></p>')
+    # легенда — без точек-разделителей: кружки и так отделяют стороны; сайт — своей строкой, не прилипает к легенде
+    out.append("<hr/><p>" + EMSP.join(f"{MARKS[s]}{NBSP}{SIDE_NAMES[s].replace(' ', NBSP)}" for s in SIDES) + "</p>")
+    out.append(f'<p><a href="{SITE}">vestomat.rs</a></p>')
     return "".join(out)
 
 
 def compose(state: dict, vectors: dict, picked: list, day: str) -> str:
     """Простой вариант (HTML sendMessage, до LIMIT знаков) — если rich не прошёл: темы, что произошло, подача строкой
     по сторонам, ссылки. Тема без текста модели — только название и ссылки."""
-    head = f"<b>Сербия за день · {date_of(day)}</b>"
+    head = f"<b>Сербия за день</b>\n<i>{date_of(day).capitalize()}</i>"
     foot = f'Все темы дня — <a href="{SITE}">vestomat.rs</a>'
     blocks = []
     for k, ((sid, urls), t) in enumerate(picked):
