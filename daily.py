@@ -259,8 +259,7 @@ def compose_rich(state: dict, vectors: dict, picked: list, more: list[tuple[str,
         n = len({state["items"][u]["source"] for u in urls})
         outlets = f"{n} {plural(n, 'издание', 'издания', 'изданий')}"
         if FOLD:
-            marks = "".join(MARKS[s] for s in SIDES if s in sides)
-            out.append(f"<details><summary>Как подали · {marks} · {outlets}</summary>{table}</details>")
+            out.append(f"<details><summary>Как подали · {outlets}</summary>{table}</details>")  # без кружков: пестрит
         else:
             out.append(f"{table}<p><i>{outlets}</i></p>")
     if more:  # ссылка — CALM: самая типичная новость спокойных изданий, издания не повторяются; потом NEUTRAL
