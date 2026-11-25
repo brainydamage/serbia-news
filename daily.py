@@ -2,7 +2,7 @@
 
 Раз в день, первой сборкой после AT часов по Белграду (и не позже UNTIL), stories_live.run зовёт post(): главные темы
 за сутки (с AT вчера) — по числу изданий, которые о них писали. Под каждой темой — что произошло за день и одна строка о
-том, как её подали стороны (критичные к SNS, крупные порталы, государственные, близкие к SNS); это пишет Sonnet одним
+том, как её подали стороны (критичные к SNS, крупные порталы, государственные, близкие к SNS); это пишет Opus одним
 запросом. Ссылки — на сами новости: по одной от каждой писавшей стороны, самая типичная для темы.
 
 Отправляет worker/ (POST /daily, тот же бот, что шлёт жалобы): в канал DAILY_CHAT_ID, а пока он не задан — черновиком
@@ -62,6 +62,9 @@ SCHEMA = {
     "required": ["themes"],
     "additionalProperties": False,
 }
+# пишет Opus: сводка — лицо канала, и она одна в день (вход ~15 тыс. токенов, ≈10 центов). Цена — как в stories_gold.py
+MODEL = "claude-opus-5-5"
+PRICE = (4.0, 20.0)  # вход / выход за 1M токенов, $
 EFFORT = "medium"
 
 
@@ -193,7 +196,7 @@ def _post(state: dict, vectors: dict, now: str, tz, spend) -> None:
 
         client = anthropic.Anthropic(max_retries=translate.API_RETRIES)
         answer, usage = stories.ask_model(client, PROMPT, request_of(state, vectors, themes), SCHEMA, EFFORT,
-                                          stories.SONNET)
+                                          MODEL, PRICE)
         spend("сводка", usage)
         today["text"] = compose(state, vectors, themes, answer, day)
         today["themes"] = [sid for sid, _ in themes]

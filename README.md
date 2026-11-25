@@ -33,7 +33,7 @@ for on Google.
   stored privately in the worker, never published with the site.
 - `stories.py`, `stories_live.py` — group news into themes (local embeddings with fastembed, decisions by Claude).
 - `daily.py` — Vestomat Daily: every evening after 20:00 (Belgrade) the day's main themes go to the Telegram channel
-  [@vestomat_daily](https://t.me/vestomat_daily) — what happened, how each side covered it (Claude Sonnet) and links
+  [@vestomat_daily](https://t.me/vestomat_daily) — what happened, how each side covered it (Claude Opus) and links
   to the articles, one per side.
 - `template.html` — the page itself: the data is embedded into it and rendered with JS.
 - `worker/` — a Cloudflare Worker: reader reports (bad translation, bad description) to Telegram, AI descriptions
