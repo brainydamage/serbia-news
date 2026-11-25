@@ -236,8 +236,8 @@ def compose_rich(state: dict, vectors: dict, picked: list, more: list[tuple[str,
                  day: str) -> str:
     """Rich HTML поста (sendRichMessage): заголовок, «Коротко», темы с таблицей подачи, «Ещё сегодня», легенда."""
     # ссылка на сайт — наверху, в подзаголовке: внизу, под легендой, она терялась
-    out = [f"<h1>Сербия за день</h1>",
-           f"<p><i>{date_of(day).capitalize()}</i></p>", f'<p><a href="{SITE}">Все темы дня на vestomat.rs</a></p>']
+    # заголовок — дата: «Сербия за день» уже в названии канала, а в ленте постов различаются только днём
+    out = [f"<h1>{date_of(day).capitalize()}</h1>", f'<p><a href="{SITE}">Все темы дня на vestomat.rs</a></p>']
     if summary.strip():
         out.append(f"<blockquote><b>Коротко:</b> {esc(summary.strip())}</blockquote>")
     for k, ((sid, urls), t) in enumerate(picked):
@@ -286,7 +286,7 @@ def compose_rich(state: dict, vectors: dict, picked: list, more: list[tuple[str,
 def compose(state: dict, vectors: dict, picked: list, day: str) -> str:
     """Простой вариант (HTML sendMessage, до LIMIT знаков) — если rich не прошёл: темы, что произошло, подача строкой
     по сторонам, ссылки. Тема без текста модели — только название и ссылки."""
-    head = f"<b>Сербия за день</b>\n<i>{date_of(day).capitalize()}</i>"
+    head = f"<b>{date_of(day).capitalize()}</b>"
     foot = f'Все темы дня — <a href="{SITE}">vestomat.rs</a>'
     blocks = []
     for k, ((sid, urls), t) in enumerate(picked):
