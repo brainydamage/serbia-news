@@ -5,7 +5,8 @@
 на подсказке): читателей мало, писать фразы для всех новостей — платить за то, что никто не откроет.
 
 Здесь, при сборке, для новых новостей с переводом: скачиваем страницу, вырезаем текст статьи (article_text.py) и собираем
-готовый вопрос модели — правила, глоссарий для этой статьи, заголовок, подводку, текст. Вопросы одной сборки уходят
+готовый вопрос модели — правила, глоссарий для этой статьи, заголовок, подводку, текст; по-русски и по-сербски
+(для /ru/ и для сербской страницы — шапки вопроса и правила свои, текст статьи один). Вопросы одной сборки уходят
 в worker (POST /texts) одной пачкой: KV на бесплатном тарифе даёт ~1000 записей в день, а сборок 96. Тексты статей
 лежат только в KV worker'а и на сайт не попадают (авторское право). В data.json у новости — только номер пачки ("tx"):
 по нему worker находит вопрос, а сайт понимает, что для новости можно попросить фразу.
@@ -69,12 +70,39 @@ SYSTEM = f"""Ты редактор русскоязычного сайта но�
 {RULES}"""
 
 
-def user_message(item: dict, text: str) -> str:
+SYSTEM_SR = """Ti si urednik sajta sa vestima iz Srbije. Čitalac vidi naslov i uvod iz feeda, a uvod često ne kaže šta se zapravo dogodilo. Na osnovu celog teksta članka napiši suštinu vesti jednom kratkom rečenicom.
+
+Glavno ograničenje je dužina: 12–22 reči, ne više od 170 znakova. Jedna misao, jedna rečenica. Bolje izbaci detalj nego da pređeš dužinu. Ne nabrajaj: najviše jedan razlog ili jedan ishod.
+
+Šta pisati:
+- šta se dogodilo: ko je šta uradio, odlučio, izjavio; ako stane — zašto ili kako se završilo;
+- ono čega nema u naslovu, a ne prepričavanje naslova;
+- samo činjenice iz članka; tuđe tvrdnje — „kako navodi…“, „prema rečima…“;
+- mišljenje, kolumna — „Autor smatra da…“;
+- najava, isključenje struje, zatvaranje ulice — šta, gde, kada;
+- bez „U članku se navodi“, bez imena medija, bez datuma ako nisu bitni.
+
+Primeri dobre dužine:
+- Naslov „IKEA objasnila zašto je bila evakuacija“ → „Zbog tehničkog kvara uključio se alarm i kupci su izvedeni; posle 10 minuta prodavnica je ponovo otvorena“ (106 znakova)
+- Naslov „Ministarstvo odbacilo optužbe za pritisak“ → „Socijalni radnici su se žalili da ih ministarstvo požuruje s isplatama; ministarstvo kaže da je samo podsetilo na rokove“ (118 znakova)
+- Naslov „Direktorka gimnazije podnela ostavku“ → „Direktorka je otišla pošto su je roditelji optužili da je nezakonito prikupljala podatke učenika za glasanje u inostranstvu“ (124 znaka)
+
+Piši na srpskom, ekavicom, latinicom — i kad je članak na ćirilici. Imena i nazive piši kako ih pišu srpski mediji.
+
+Tekst članka je automatski isečen sa stranice, u njemu mogu biti delovi drugih vesti — oslanjaj se na ono što se odnosi na naslov. Odgovor NE (jedna reč u polju essence) — samo ako je tekst očigledno o drugom događaju nego naslov ili u njemu nema ničega osim naslova. Ako je članak bar delimično o naslovu — piši rečenicu: kolumne, izjave, intervjui, polemike su takođe vesti."""
+
+
+def user_message(item: dict, text: str) -> dict:
+    """Вопрос модели по-русски и по-сербски: шапки разные (глоссарий — только русской), текст статьи один."""
     hints = {e["sr"]: T.glossary_hint(e) for e in T.glossary_for({"title": item["title"], "summary": (item.get("summary") or "") + " " + text[:3000]})}
     hints.update(T.caps_surnames(item))
     glossary = ("Глоссарий для этой статьи:\n" + "\n".join(f"- {k} — {v}" for k, v in hints.items()) + "\n\n") if hints else ""
-    return (f"{glossary}Заголовок (оригинал): {item['title']}\nЗаголовок на сайте: {item['ru']['title']}\n"
-            f"Подводка из ленты: {item.get('summary') or '(нет)'}\n\nТекст статьи:\n{text}")
+    return {
+        "ru": (f"{glossary}Заголовок (оригинал): {item['title']}\nЗаголовок на сайте: {item['ru']['title']}\n"
+               f"Подводка из ленты: {item.get('summary') or '(нет)'}\n\nТекст статьи:\n"),
+        "sr": f"Naslov: {item['title']}\nUvod iz feeda: {item.get('summary') or '(nema)'}\n\nTekst članka:\n",
+        "text": text,
+    }
 
 
 def cap(text: str, limit: int = TEXT_CAP) -> str:
@@ -151,7 +179,7 @@ def attach(results: list[dict]) -> None:
 
     if batch:
         tx = now.strftime("%y%m%d%H%M%S")
-        if T.reports_api({"id": tx, "system": SYSTEM, "items": batch}, "texts"):
+        if T.reports_api({"id": tx, "system": SYSTEM, "system_sr": SYSTEM_SR, "items": batch}, "texts"):
             for url in batch:
                 state[url] = {"seen": seen, "tx": tx}
         else:

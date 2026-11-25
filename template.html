@@ -746,16 +746,25 @@ function summaryOf(item, src) {
 // ---------- суть одной фразой ----------
 // Фразу пишет Haiku по тексту статьи (worker /essence), только когда новость раскрыли нажатием: читателей мало,
 // писать заранее для всех — платить за то, что никто не откроет.
-// Текст статьи сборка заранее кладёт в worker (essences.py), у такой новости в data.json есть "tx". Только по-русски
+// Текст статьи сборка заранее кладёт в worker (essences.py), у такой новости в data.json есть "tx".
+// По-русски на /ru/ (и в русском режиме главной), по-сербски — на сербской странице: ведут себя одинаково
 const ESSENCE_URL = location.hostname === "localhost" ? "http://localhost:8787/essence" : "https://vestomat-reports.vestomat.workers.dev/essence";
-const essences = new Map();  // адрес → Promise<фраза или null>: одна просьба на новость за визит
-function essenceOf(item) {
-  if (!essences.has(item.url)) {
+const essences = new Map();  // язык + адрес → Promise<фраза или null>: одна просьба на новость за визит
+function essenceOf(item, lang) {
+  const key = lang + " " + item.url;
+  if (!essences.has(key)) {
     track("essence");
-    essences.set(item.url, fetch(ESSENCE_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: item.url }), signal: AbortSignal.timeout(25000) })
+    essences.set(key, fetch(ESSENCE_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: item.url, lang }), signal: AbortSignal.timeout(25000) })
       .then(r => r.ok ? r.json() : {}).then(d => d.text || null).catch(() => null));
   }
-  return essences.get(item.url);
+  return essences.get(key);
+}
+// сербская фраза приходит латиницей: «как в оригинале» — алфавитом заголовка, иначе — выбранным
+function essenceScript(text, item) {
+  if (ru()) return text;
+  if (state.script !== "orig") return script(text, "sr");
+  const cyr = (item.title.match(/[\u0400-\u04FF]/g) || []).length;
+  return cyr > item.title.length / 3 ? toCyrillic(text) : text;
 }
 // место под фразу: полоски, пока не пришла. Подводку из ленты (slot.lead) пока прячем: показать её, а через секунду
 // подменить фразой — текст под глазами меняется (отзыв 25.11). Пришла фраза — подводка так и не показывается;
@@ -763,8 +772,8 @@ function essenceOf(item) {
 // Опоздавшая фраза остаётся в essences и покажется, когда новость откроют в следующий раз
 const ESSENCE_WAIT_MS = 3000;  // обычно 1–2 с (медиана 1,4 с); с переспросом или правкой дольше — тогда подводка
 function essenceSlot(item) {
-  if (!ESSENCE_URL || !item.tx || !item.ru || !ru()) return null;
-  const slot = h("p", { class: "essence loading", "aria-busy": "true" }, ...[1, 2, 3, 4].map(() => h("span", { class: "bar" })));
+  if (!ESSENCE_URL || !item.tx || !item.ru) return null;
+  const slot = h("p", { class: "essence loading", "aria-busy": "true", lang: ru() ? "ru" : "sr" }, ...[1, 2, 3, 4].map(() => h("span", { class: "bar" })));
   slot.item = item;
   return slot;
 }
@@ -773,7 +782,7 @@ function fillEssence(slot, relayout) {
   if (!slot || slot.asked) return;
   slot.asked = true;
   const late = new Promise(done => setTimeout(done, ESSENCE_WAIT_MS, null));
-  Promise.race([essenceOf(slot.item), late]).then(text => {
+  Promise.race([essenceOf(slot.item, ru() ? "ru" : "sr"), late]).then(text => {
     const apply = () => {
       if (slot.lead) slot.lead.hidden = false;
       if (text) {
@@ -781,7 +790,7 @@ function fillEssence(slot, relayout) {
           slot.lead.gone = true;
           slot.lead.remove();
         }
-        slot.replaceChildren(text);
+        slot.replaceChildren(essenceScript(text, slot.item));
         slot.classList.remove("loading");
         slot.removeAttribute("aria-busy");
       } else {

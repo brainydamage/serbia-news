@@ -20,10 +20,10 @@
 //   становится командой {do: "fix"} в stories-commands.json, как набранная. Кнопки отчёта за день лежат в KV
 //   ("fix:день"): по «убрать все уверенные» снимаем кнопки уверенных находок («fix:день:находка:s») со всех его сообщений.
 //   Webhook worker подключает сам при первой сборке после выкатки (см. ensureWebhook).
-// POST /texts {id, system, items: {url: вопрос}} — от сборки (essences.py): вопросы модели для «сути одной фразой» — текст
+// POST /texts {id, system, system_sr, items: {url: {ru, sr, text}}} — от сборки (essences.py): вопросы модели для «сути одной фразой» — текст
 //   статьи с правилами и глоссарием, пачка одной сборки в ключе KV "tx:id" (одна запись на сборку: у KV на бесплатном
 //   тарифе ~1000 записей в день). Тексты статей лежат только здесь и на сайт не попадают.
-// POST /essence {url} — от читателя, когда он раскрыл новость: суть одной фразой (Haiku). Новость берём из data.json
+// POST /essence {url, lang} — от читателя (lang: ru — /ru/, sr — сербская страница), когда он раскрыл новость: суть одной фразой (Haiku). Новость берём из data.json
 //   (у неё должен быть номер пачки "tx"), фразу кэшируем (ESSENCE_CACHE + адрес). Расходы — в ключе "essence-stats" по дням;
 //   за дневным лимитом (ESSENCE_USD_PER_DAY) новые фразы не пишем, кэш отдаём.
 // GET /costs — страница с этой статистикой, GET /stats — сами данные для неё (с ключом STATS_KEY).
@@ -60,13 +60,20 @@ const ESSENCE_KEEP_SECONDS = 7 * 24 * 3600;
 const TEXTS_KEEP_SECONDS = 6 * 24 * 3600;  // сборка помнит тексты 5 дней (essences.KEEP_DAYS)
 // напоминание после текста статьи: без него Haiku на длинной статье Mašina 4 раза из 6 отвечал обрывком
 // «Высшая прокуратура» (25.11); с ним — 8 из 8 фраз и 30 из 30 на пробе
-const ESSENCE_ASK = "\n\nНапиши суть этой статьи одной фразой: 12–25 слов, полное предложение — кто что сделал, заявил или что произошло.";
+const ESSENCE_ASK = {
+  ru: "\n\nНапиши суть этой статьи одной фразой: 12–25 слов, полное предложение — кто что сделал, заявил или что произошло.",
+  sr: "\n\nNapiši suštinu ovog članka jednom rečenicom: 12–22 reči, cela rečenica — ko je šta uradio, izjavio ili šta se dogodilo.",
+};
+const ESSENCE_NO = { ru: "НЕТ", sr: "NE" };  // ответ модели «текст не про то»
 const ESSENCE_MIN_WORDS = 8;  // короче — не фраза, а обрывок: спрашиваем ещё раз
 const ESSENCE_CACHE = "e2:";  // меняется вместе с правилами — старые фразы пишутся заново
 const ESSENCE_SCHEMA = { type: "object", additionalProperties: false, required: ["essence"], properties: { essence: { type: "string" } } };
-const ESSENCE_FIX = "Ты редактор. Перепиши фразу так, чтобы она стала одним предложением по-русски не длиннее 170 знаков " +
+const ESSENCE_FIX = {};
+ESSENCE_FIX.ru = "Ты редактор. Перепиши фразу так, чтобы она стала одним предложением по-русски не длиннее 170 знаков " +
   "(это жёсткий предел: если фраза длиннее, обязательно выбрось одну из частей или подробностей), кириллицей (кроме " +
   "общепринятых латинских аббревиатур и брендов). Сохрани главный факт, выбрось второстепенное. Ничего не добавляй от себя.";
+ESSENCE_FIX.sr = "Ti si urednik. Prepiši rečenicu tako da bude jedna rečenica na srpskom, latinicom, ne duža od 170 znakova " +
+  "(to je čvrsta granica: ako je duža, obavezno izbaci jedan deo ili detalj). Zadrži glavnu činjenicu, izbaci sporedno. Ništa ne dodaj od sebe.";
 const REPO = "brainydamage/serbia-news";
 const GLOSSARY_PATH = "glossary.json";
 const COMMANDS_PATH = "stories-commands.json";
@@ -177,9 +184,9 @@ async function save(env, url, comment, { item, src }) {
 }
 
 async function saveTexts(request, env) {
-  const { id, system, items } = await request.json();
+  const { id, system, system_sr, items } = await request.json();
   if (!/^\d{12}$/.test(id || "") || typeof system !== "string" || !items || typeof items !== "object") return json({ error: "bad batch" }, 400);
-  await env.REPORTS.put(`tx:${id}`, JSON.stringify({ system, items }), { expirationTtl: TEXTS_KEEP_SECONDS });
+  await env.REPORTS.put(`tx:${id}`, JSON.stringify({ system, system_sr, items }), { expirationTtl: TEXTS_KEEP_SECONDS });
   return json({ ok: true, items: Object.keys(items).length });
 }
 
@@ -192,7 +199,8 @@ async function essence(request, env, ctx) {
   }
   const url = typeof body.url === "string" ? body.url.slice(0, 2000) : "";
   if (!url) return json({ error: "no url" }, 400);
-  const key = ESSENCE_CACHE + (await sha1(url));
+  const lang = body.lang === "sr" ? "sr" : "ru";
+  const key = ESSENCE_CACHE + (lang === "sr" ? "sr:" : "") + (await sha1(url));
   const cached = await env.REPORTS.get(key, "json");
   if (cached) return json({ text: cached.text });
 
@@ -209,8 +217,13 @@ async function essence(request, env, ctx) {
   ]);
   if (count >= ESSENCE_PER_IP_PER_HOUR) return json({ error: "too many" }, 429);
   if ((spent?.days?.[day]?.usd || 0) >= ESSENCE_USD_PER_DAY) return json({ error: "daily limit" }, 429);
-  const question = batch?.items?.[url];
-  if (!question) return json({ error: "no text" }, 404);
+  // пачки до 25.11 — строка, только русский вопрос; дальше — шапки по языкам и один текст
+  const entry = batch?.items?.[url];
+  const question = typeof entry === "string" ? (lang === "ru" ? entry : null) : entry?.[lang] && entry[lang] + entry.text;
+  const system = lang === "sr" ? batch?.system_sr : batch?.system;
+  if (!question || !system) return json({ error: "no text" }, 404);
+  const no = ESSENCE_NO[lang];
+  const fixLetters = lang === "sr" ? toLatin : cyrFix;
 
   const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, baseURL: env.ANTHROPIC_API || undefined, maxRetries: 1, timeout: 20000 });
   const usage = { in: 0, out: 0 };
@@ -223,20 +236,21 @@ async function essence(request, env, ctx) {
     usage.out += response.usage.output_tokens;
     const text = response.content.filter(b => b.type === "text").map(b => b.text).join("");
     try {
-      return cyrFix(String(JSON.parse(text).essence || "").trim().replace(/\.+$/, ""));
+      return fixLetters(String(JSON.parse(text).essence || "").trim().replace(/\.+$/, ""));
     } catch {
       return "";
     }
   };
   let text;
   try {
-    text = await ask(batch.system, question + ESSENCE_ASK);
-    if (text && text !== "НЕТ" && words(text) < ESSENCE_MIN_WORDS) text = await ask(batch.system, question + ESSENCE_ASK);
-    const problems = text && text !== "НЕТ" ? essenceProblems(text, question) : [];
+    text = await ask(system, question + ESSENCE_ASK[lang]);
+    if (text && text !== no && words(text) < ESSENCE_MIN_WORDS) text = await ask(system, question + ESSENCE_ASK[lang]);
+    const problems = text && text !== no ? essenceProblems(text, question, lang) : [];
     if (problems.length) {
-      const fixed = await ask(ESSENCE_FIX, `Заголовок: ${found.item.ru.title}\nЗамечания: ${problems.join(", ")}\n` +
-        `Сейчас ${text.length} знаков, нужно не больше 170.\nФраза: ${text}`);
-      if (fixed && fixed !== "НЕТ") text = fixed;
+      const fixed = await ask(ESSENCE_FIX[lang], lang === "sr"
+        ? `Naslov: ${found.item.title}\nPrimedbe: ${problems.join(", ")}\nSada ${text.length} znakova, treba najviše 170.\nRečenica: ${text}`
+        : `Заголовок: ${found.item.ru.title}\nЗамечания: ${problems.join(", ")}\nСейчас ${text.length} знаков, нужно не больше 170.\nФраза: ${text}`);
+      if (fixed && fixed !== no) text = fixed;
     }
   } catch (error) {
     console.log("essence:", error?.status, error?.message);
@@ -246,8 +260,8 @@ async function essence(request, env, ctx) {
     ctx.waitUntil(env.REPORTS.put(limitKey, String(count + 1), { expirationTtl: 3600 }));
   }
   text = cutClauses(text);
-  // «НЕТ» (текст не про то) и негодное тоже кэшируем — чтобы не платить за тот же отказ снова
-  const answer = text && text !== "НЕТ" && words(text) >= ESSENCE_MIN_WORDS && text.length <= ESSENCE_LIMIT + 40 && !essenceProblems(text, question).some(p => !p.startsWith("длина")) ? text : null;
+  // «НЕТ»/«NE» (текст не про то) и негодное тоже кэшируем — чтобы не платить за тот же отказ снова
+  const answer = text && text !== no && words(text) >= ESSENCE_MIN_WORDS && text.length <= ESSENCE_LIMIT + 40 && !essenceProblems(text, question, lang).some(p => !p.startsWith("длина")) ? text : null;
   ctx.waitUntil(env.REPORTS.put(key, JSON.stringify({ text: answer }), { expirationTtl: ESSENCE_KEEP_SECONDS }));
   return json({ text: answer });
 }
@@ -287,11 +301,25 @@ function cyrFix(text) {
   });
 }
 
+// сербская суть — латиницей (на странице её переводят в кириллицу, если выбрана кириллица); Haiku на статье
+// в кириллице иногда отвечает кириллицей — переводим по таблице
+const SR_LATIN = { а: "a", б: "b", в: "v", г: "g", д: "d", ђ: "đ", е: "e", ж: "ž", з: "z", и: "i", ј: "j", к: "k", л: "l", љ: "lj",
+  м: "m", н: "n", њ: "nj", о: "o", п: "p", р: "r", с: "s", т: "t", ћ: "ć", у: "u", ф: "f", х: "h", ц: "c", ч: "č", џ: "dž", ш: "š" };
+const toLatin = text => text.replace(/[а-шђјљњћџ]/gi, ch => {
+  const lat = SR_LATIN[ch.toLowerCase()];
+  return !lat ? ch : ch === ch.toLowerCase() ? lat : lat[0].toUpperCase() + lat.slice(1);
+});
+
 const words = text => (text.match(/[\p{L}\p{N}]+/gu) || []).length;
 
-function essenceProblems(text, question) {
+function essenceProblems(text, question, lang = "ru") {
   const problems = [];
   if (text.length > ESSENCE_LIMIT) problems.push(`длина ${text.length}`);
+  // по-сербски буквы уже переведены в латиницу (toLatin); русские слова остаются узнаваемыми по ы, э, щ, ъ
+  if (lang === "sr") {
+    if (/[ыэщъё]/i.test(text)) problems.push("nije na srpskom");
+    return problems;
+  }
   // обычные слова латиницей, которых нет в оригинале: «following», «near» (названия пишутся с заглавной — не в счёт)
   const source = new Set(question.toLowerCase().match(/[a-zčćžšđ]+/g) || []);
   const latin = [...new Set(text.match(/(?<![\p{L}])[a-z]{2,}(?![\p{L}])/gu) || [])].filter(w => !source.has(w));
