@@ -52,7 +52,8 @@ const FEEDS_MAX = 15;  // новых тревог в одном сообщени
 const FEEDS_TITLE = "📡 СТОРОЖ ЛЕНТ";
 // суть одной фразой: Haiku 5.5 — проба 25.11 на 30 статьях: медиана 157 знаков, ~$0.0006 и ~1,5 с на фразу
 const ESSENCE_MODEL = "claude-haiku-5-5";
-const ESSENCE_PRICE = [0.10, 0.50];  // $ за миллион токенов: вход, выход
+const REWRITE_MODEL = "claude-sonnet-5-5";  // переписывает описание, на которое пожаловались
+const ESSENCE_PRICES = { [ESSENCE_MODEL]: [0.10, 0.50], [REWRITE_MODEL]: [2.0, 10.0] };  // $ за миллион токенов: вход, выход
 const ESSENCE_USD_PER_DAY = 0.30;  // ~500 фраз; дальше до полуночи по Белграду — только из кэша
 const ESSENCE_PER_IP_PER_HOUR = 60;
 const ESSENCE_LIMIT = 200;  // знаков; длиннее — просим сократить, потом режем по «;»
@@ -160,26 +161,47 @@ async function report(request, env, ctx) {
   ]);
   if (!found) return json({ error: "unknown item" }, 404);
   // Telegram и запись жалобы — уже после ответа читателю, чтобы окно не ждало их
-  if (body.kind === "essence") {
-    ctx.waitUntil(saveEssenceReport(env, url, body.lang === "sr" ? "sr" : "ru", found));
-    return json({ ok: true });
-  }
+  // жалоба на описание: ответ ждёт, пока Sonnet перепишет (несколько секунд), — читатель сразу видит новое
+  if (body.kind === "essence") return json({ ok: true, text: await rewriteEssence(env, ctx, url, body.lang === "sr" ? "sr" : "ru", found) });
   ctx.waitUntil(save(env, url, comment, found));
   return json({ ok: true });
 }
 
-// «Плохая суть?»: фразу больше никому не показываем (в кэше — null, читатели видят подводку издания), в Telegram —
-// что было написано, чтобы понять, что не так с вопросом или правилами
-async function saveEssenceReport(env, url, lang, { item, src }) {
-  const key = ESSENCE_CACHE + (lang === "sr" ? "sr:" : "") + (await sha1(url));
-  const cached = await env.REPORTS.get(key, "json");
-  await env.REPORTS.put(key, JSON.stringify({ text: null, reported: cached?.text || null }), { expirationTtl: ESSENCE_KEEP_SECONDS });
+// «Плохое описание?»: описание Haiku переписывает Sonnet, с пометкой, какой вариант забраковали, и новое сразу видят все.
+// Пожаловались и на переписанное — прячем (в кэше null: читатели видят подводку издания). За дневным лимитом расходов
+// тоже прячем. В Telegram — что было и что стало: по жалобам видно, что не так с вопросом или правилами
+async function rewriteEssence(env, ctx, url, lang, { item, src }) {
+  const key = await essenceKey(url, lang);
+  const cached = (await env.REPORTS.get(key, "json")) || {};
+  const old = cached.text || null;
+  const day = belgrade(Date.now()).slice(0, 10);
+  const spent = (await env.REPORTS.get("essence-stats", "json"))?.days?.[day]?.usd || 0;
+  let text = null, why = "текста статьи нет — прячем";
+  if (cached.by === REWRITE_MODEL) why = "уже переписано Sonnet — прячем";
+  else if (!old) why = "описания не было — нечего переписывать";
+  else if (spent >= ESSENCE_USD_PER_DAY) why = "дневной лимит расходов — прячем";
+  else if (item.tx) {
+    const usage = { usd: 0 };
+    const extra = lang === "sr"
+      ? `\n\nČitalac je kao loš označio ovaj opis: „${old}“. Napiši novi, tačniji, isključivo prema tekstu članka.`
+      : `\n\nЧитатель отметил как плохое это описание: «${old}». Напиши новое, точнее, строго по тексту статьи.`;
+    try {
+      text = (await writeEssence(env, url, lang, item, REWRITE_MODEL, extra, usage)) || null;
+    } catch (error) {
+      console.log("rewrite:", error?.status, error?.message);
+    }
+    ctx.waitUntil(addEssenceStats(env, day, usage));
+    if (!text) why = "Sonnet не справился — прячем";
+  }
+  await env.REPORTS.put(key, JSON.stringify({ text, by: REWRITE_MODEL, reported: old || cached.reported || null }), { expirationTtl: ESSENCE_KEEP_SECONDS });
   const lines = [`⚑ Плохое описание от ИИ (${lang === "sr" ? "по-сербски" : "по-русски"}) — ${src.name}`, "",
-    `Заголовок: ${lang === "sr" ? item.title : item.ru?.title || item.title}`, `Описание: ${cached?.text || cached?.reported || "(нет в кэше)"}`];
+    `Заголовок: ${lang === "sr" ? item.title : item.ru?.title || item.title}`, `Было: ${old || cached.reported || "(нет)"}`,
+    text ? `Стало (Sonnet): ${text}` : `Итог: ${why}`];
   const lead = lang === "sr" ? item.summary : item.ru?.summary;
   if (lead) lines.push(`Подводка: ${lead}`);
   lines.push("", url);
-  await notify(env, lines.join("\n"));
+  ctx.waitUntil(notify(env, lines.join("\n")));
+  return text;
 }
 
 async function save(env, url, comment, { item, src }) {
@@ -218,7 +240,7 @@ async function essence(request, env, ctx) {
   const url = typeof body.url === "string" ? body.url.slice(0, 2000) : "";
   if (!url) return json({ error: "no url" }, 400);
   const lang = body.lang === "sr" ? "sr" : "ru";
-  const key = ESSENCE_CACHE + (lang === "sr" ? "sr:" : "") + (await sha1(url));
+  const key = await essenceKey(url, lang);
   const cached = await env.REPORTS.get(key, "json");
   if (cached) return json({ text: cached.text });
 
@@ -228,48 +250,13 @@ async function essence(request, env, ctx) {
   const day = belgrade(Date.now()).slice(0, 10);
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
   const limitKey = `eip:${ip}:${Math.floor(Date.now() / 3600e3)}`;
-  const [count, spent, batch] = await Promise.all([
-    env.REPORTS.get(limitKey).then(Number),
-    env.REPORTS.get("essence-stats", "json"),
-    env.REPORTS.get(`tx:${found.item.tx}`, { type: "json", cacheTtl: 3600 }),
-  ]);
+  const [count, spent] = await Promise.all([env.REPORTS.get(limitKey).then(Number), env.REPORTS.get("essence-stats", "json")]);
   if (count >= ESSENCE_PER_IP_PER_HOUR) return json({ error: "too many" }, 429);
   if ((spent?.days?.[day]?.usd || 0) >= ESSENCE_USD_PER_DAY) return json({ error: "daily limit" }, 429);
-  // пачки до 25.11 — строка, только русский вопрос; дальше — шапки по языкам и один текст
-  const entry = batch?.items?.[url];
-  const question = typeof entry === "string" ? (lang === "ru" ? entry : null) : entry?.[lang] && entry[lang] + entry.text;
-  const system = lang === "sr" ? batch?.system_sr : batch?.system;
-  if (!question || !system) return json({ error: "no text" }, 404);
-  const no = ESSENCE_NO[lang];
-  const fixLetters = lang === "sr" ? toLatin : cyrFix;
-
-  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, baseURL: env.ANTHROPIC_API || undefined, maxRetries: 1, timeout: 20000 });
-  const usage = { in: 0, out: 0 };
-  const ask = async (system, content) => {
-    const response = await client.messages.create({
-      model: ESSENCE_MODEL, max_tokens: 4000, system, messages: [{ role: "user", content }],
-      output_config: { effort: "low", format: { type: "json_schema", schema: ESSENCE_SCHEMA } },
-    });
-    usage.in += response.usage.input_tokens;
-    usage.out += response.usage.output_tokens;
-    const text = response.content.filter(b => b.type === "text").map(b => b.text).join("");
-    try {
-      return fixLetters(String(JSON.parse(text).essence || "").trim().replace(/\.+$/, ""));
-    } catch {
-      return "";
-    }
-  };
-  let text;
+  const usage = { usd: 0 };
+  let answer;
   try {
-    text = await ask(system, question + ESSENCE_ASK[lang]);
-    if (text && text !== no && words(text) < ESSENCE_MIN_WORDS) text = await ask(system, question + ESSENCE_ASK[lang]);
-    const problems = text && text !== no ? essenceProblems(text, question, lang) : [];
-    if (problems.length) {
-      const fixed = await ask(ESSENCE_FIX[lang], lang === "sr"
-        ? `Naslov: ${found.item.title}\nPrimedbe: ${problems.join(", ")}\nSada ${text.length} znakova, treba najviše 170.\nRečenica: ${text}`
-        : `Заголовок: ${found.item.ru.title}\nЗамечания: ${problems.join(", ")}\nСейчас ${text.length} знаков, нужно не больше 170.\nФраза: ${text}`);
-      if (fixed && fixed !== no) text = fixed;
-    }
+    answer = await writeEssence(env, url, lang, found.item, ESSENCE_MODEL, "", usage);
   } catch (error) {
     console.log("essence:", error?.status, error?.message);
     return json({ error: "model" }, 502);
@@ -277,11 +264,54 @@ async function essence(request, env, ctx) {
     ctx.waitUntil(addEssenceStats(env, day, usage));
     ctx.waitUntil(env.REPORTS.put(limitKey, String(count + 1), { expirationTtl: 3600 }));
   }
-  text = cutClauses(text);
+  if (answer === undefined) return json({ error: "no text" }, 404);
   // «НЕТ»/«NE» (текст не про то) и негодное тоже кэшируем — чтобы не платить за тот же отказ снова
-  const answer = text && text !== no && words(text) >= ESSENCE_MIN_WORDS && text.length <= ESSENCE_LIMIT + 40 && !essenceProblems(text, question, lang).some(p => !p.startsWith("длина")) ? text : null;
   ctx.waitUntil(env.REPORTS.put(key, JSON.stringify({ text: answer }), { expirationTtl: ESSENCE_KEEP_SECONDS }));
   return json({ text: answer });
+}
+
+const essenceKey = async (url, lang) => ESSENCE_CACHE + (lang === "sr" ? "sr:" : "") + (await sha1(url));
+
+// описание по тексту статьи из пачки сборки: фраза, null (модель отказалась или вышло негодное) или undefined (текста нет).
+// extra — дописка к вопросу (при переписывании: какой вариант забраковали); usage.usd копит цену всех вызовов
+async function writeEssence(env, url, lang, item, model, extra, usage) {
+  const batch = await env.REPORTS.get(`tx:${item.tx}`, { type: "json", cacheTtl: 3600 });
+  // пачки до 25.11 — строка, только русский вопрос; дальше — шапки по языкам и один текст
+  const entry = batch?.items?.[url];
+  const question = typeof entry === "string" ? (lang === "ru" ? entry : null) : entry?.[lang] && entry[lang] + entry.text;
+  const system = lang === "sr" ? batch?.system_sr : batch?.system;
+  if (!question || !system) return undefined;
+  const no = ESSENCE_NO[lang];
+  const fixLetters = lang === "sr" ? toLatin : cyrFix;
+  const price = ESSENCE_PRICES[model];
+
+  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, baseURL: env.ANTHROPIC_API || undefined, maxRetries: 1, timeout: 20000 });
+  const ask = async (system, content) => {
+    const response = await client.messages.create({
+      model, max_tokens: 4000, system, messages: [{ role: "user", content }],
+      output_config: { effort: "low", format: { type: "json_schema", schema: ESSENCE_SCHEMA } },
+    });
+    usage.usd += (response.usage.input_tokens * price[0] + response.usage.output_tokens * price[1]) / 1e6;
+    usage.in = (usage.in || 0) + response.usage.input_tokens;
+    usage.out = (usage.out || 0) + response.usage.output_tokens;
+    const text = response.content.filter(b => b.type === "text").map(b => b.text).join("");
+    try {
+      return fixLetters(String(JSON.parse(text).essence || "").trim().replace(/\.+$/, ""));
+    } catch {
+      return "";
+    }
+  };
+  let text = await ask(system, question + ESSENCE_ASK[lang] + extra);
+  if (text && text !== no && words(text) < ESSENCE_MIN_WORDS) text = await ask(system, question + ESSENCE_ASK[lang] + extra);
+  const problems = text && text !== no ? essenceProblems(text, question, lang) : [];
+  if (problems.length) {
+    const fixed = await ask(ESSENCE_FIX[lang], lang === "sr"
+      ? `Naslov: ${item.title}\nPrimedbe: ${problems.join(", ")}\nSada ${text.length} znakova, treba najviše 170.\nRečenica: ${text}`
+      : `Заголовок: ${item.ru.title}\nЗамечания: ${problems.join(", ")}\nСейчас ${text.length} знаков, нужно не больше 170.\nФраза: ${text}`);
+    if (fixed && fixed !== no) text = fixed;
+  }
+  text = cutClauses(text);
+  return text && text !== no && words(text) >= ESSENCE_MIN_WORDS && text.length <= ESSENCE_LIMIT + 40 && !essenceProblems(text, question, lang).some(p => !p.startsWith("длина")) ? text : null;
 }
 
 async function addEssenceStats(env, day, usage) {
@@ -292,7 +322,7 @@ async function addEssenceStats(env, day, usage) {
   row.items++;
   row.in += usage.in;
   row.out += usage.out;
-  row.usd = Math.round((row.usd + (usage.in * ESSENCE_PRICE[0] + usage.out * ESSENCE_PRICE[1]) / 1e6) * 1e6) / 1e6;
+  row.usd = Math.round((row.usd + usage.usd) * 1e6) / 1e6;
   await env.REPORTS.put("essence-stats", JSON.stringify(all));
 }
 
