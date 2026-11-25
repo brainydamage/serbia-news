@@ -757,8 +757,11 @@ function essenceOf(item) {
   }
   return essences.get(item.url);
 }
-// место под фразу: полоски, пока не пришла; не пришла (нет текста, лимит, ошибка) — место исчезает.
-// Пришла — подводка из ленты (slot.lead) уходит: фраза её заменяет, а две похожие подряд только путают
+// место под фразу: полоски, пока не пришла. Подводку из ленты (slot.lead) пока прячем: показать её, а через секунду
+// подменить фразой — текст под глазами меняется (отзыв 25.11). Пришла фраза — подводка так и не показывается;
+// не пришла (нет текста, лимит, ошибка) или не успела за ESSENCE_WAIT_MS — полоски уходят, появляется подводка.
+// Опоздавшая фраза остаётся в essences и покажется, когда новость откроют в следующий раз
+const ESSENCE_WAIT_MS = 3000;  // обычно 1–2 с (медиана 1,4 с); с переспросом или правкой дольше — тогда подводка
 function essenceSlot(item) {
   if (!ESSENCE_URL || !item.tx || !item.ru || !ru()) return null;
   const slot = h("p", { class: "essence loading", "aria-busy": "true" }, ...[1, 2, 3, 4].map(() => h("span", { class: "bar" })));
@@ -769,8 +772,10 @@ function essenceSlot(item) {
 function fillEssence(slot, relayout) {
   if (!slot || slot.asked) return;
   slot.asked = true;
-  essenceOf(slot.item).then(text => {
+  const late = new Promise(done => setTimeout(done, ESSENCE_WAIT_MS, null));
+  Promise.race([essenceOf(slot.item), late]).then(text => {
     const apply = () => {
+      if (slot.lead) slot.lead.hidden = false;
       if (text) {
         if (slot.lead) {
           slot.lead.gone = true;
@@ -954,7 +959,7 @@ function renderItem(item, src, { showSource = false, showVia = false } = {}) {
   const via = item.via || (showVia ? src.name : null);
   const slot = essenceSlot(item);
   const summary = [slot, ...summaryOf(item, src)].filter(Boolean);
-  if (slot) slot.lead = summary.find(n => n.classList?.contains("lead"));
+  if (slot && (slot.lead = summary.find(n => n.classList?.contains("lead")))) slot.lead.hidden = true;
   const li = h("li", { class: "item" + (state.read.has(item.url) ? " read" : ""), lang: v.lang });
 
   const opened = () => { markRead(item.url); li.classList.add("read"); track(`click/${src.section}/${src.name}`); };
