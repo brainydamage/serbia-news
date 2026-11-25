@@ -4,8 +4,9 @@
 за сутки (с AT вчера). Кандидаты — CANDIDATES тем, о которых писали больше всего изданий (не меньше MIN_OUTLETS и не
 меньше MIN_SIDES основных сторон из четырёх); из них Opus одним запросом выбирает до TOP самых важных и ставит по
 важности, а не по шуму. Он же пишет «Коротко» — день одной фразой, под каждой темой — что произошло за день, и для
-каждой стороны (критичные к SNS, крупные порталы, государственные, близкие к SNS) — на чём её подача. Подача — таблицей:
-сторона и издание со ссылкой на его статью (самую типичную для темы) — и в чём акцент; молчавшая сторона — «не писали».
+каждой стороны (критичные к SNS, крупные порталы, государственные, близкие к SNS) выбирает самый показательный
+заголовок. Подача — таблицей: сторона и издание — и этот заголовок со ссылкой на статью; молчавшая сторона — «не писали».
+Толкований подачи от модели в посте нет: читатель сравнивает заголовки сам.
 Внизу — «Ещё сегодня» (заметные темы, не вошедшие в топ) и легенда цветов.
 
 Пост — rich message Telegram (Bot API 10.1+, sendRichMessage: заголовки, таблицы, цитаты, до 32768 знаков). Вместе с
@@ -56,6 +57,7 @@ CALM = {"Beta", "Politika", "RTS", "Dnevnik", "Euronews Srbija", "N1", "Blic", "
 NEUTRAL = ["mainstream", "state", "independent", "progov"]
 NBSP = "\u00a0"  # кружок не отрывается от названия стороны при переносе строки
 MORE = 3  # «Ещё сегодня»: столько самых обсуждаемых кандидатов, не вошедших в топ
+VERSION = 2  # вид ответа модели: 2 — в таблице заголовки, которые выбрала модель (с 26.11; 1 — её пометки о подаче)
 FOLD = True  # таблица подачи свёрнута под «Как подали» (<details>): пост короче; False — таблица видна сразу
 MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября",
           "декабря"]
@@ -66,7 +68,7 @@ PROMPT = """Ты пишешь вечернюю сводку новостей С�
 Выбери до 5 самых важных тем и верни их в порядке важности, самую важную первой. Важность — не число публикаций, а значение для страны и для жизни людей в Сербии: власть и политика, суды и громкие дела, законы и решения, экономика и цены, безопасность, протесты, крупные происшествия и их последствия. Число изданий — подсказка, а не правило. Криминальная хроника, частная трагедия или скандал без общественного значения — только если важнее за день ничего нет. Если две темы — про одну и ту же ситуацию, бери одну.
 Для каждой выбранной темы верни:
 - what — что произошло за день, одно-два коротких предложения, до 220 знаков. Факты, которые подтверждают разные стороны, без оценок. Если тема длится не первый день — что нового сегодня. Имена — как принято по-русски («Вучич», «Скупщина»), сербские названия изданий и партий — латиницей.
-- sides — подача каждой стороны, которая писала о теме: side — сторона (independent, mainstream, state, progov), angle — на чём её акцент, по её заголовкам: что выносит вперёд, кого цитирует, как называет событие. До 60 знаков, без подлежащего-стороны, с маленькой буквы, как пометка в таблице («депутаты большинства аплодировали Вучичу», «через слова Вучича о «врачарском клане»»). Если сторона подаёт событие без своего акцента — «нейтрально, фактом». Пиши только то, что видно по заголовкам, не домысливай мотивы.
+- sides — для каждой стороны, которая писала о теме: side — сторона (independent, mainstream, state, progov), pick — номер заголовка из её списка (число в квадратных скобках), который лучше всего показывает, как эта сторона подала тему: что выносит вперёд, кого цитирует, как называет событие. Если у стороны все заголовки одинаково сухие — самый информативный. Не бери заголовки-видео без смысла, «онлайн»-ленты и заголовки, по которым непонятно, о чём речь.
 Ещё верни summary — день одной фразой до 160 знаков: две-три главные темы через запятую, без вводных слов («Задержан главред Informer, у Скупщины появились комитеты, новые аресты по делу «Алта банки»»).
 Без кавычек вокруг ответа, без хэштегов и эмодзи."""
 SCHEMA = {
@@ -84,8 +86,8 @@ SCHEMA = {
                         "type": "array",
                         "items": {
                             "type": "object",
-                            "properties": {"side": {"type": "string", "enum": SIDES}, "angle": {"type": "string"}},
-                            "required": ["side", "angle"],
+                            "properties": {"side": {"type": "string", "enum": SIDES}, "pick": {"type": "integer"}},
+                            "required": ["side", "pick"],
                             "additionalProperties": False,
                         },
                     },
@@ -175,8 +177,21 @@ def request_of(state: dict, vectors: dict, themes: list[tuple[str, list[str]]]) 
 
     return json.dumps({"themes": [
         {"id": f"T{k}", "name": name_of(state, sid, urls), "outlets": len({state["items"][u]["source"] for u in urls}),
-         "sides": {side: [line(u) for u in news[:SHOWN]] for side, news in by_side(state, vectors, urls).items()}}
+         "sides": {side: [f"[{i}] {line(u)}" for i, u in enumerate(news[:SHOWN])]
+                   for side, news in by_side(state, vectors, urls).items()}}
         for k, (sid, urls) in enumerate(themes)]}, ensure_ascii=False)
+
+
+def resolve_picks(state: dict, vectors: dict, themes: list[tuple[str, list[str]]], answer: dict) -> None:
+    """Номера заголовков из ответа модели → адреса новостей (t["picks"] — сторона → url): пост собирается из ответа и при
+    повторной отправке, когда порядок новостей стороны (by_side) уже другой."""
+    for t in answer.get("themes", []):
+        n = t.get("id", "")[1:]
+        if not (n.isdigit() and int(n) < len(themes)):
+            continue
+        sides = by_side(state, vectors, themes[int(n)][1])
+        t["picks"] = {a["side"]: sides[a["side"]][a["pick"]] for a in t.get("sides", [])
+                      if a.get("side") in sides and isinstance(a.get("pick"), int) and 0 <= a["pick"] < min(SHOWN, len(sides[a["side"]]))}
 
 
 def chosen(themes: list[tuple[str, list[str]]], answer: dict) -> list[tuple[tuple[str, list[str]], dict]]:
@@ -210,8 +225,10 @@ def date_of(day: str) -> str:
     return f"{DAYS[d.weekday()]}, {d.day} {MONTHS[d.month - 1]}"
 
 
-def angles(t: dict) -> dict[str, str]:
-    return {a["side"]: a["angle"].strip() for a in t.get("sides", []) if a.get("side") in SIDES and a.get("angle", "").strip()}
+def headlines(state: dict, sides: dict[str, list[str]], t: dict) -> dict[str, str]:
+    """Сторона → новость для таблицы: заголовок, который выбрала модель, без него — самая типичная новость стороны."""
+    picks = t.get("picks", {})
+    return {s: picks[s] if picks.get(s) in state["items"] else news[0] for s, news in sides.items()}
 
 
 def compose_rich(state: dict, vectors: dict, picked: list, more: list[tuple[str, list[str]]], summary: str,
@@ -224,16 +241,18 @@ def compose_rich(state: dict, vectors: dict, picked: list, more: list[tuple[str,
     if summary.strip():
         out.append(f"<blockquote><b>Коротко:</b> {esc(summary.strip())}</blockquote>")
     for k, ((sid, urls), t) in enumerate(picked):
-        sides, said = by_side(state, vectors, urls), angles(t)
+        sides = by_side(state, vectors, urls)
+        shown = headlines(state, sides, t)
         out.append(f"<h3>{k + 1}. {esc(name_of(state, sid, urls))}</h3>")
         if what := t.get("what", "").strip():
             out.append(f"<p>{esc(what)}</p>")
         rows = []
         for s in SIDES:
             if s in sides:
-                u = sides[s][0]
-                cell = f'{MARKS[s]}{NBSP}<a href="{href(u)}">{esc(state["items"][u]["source"]).replace(" ", NBSP)}</a>'
-                rows.append(f"<tr><td>{cell}</td><td>{esc(said.get(s, '—'))}</td></tr>")
+                u = shown[s]  # заголовок — как сторона назвала событие, со ссылкой на статью; толкований модели тут нет
+                it = state["items"][u]
+                rows.append(f'<tr><td>{MARKS[s]}{NBSP}{esc(it["source"]).replace(" ", NBSP)}</td>'
+                            f'<td><a href="{href(u)}">{esc(it["title"])}</a></td></tr>')
             else:
                 rows.append(f"<tr><td>{MARKS[s]}{NBSP}{SIDE_NAMES[s]}</td><td><i>не писали</i></td></tr>")
         table = f"<table bordered striped compact>{''.join(rows)}</table>"
@@ -271,15 +290,15 @@ def compose(state: dict, vectors: dict, picked: list, day: str) -> str:
     foot = f'Все темы дня — <a href="{SITE}">vestomat.rs</a>'
     blocks = []
     for k, ((sid, urls), t) in enumerate(picked):
-        sides, said = by_side(state, vectors, urls), angles(t)
+        sides = by_side(state, vectors, urls)
+        shown = headlines(state, sides, t)
         lines = [f"<b>{k + 1}. {esc(name_of(state, sid, urls))}</b>"]
         if what := t.get("what", "").strip():
             lines.append(esc(what))
         for s in SIDES:
             if s in sides:
-                u = sides[s][0]
-                lines.append(f'{MARKS[s]} <a href="{href(u)}">{esc(state["items"][u]["source"])}</a>'
-                             + (f": <i>{esc(said[s])}</i>" if s in said else ""))
+                u = shown[s]
+                lines.append(f'{MARKS[s]} {esc(state["items"][u]["source"])}: <a href="{href(u)}">{esc(state["items"][u]["title"])}</a>')
         blocks.append("\n".join(lines))
     while len(blocks) > 1 and visible_len("\n\n".join([head, *blocks, foot])) > LIMIT:
         blocks.pop()
@@ -315,7 +334,7 @@ def _post(state: dict, vectors: dict, now: str, tz, spend) -> None:
         return
     # ответ модели хранится: пост собирается из него заново при каждой отправке — правка оформления не стоит нового
     # запроса. Нет ответа (сводка до 26.11 — только текст) — спрашиваем
-    if "answer" not in today:
+    if today.get("v") != VERSION:  # ответа нет или он для прежнего вида поста — спрашиваем
         themes = pick(state, since, until)
         if not themes:
             print("Сводка дня: тем за сутки нет", file=sys.stderr)
@@ -326,7 +345,9 @@ def _post(state: dict, vectors: dict, now: str, tz, spend) -> None:
         answer, usage = stories.ask_model(client, PROMPT, request_of(state, vectors, themes), SCHEMA, EFFORT,
                                           MODEL, PRICE)
         spend("сводка", usage)
-        today.update({"answer": answer, "candidates": [sid for sid, _ in themes], "since": since, "until": until})
+        resolve_picks(state, vectors, themes, answer)
+        today.update({"answer": answer, "candidates": [sid for sid, _ in themes], "since": since, "until": until,
+                      "v": VERSION})
         print(f"Сводка дня: {len(chosen(themes, answer))} тем из {len(themes)} кандидатов, ≈ ${usage['usd']:.3f}",
               file=sys.stderr)
     # кандидаты — в прежнем порядке (номера T… в ответе модели — по нему); тему, которую состояние уже забыло, пропускаем
@@ -366,7 +387,7 @@ if __name__ == "__main__":
     print(request_of(state, vectors, themes))
     fake = {"summary": "(день одной фразой — напишет модель)",
             "themes": [{"id": f"T{k}", "what": "(что произошло — напишет модель)",
-                        "sides": [{"side": s, "angle": "(акцент стороны)"} for s in SIDES[:3]]} for k in range(len(themes))]}
+                        "sides": [{"side": s, "pick": 0} for s in SIDES[:3]]} for k in range(len(themes))]}
     picked = chosen(themes, fake)
     more = [th for th in themes if th[0] not in {sid for (sid, _), _ in picked}][:MORE]
     text = compose(state, vectors, picked, local.date().isoformat())
