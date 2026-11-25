@@ -308,6 +308,7 @@ dialog.report::backdrop { background: rgb(0 0 0 / .35); }
 .report .orig { margin: 0 0 4px; color: var(--muted); font-size: 13px; }
 .report .tr { margin: 0; font-weight: 700; }
 .report .trap { position: absolute; left: -9999px; }
+/* inert: окно при открытии ставит фокус на первое поле — без него это была ловушка, и на телефоне вылезала клавиатура (25.11) */
 .report .status { margin: 12px 0 0; color: var(--muted); }
 .report .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .report button { border: 0; border-radius: 999px; padding: 9px 16px; background: var(--soft); color: var(--text); font: inherit; font-weight: 700; cursor: pointer; }
@@ -881,7 +882,7 @@ document.body.append(reportDlg);
 reportDlg.addEventListener("click", e => { if (e.target === reportDlg) reportDlg.close(); });  // клик мимо окна
 
 function openReport(item) {
-  const trap = h("input", { class: "trap", name: "website", tabindex: "-1", autocomplete: "off", "aria-hidden": "true" });
+  const trap = h("input", { class: "trap", name: "website", tabindex: "-1", autocomplete: "off", "aria-hidden": "true", inert: "" });
   const status = h("p", { class: "status", hidden: true });
   const send = h("button", { class: "primary", type: "submit" }, t("send"));
   const cancel = h("button", { type: "button", onclick: () => reportDlg.close() }, t("cancel"));
@@ -937,7 +938,7 @@ function leadsTabs() {
 // жалоба на суть: worker присылает её в Telegram и больше эту фразу не показывает (вместо неё — подводка издания)
 function openEssenceReport(item, slot) {
   const lang = ru() ? "ru" : "sr";
-  const trap = h("input", { class: "trap", name: "website", tabindex: "-1", autocomplete: "off", "aria-hidden": "true" });
+  const trap = h("input", { class: "trap", name: "website", tabindex: "-1", autocomplete: "off", "aria-hidden": "true", inert: "" });
   const status = h("p", { class: "status", hidden: true });
   const send = h("button", { class: "primary", type: "submit" }, t("send"));
   const cancel = h("button", { type: "button", onclick: () => reportDlg.close() }, t("cancel"));
