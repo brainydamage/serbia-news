@@ -11,6 +11,9 @@
 //   resting: [feed], newest: {feed: дата}} — от сборки, каждую сборку: сторож лент. О ленте, которая не открывается
 //   или молчит дольше суток, пишем в Telegram один раз, а когда тревога снята — отвечаем на то сообщение: «снова пишет»,
 //   если вышла новость, или «отбой», если у издания выходной (resting). Кого уже прислали, лежит в ключе KV "feeds".
+// POST /daily {day, text} — от сборки (daily.py): сводка за сутки в канал DAILY_CHAT_ID (@vestomat_daily; бот — админ
+//   канала с правом публикации). Пока DAILY_CHAT_ID не задан — черновиком в чат жалоб. Одну сводку на день и чат
+//   отправляем один раз: сборка может прислать её снова, если её кэш пропал.
 // POST /telegram — webhook бота: строки «Air Serbia = Air Serbia» или «удалить Air Serbia» из нашего чата
 //   worker коммитит в glossary.json на GitHub (секрет GITHUB_TOKEN), а коммит запускает сборку.
 //   Команды сюжетам (теневой режим, vestomat.rs/plot/) — «/move 1234 s471», «/split s191», «/unmerge s102», «/merge s1 s2» —
@@ -122,7 +125,7 @@ export default {
       for (const [day, spent] of Object.entries(essences?.days || {})) (out.days[day] ||= { builds: 0 }).essence = spent;
       return json(out);
     }
-    if (["/reports", "/stats", "/untranslated", "/feeds", "/stories", "/texts"].includes(pathname) && !authorized(request, env.REPORTS_TOKEN)) return json({ error: "unauthorized" }, 401);
+    if (["/reports", "/stats", "/untranslated", "/feeds", "/stories", "/texts", "/daily"].includes(pathname) && !authorized(request, env.REPORTS_TOKEN)) return json({ error: "unauthorized" }, 401);
     if (pathname === "/reports" && request.method === "GET") return list(env);
     if (pathname === "/reports" && request.method === "POST") return resolve(request, env);
     if (pathname === "/stats" && request.method === "POST") {
@@ -134,6 +137,7 @@ export default {
     if (pathname === "/feeds" && request.method === "POST") return watchFeeds(request, env);
     if (pathname === "/stories" && request.method === "POST") return storyResults(request, env);
     if (pathname === "/texts" && request.method === "POST") return saveTexts(request, env);
+    if (pathname === "/daily" && request.method === "POST") return daily(request, env);
     return json({ error: "not found" }, 404);
   },
 };
@@ -442,6 +446,25 @@ async function stats(request, env) {
   all.builds = [...all.builds.filter(b => b.at >= since), build];
   await env.REPORTS.put("stats", JSON.stringify(all));
   return json({ ok: true });
+}
+
+async function daily(request, env) {
+  const { day, text } = await request.json();
+  if (!/^\d{4}-\d\d-\d\d$/.test(String(day)) || typeof text !== "string" || !text) return json({ error: "bad request" }, 400);
+  const channel = env.DAILY_CHAT_ID || "";
+  const to = channel || env.TELEGRAM_CHAT_ID;
+  const key = `daily:${to}:${day}`;
+  if (await env.REPORTS.get(key)) return json({ ok: true, already: true, to: channel || "draft" });
+  if (!env.TELEGRAM_TOKEN || !to) return json({ error: "no telegram" }, 503);
+  const draft = channel ? "" : "Черновик для @vestomat_daily (в канал пойдёт, когда у worker будет DAILY_CHAT_ID):\n\n";
+  const response = await fetch(`${env.TELEGRAM_API || "https://api.telegram.org"}/bot${env.TELEGRAM_TOKEN}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: to, text: draft + text.slice(0, 4000), parse_mode: "HTML", link_preview_options: { is_disabled: true } }),
+  });
+  if (!response.ok) return json({ error: `telegram ${response.status}: ${(await response.text()).slice(0, 300)}` }, 502);
+  await env.REPORTS.put(key, String((await response.json()).result?.message_id || 1), { expirationTtl: KEEP_SECONDS });
+  return json({ ok: true, to: channel || "draft" });
 }
 
 async function untranslated(request, env) {

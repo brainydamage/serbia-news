@@ -32,9 +32,12 @@ for on Google.
 - `essences.py`, `article_text.py` — fetch and extract the text of new articles for the AI description; the texts are
   stored privately in the worker, never published with the site.
 - `stories.py`, `stories_live.py` — group news into themes (local embeddings with fastembed, decisions by Claude).
+- `daily.py` — Vestomat Daily: every evening after 20:00 (Belgrade) the day's main themes go to the Telegram channel
+  [@vestomat_daily](https://t.me/vestomat_daily) — what happened, how each side covered it (Claude Sonnet) and links
+  to the articles, one per side.
 - `template.html` — the page itself: the data is embedded into it and rendered with JS.
 - `worker/` — a Cloudflare Worker: reader reports (bad translation, bad description) to Telegram, AI descriptions
-  on demand with a cache and a daily cost cap, build cost stats, feed watchdog.
+  on demand with a cache and a daily cost cap, build cost stats, feed watchdog, posting the daily digest.
 - `.github/workflows/build.yml` — build and publish to GitHub Pages.
 
 ## Running locally

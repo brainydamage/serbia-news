@@ -33,6 +33,7 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 
+import daily
 import stories
 import stories_audit
 import translate
@@ -691,6 +692,8 @@ def run(archive: dict, sections: dict) -> None:
     except Exception as exc:  # noqa: BLE001 — без перевода /sr/plot/ покажет оригинальный заголовок
         traceback.print_exc()
         print(f"Сюжеты: заголовки по-сербски не переведены — {type(exc).__name__}: {exc}"[:300], file=sys.stderr)
+    # сводка за сутки в @vestomat_daily — вечером, раз в день (daily.py); до сохранения: отметка «отправлено» — в состоянии
+    daily.post(state, vectors, now, LOCAL_TZ, spend)
     save_state(state, vectors)
     if done:  # ответы в Telegram — после сохранения: не сохранилось — команды применятся заново в следующей сборке
         translate.reports_api({"results": [{"message": c.get("message"), "text": c["result"]} for c in done]}, "stories")
