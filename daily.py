@@ -3,8 +3,13 @@
 Раз в день, первой сборкой после AT часов по Белграду (и не позже UNTIL), stories_live.run зовёт post(): главные темы
 за сутки (с AT вчера). Кандидаты — CANDIDATES тем, о которых писали больше всего изданий (не меньше MIN_OUTLETS и не
 меньше MIN_SIDES основных сторон из четырёх); из них Opus одним запросом выбирает до TOP самых важных и ставит по
-важности, а не по шуму. Под каждой темой — что произошло за день и одна строка о том, как её подали стороны (критичные
-к SNS, крупные порталы, государственные, близкие к SNS). Ссылки — на сами новости: по одной от каждой писавшей стороны, самая типичная для темы.
+важности, а не по шуму. Он же пишет «Коротко» — день одной фразой, под каждой темой — что произошло за день, и для
+каждой стороны (критичные к SNS, крупные порталы, государственные, близкие к SNS) — на чём её подача. Подача — таблицей:
+сторона и издание со ссылкой на его статью (самую типичную для темы) — и в чём акцент; молчавшая сторона — «не писали».
+Внизу — «Ещё сегодня» (заметные темы, не вошедшие в топ) и легенда цветов.
+
+Пост — rich message Telegram (Bot API 10.1+, sendRichMessage: заголовки, таблицы, цитаты, до 32768 знаков). Вместе с
+ним сборка отдаёт простой вариант (HTML sendMessage, до 4096 знаков): его worker шлёт, если rich не прошёл.
 
 Отправляет worker/ (POST /daily, тот же бот, что шлёт жалобы): в канал DAILY_CHAT_ID, а пока он не задан — черновиком
 в чат жалоб. Одну сводку за день worker отправляет один раз, даже если сборка пришлёт её снова (кэш сюжетов пропал).
@@ -38,6 +43,7 @@ MARKS = {"independent": "🔵", "mainstream": "⚪", "state": "🟣", "progov": 
 SIDE_NAMES = {"independent": "критичные к SNS", "mainstream": "крупные порталы", "state": "государственные",
               "progov": "близкие к SNS"}
 SITE = "https://vestomat.rs/ru/#teme"
+MORE = 3  # «Ещё сегодня»: столько самых обсуждаемых кандидатов, не вошедших в топ
 MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября",
           "декабря"]
 DAYS = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
@@ -47,25 +53,39 @@ PROMPT = """Ты пишешь вечернюю сводку новостей С�
 Выбери до 5 самых важных тем и верни их в порядке важности, самую важную первой. Важность — не число публикаций, а значение для страны и для жизни людей в Сербии: власть и политика, суды и громкие дела, законы и решения, экономика и цены, безопасность, протесты, крупные происшествия и их последствия. Число изданий — подсказка, а не правило. Криминальная хроника, частная трагедия или скандал без общественного значения — только если важнее за день ничего нет. Если две темы — про одну и ту же ситуацию, бери одну.
 Для каждой выбранной темы верни:
 - what — что произошло за день, одно-два коротких предложения, до 220 знаков. Факты, которые подтверждают разные стороны, без оценок. Если тема длится не первый день — что нового сегодня. Имена — как принято по-русски («Вучич», «Скупщина»), сербские названия изданий и партий — латиницей.
-- framing — одна строка до 200 знаков: чем различается подача сторон — на чём делают акцент, кого цитируют, как называют событие. Называй стороны так: «критичные к SNS», «крупные порталы», «государственные», «близкие к SNS». Пиши только то, что видно по заголовкам. Если все подают одинаково — так и скажи коротко («подают одинаково»); если одна из основных сторон молчит, а другие пишут много — это тоже подача, скажи об этом.
+- sides — подача каждой стороны, которая писала о теме: side — сторона (independent, mainstream, state, progov), angle — на чём её акцент, по её заголовкам: что выносит вперёд, кого цитирует, как называет событие. До 60 знаков, без подлежащего-стороны, с маленькой буквы, как пометка в таблице («депутаты большинства аплодировали Вучичу», «через слова Вучича о «врачарском клане»»). Если сторона подаёт событие без своего акцента — «нейтрально, фактом». Пиши только то, что видно по заголовкам, не домысливай мотивы.
+Ещё верни summary — день одной фразой до 160 знаков: две-три главные темы через запятую, без вводных слов («Задержан главред Informer, у Скупщины появились комитеты, новые аресты по делу «Алта банки»»).
 Без кавычек вокруг ответа, без хэштегов и эмодзи."""
 SCHEMA = {
     "type": "object",
     "properties": {
+        "summary": {"type": "string"},
         "themes": {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {"id": {"type": "string"}, "what": {"type": "string"}, "framing": {"type": "string"}},
-                "required": ["id", "what", "framing"],
+                "properties": {
+                    "id": {"type": "string"},
+                    "what": {"type": "string"},
+                    "sides": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {"side": {"type": "string", "enum": SIDES}, "angle": {"type": "string"}},
+                            "required": ["side", "angle"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                "required": ["id", "what", "sides"],
                 "additionalProperties": False,
             },
-        }
+        },
     },
-    "required": ["themes"],
+    "required": ["summary", "themes"],
     "additionalProperties": False,
 }
-# пишет Opus: сводка — лицо канала, и она одна в день (вход ~20 тыс. токенов, ≈12 центов). Цена — как в stories_gold.py
+# пишет Opus: сводка — лицо канала, и она одна в день (вход ~20 тыс. токенов, ≈13 центов). Цена — как в stories_gold.py
 MODEL = "claude-opus-5-5"
 PRICE = (4.0, 20.0)  # вход / выход за 1M токенов, $
 EFFORT = "medium"
@@ -151,24 +171,77 @@ def chosen(themes: list[tuple[str, list[str]]], answer: dict) -> list[tuple[tupl
     return out[:TOP] or [(theme, {}) for theme in themes[:TOP]]
 
 
-def compose(state: dict, vectors: dict, picked: list[tuple[tuple[str, list[str]], dict]], day: str) -> str:
-    """Текст поста (HTML Telegram). Тема без текста модели — только название и ссылки."""
-    e = html.escape
+def esc(text: str) -> str:
+    """Текст для HTML Telegram: только &amp; &lt; &gt; — rich HTML знает лишь немногие именованные сущности."""
+    return html.escape(text, quote=False)
+
+
+def href(url: str) -> str:
+    return esc(url).replace('"', "&quot;")
+
+
+def plural(n: int, one: str, few: str, many: str) -> str:
+    k = n % 100
+    return one if k % 10 == 1 and k != 11 else few if 2 <= k % 10 <= 4 and not 12 <= k <= 14 else many
+
+
+def date_of(day: str) -> str:
     d = datetime.fromisoformat(day)
-    head = f"<b>Сербия за день · {DAYS[d.weekday()]}, {d.day} {MONTHS[d.month - 1]}</b>"
+    return f"{DAYS[d.weekday()]}, {d.day} {MONTHS[d.month - 1]}"
+
+
+def angles(t: dict) -> dict[str, str]:
+    return {a["side"]: a["angle"].strip() for a in t.get("sides", []) if a.get("side") in SIDES and a.get("angle", "").strip()}
+
+
+def compose_rich(state: dict, vectors: dict, picked: list, more: list[tuple[str, list[str]]], summary: str,
+                 day: str) -> str:
+    """Rich HTML поста (sendRichMessage): заголовок, «Коротко», темы с таблицей подачи, «Ещё сегодня», легенда."""
+    out = [f"<h1>Сербия за день</h1>",
+           f"<p><i>{date_of(day).capitalize()} · {len(picked)} {plural(len(picked), 'главная тема', 'главные темы', 'главных тем')}"
+           f" · как их подали разные стороны</i></p>"]
+    if summary.strip():
+        out.append(f"<blockquote><b>Коротко:</b> {esc(summary.strip())}</blockquote>")
+    for k, ((sid, urls), t) in enumerate(picked):
+        sides, said = by_side(state, vectors, urls), angles(t)
+        out.append(f"<h3>{k + 1}. {esc(name_of(state, sid, urls))}</h3>")
+        if what := t.get("what", "").strip():
+            out.append(f"<p>{esc(what)}</p>")
+        rows = []
+        for s in SIDES:
+            if s in sides:
+                u = sides[s][0]
+                cell = f'{MARKS[s]} <a href="{href(u)}">{esc(state["items"][u]["source"])}</a>'
+                rows.append(f"<tr><td>{cell}</td><td>{esc(said.get(s, '—'))}</td></tr>")
+            else:
+                rows.append(f"<tr><td>{MARKS[s]} {SIDE_NAMES[s]}</td><td><i>не писали</i></td></tr>")
+        out.append(f"<table bordered striped compact>{''.join(rows)}</table>")
+        n = len({state["items"][u]["source"] for u in urls})
+        out.append(f"<p><i>{n} {plural(n, 'издание', 'издания', 'изданий')}</i></p>")
+    if more:
+        out.append("<hr/><h4>Ещё сегодня</h4><ul>"
+                   + "".join(f"<li>{esc(name_of(state, sid, urls))}</li>" for sid, urls in more) + "</ul>")
+    out.append("<hr/><p>" + " · ".join(f"{MARKS[s]} {SIDE_NAMES[s]}" for s in SIDES) + "</p>")
+    out.append(f'<p>Все темы дня — <a href="{SITE}">vestomat.rs</a></p>')
+    return "".join(out)
+
+
+def compose(state: dict, vectors: dict, picked: list, day: str) -> str:
+    """Простой вариант (HTML sendMessage, до LIMIT знаков) — если rich не прошёл: темы, что произошло, подача строкой
+    по сторонам, ссылки. Тема без текста модели — только название и ссылки."""
+    head = f"<b>Сербия за день · {date_of(day)}</b>"
     foot = f'Все темы дня — <a href="{SITE}">vestomat.rs</a>'
     blocks = []
     for k, ((sid, urls), t) in enumerate(picked):
-        sides = by_side(state, vectors, urls)
-        links = " · ".join(f'{MARKS[s]} <a href="{e(sides[s][0], quote=True)}">{e(state["items"][sides[s][0]]["source"])}</a>'
-                           for s in SIDES if s in sides)
-        outlets = len({state["items"][u]["source"] for u in urls})
-        lines = [f"<b>{k + 1}. {e(name_of(state, sid, urls))}</b>"]
+        sides, said = by_side(state, vectors, urls), angles(t)
+        lines = [f"<b>{k + 1}. {esc(name_of(state, sid, urls))}</b>"]
         if what := t.get("what", "").strip():
-            lines.append(e(what))
-        if framing := t.get("framing", "").strip():
-            lines.append(f"<i>Как подали: {e(framing[0].lower() + framing[1:])}</i>")
-        lines.append(f"{links} · {outlets} изд.")
+            lines.append(esc(what))
+        for s in SIDES:
+            if s in sides:
+                u = sides[s][0]
+                lines.append(f'{MARKS[s]} <a href="{href(u)}">{esc(state["items"][u]["source"])}</a>'
+                             + (f": <i>{esc(said[s])}</i>" if s in said else ""))
         blocks.append("\n".join(lines))
     while len(blocks) > 1 and visible_len("\n\n".join([head, *blocks, foot])) > LIMIT:
         blocks.pop()
@@ -213,14 +286,18 @@ def _post(state: dict, vectors: dict, now: str, tz, spend) -> None:
                                           MODEL, PRICE)
         spend("сводка", usage)
         picked = chosen(themes, answer)
+        more = [th for th in themes if th[0] not in {sid for (sid, _), _ in picked}][:MORE]
         today["text"] = compose(state, vectors, picked, day)
+        today["rich"] = compose_rich(state, vectors, picked, more, answer.get("summary", ""), day)
         today["themes"] = [sid for (sid, _), _ in picked]
         print(f"Сводка дня: {len(picked)} тем из {len(themes)} кандидатов, ≈ ${usage['usd']:.3f}", file=sys.stderr)
-    reply = translate.reports_api({"day": day, "text": today["text"]}, "daily")
+    reply = translate.reports_api({"day": day, "text": today["text"], "rich": today.get("rich")}, "daily")
     if reply and reply.get("ok"):
         today["sent"] = now
         today["to"] = reply.get("to")
-        print(f"Сводка дня: {'уже была' if reply.get('already') else 'отправлена'} — {reply.get('to')}", file=sys.stderr)
+        print(f"Сводка дня: {'уже была' if reply.get('already') else 'отправлена'} — {reply.get('to')}"
+              f"{', ' + reply['kind'] if reply.get('kind') else ''}"
+              f"{' (rich не прошёл: ' + reply['rich_error'] + ')' if reply.get('rich_error') else ''}"[:400], file=sys.stderr)
     else:
         print(f"Сводка дня: worker не принял — {reply}"[:300] + ", пробуем следующей сборкой", file=sys.stderr)
 
@@ -239,7 +316,11 @@ if __name__ == "__main__":
     themes = pick(state, start.astimezone(timezone.utc).isoformat(), now)
     vectors = {}  # без векторов: «типичные» — в порядке темы
     print(request_of(state, vectors, themes))
-    fake = {"themes": [{"id": f"T{k}", "what": "(что произошло — напишет модель)", "framing": "(как подали — напишет модель)"}
-                       for k in range(len(themes))]}
-    text = compose(state, vectors, chosen(themes, fake), local.date().isoformat())
-    print(f"\n{text}\n\n{visible_len(text)} знаков", file=sys.stderr)
+    fake = {"summary": "(день одной фразой — напишет модель)",
+            "themes": [{"id": f"T{k}", "what": "(что произошло — напишет модель)",
+                        "sides": [{"side": s, "angle": "(акцент стороны)"} for s in SIDES[:3]]} for k in range(len(themes))]}
+    picked = chosen(themes, fake)
+    more = [th for th in themes if th[0] not in {sid for (sid, _), _ in picked}][:MORE]
+    text = compose(state, vectors, picked, local.date().isoformat())
+    rich = compose_rich(state, vectors, picked, more, fake["summary"], local.date().isoformat())
+    print(f"\n{text}\n\n{visible_len(text)} знаков\n\n{rich}\n\n{visible_len(rich)} знаков rich", file=sys.stderr)

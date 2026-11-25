@@ -11,9 +11,10 @@
 //   resting: [feed], newest: {feed: дата}} — от сборки, каждую сборку: сторож лент. О ленте, которая не открывается
 //   или молчит дольше суток, пишем в Telegram один раз, а когда тревога снята — отвечаем на то сообщение: «снова пишет»,
 //   если вышла новость, или «отбой», если у издания выходной (resting). Кого уже прислали, лежит в ключе KV "feeds".
-// POST /daily {day, text} — от сборки (daily.py): сводка за сутки в канал DAILY_CHAT_ID (@vestomat_daily; бот — админ
-//   канала с правом публикации). Пока DAILY_CHAT_ID не задан — черновиком в чат жалоб. Одну сводку на день и чат
-//   отправляем один раз: сборка может прислать её снова, если её кэш пропал.
+// POST /daily {day, rich, text} — от сборки (daily.py): сводка за сутки в канал DAILY_CHAT_ID (@vestomat_daily; бот —
+//   админ канала с правом публикации). rich — rich message (sendRichMessage), text — простой HTML на случай, если rich не
+//   прошёл. Пока DAILY_CHAT_ID не задан — черновиком в чат жалоб. Одну сводку на день и чат отправляем один раз:
+//   сборка может прислать её снова, если её кэш пропал.
 // POST /telegram — webhook бота: строки «Air Serbia = Air Serbia» или «удалить Air Serbia» из нашего чата
 //   worker коммитит в glossary.json на GitHub (секрет GITHUB_TOKEN), а коммит запускает сборку.
 //   Команды сюжетам (теневой режим, vestomat.rs/plot/) — «/move 1234 s471», «/split s191», «/unmerge s102», «/merge s1 s2» —
@@ -470,22 +471,32 @@ async function stats(request, env) {
 }
 
 async function daily(request, env) {
-  const { day, text } = await request.json();
+  const { day, text, rich } = await request.json();
   if (!/^\d{4}-\d\d-\d\d$/.test(String(day)) || typeof text !== "string" || !text) return json({ error: "bad request" }, 400);
   const channel = env.DAILY_CHAT_ID || "";
   const to = channel || env.TELEGRAM_CHAT_ID;
   const key = `daily:${to}:${day}`;
   if (await env.REPORTS.get(key)) return json({ ok: true, already: true, to: channel || "draft" });
   if (!env.TELEGRAM_TOKEN || !to) return json({ error: "no telegram" }, 503);
-  const draft = channel ? "" : "Черновик для @vestomat_daily (в канал пойдёт, когда у worker будет DAILY_CHAT_ID):\n\n";
-  const response = await fetch(`${env.TELEGRAM_API || "https://api.telegram.org"}/bot${env.TELEGRAM_TOKEN}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: to, text: draft + text.slice(0, 4000), parse_mode: "HTML", link_preview_options: { is_disabled: true } }),
+  const api = `${env.TELEGRAM_API || "https://api.telegram.org"}/bot${env.TELEGRAM_TOKEN}`;
+  const send = (method, payload) => fetch(`${api}/${method}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chat_id: to, ...payload }),
   });
-  if (!response.ok) return json({ error: `telegram ${response.status}: ${(await response.text()).slice(0, 300)}` }, 502);
+  // rich message (Bot API 10.1+: заголовки, таблицы, до 32768 знаков); не прошёл — простой HTML, чтобы сводка всё равно вышла
+  let kind = "rich", richError = "", response = null;
+  if (typeof rich === "string" && rich) {
+    const draft = channel ? "" : "<p><i>Черновик для @vestomat_daily: в канал пойдёт, когда у worker будет DAILY_CHAT_ID</i></p><hr/>";
+    response = await send("sendRichMessage", { rich_message: { html: draft + rich.slice(0, 30000) } });
+    if (!response.ok) richError = `${response.status}: ${(await response.text()).slice(0, 200)}`;
+  }
+  if (!response?.ok) {
+    kind = "plain";
+    const draft = channel ? "" : "Черновик для @vestomat_daily (в канал пойдёт, когда у worker будет DAILY_CHAT_ID):\n\n";
+    response = await send("sendMessage", { text: draft + text.slice(0, 4000), parse_mode: "HTML", link_preview_options: { is_disabled: true } });
+    if (!response.ok) return json({ error: `telegram ${response.status}: ${(await response.text()).slice(0, 300)}`, rich_error: richError }, 502);
+  }
   await env.REPORTS.put(key, String((await response.json()).result?.message_id || 1), { expirationTtl: KEEP_SECONDS });
-  return json({ ok: true, to: channel || "draft" });
+  return json({ ok: true, to: channel || "draft", kind, ...(richError ? { rich_error: richError } : {}) });
 }
 
 async function untranslated(request, env) {
