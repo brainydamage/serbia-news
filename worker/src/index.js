@@ -41,6 +41,7 @@ const ORIGINS = ["https://vestomat.rs", "http://localhost:8765"];
 const DATA_URL = "https://vestomat.rs/data.json";
 const PER_IP_PER_HOUR = 10;
 const KEEP_SECONDS = 7 * 24 * 3600;
+const REPORTS_OPEN = "reports-open";  // ключи r:… ещё не обработанных жалоб на перевод, см. openReports
 const COMMENT_MAX = 500;
 // fixed — перевели заново, same — перевод сильной модели вышел (или уже был) таким же, gone — новость ушла из ленты,
 // error — не вышло: жалоба остаётся в списке, и следующая сборка попробует ещё раз
@@ -225,6 +226,8 @@ async function save(env, url, comment, { item, src }) {
     comments: [...(old?.comments || []), ...(comment ? [comment] : [])].slice(-10),
     messages: [...(old?.messages || []), ...(message ? [message] : [])], reacted: old?.reacted || 0,
   }), { expirationTtl: KEEP_SECONDS });
+  const open = await openReports(env);
+  if (!open.includes(key)) await env.REPORTS.put(REPORTS_OPEN, JSON.stringify([...open, key]));
 }
 
 async function saveTexts(request, env) {
@@ -392,17 +395,35 @@ function authorized(request, secret) {
   return secret && request.headers.get("Authorization") === `Bearer ${secret}`;
 }
 
-async function list(env) {
-  const reports = [];
+// Жалобы, ещё не обработанные сборкой, — ключи r:… в одном ключе "reports-open". Раньше сборка каждые 15 минут
+// перебирала ключи (list) — это операция из того же дневного лимита, что и запись (1000 на бесплатном тарифе, 25.11).
+// Ключа ещё нет (первый запуск) — один раз собираем его перебором
+async function openReports(env) {
+  const open = await env.REPORTS.get(REPORTS_OPEN, "json");
+  if (open) return open;
+  const keys = [];
   let cursor;
   do {
     const page = await env.REPORTS.list({ prefix: "r:", cursor });
-    for (const { name } of page.keys) {
-      const value = await env.REPORTS.get(name, "json");
-      if (value && !value.status) reports.push(value);
-    }
+    keys.push(...page.keys.map(k => k.name));
     cursor = page.list_complete ? null : page.cursor;
   } while (cursor);
+  await env.REPORTS.put(REPORTS_OPEN, JSON.stringify(keys));
+  return keys;
+}
+
+async function list(env) {
+  const open = await openReports(env);
+  const reports = [], still = [];
+  for (const name of open) {
+    const value = await env.REPORTS.get(name, "json");
+    if (value && !value.status) {
+      reports.push(value);
+      still.push(name);
+    }
+  }
+  // обработанные и истёкшие (жалоба живёт неделю) — из списка вон
+  if (still.length !== open.length) await env.REPORTS.put(REPORTS_OPEN, JSON.stringify(still));
   return json({ reports });
 }
 
@@ -499,6 +520,7 @@ async function watchFeeds(request, env) {
   const listed = new Set(Array.isArray(feeds) ? feeds : []);
   const now = (Array.isArray(problems) ? problems : []).filter(p => typeof p?.feed === "string");
   const known = (await env.REPORTS.get("feeds", "json")) || {};
+  const before = JSON.stringify(known);
   const cut = value => String(value || "").slice(0, 300);
 
   const fresh = now.filter(p => !(p.feed in known)).slice(0, FEEDS_MAX);
@@ -531,7 +553,8 @@ async function watchFeeds(request, env) {
     }
     delete known[feed];
   }
-  await env.REPORTS.put("feeds", JSON.stringify(known));
+  // пишем, только если что-то изменилось: на бесплатном тарифе KV 1000 записей в день, а сборка приходит 96 раз (25.11)
+  if (JSON.stringify(known) !== before) await env.REPORTS.put("feeds", JSON.stringify(known));
   return json({ ok: true, new: fresh.length, watching: Object.keys(known).length });
 }
 
