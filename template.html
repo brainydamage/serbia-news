@@ -62,7 +62,7 @@
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
 /* сколько сверху занимает система. В приложении на iPhone (iOS 26) размыта не только строка состояния, но и полоса
    около 25pt под ней — на её высоту опускаем страницу, шапку и плашку о свежих новостях */
 :root { --safe-top: env(safe-area-inset-top); }
@@ -221,19 +221,34 @@ a.card-name:hover { color: var(--hover); }
   overflow-wrap: anywhere; -webkit-user-drag: none;  /* тянуть мышью — выделять текст, а не перетаскивать ссылку */
 }
 .head:hover { color: var(--hover); }
-.head.fresh { font-weight: 700; color: var(--strong); }
-.item.read .head { color: var(--read); font-weight: 400; }
+.head.fresh { font-weight: 700; color: var(--strong); --hc: var(--strong); }
+.item.read .head { color: var(--read); font-weight: 400; --hc: var(--read); }
 .via { color: var(--muted); font-size: 13px; margin-left: 4px; }
 .traffic { color: var(--faint); font-size: 13px; margin-left: 4px; white-space: nowrap; }
 .card .items { margin-bottom: 8px; }
 
 /* подводка — тёмная подсказка при наведении, как на infomate; на телефоне — такой же блок под заголовком */
-.tip, .details { border-radius: 20px; background: var(--tip-bg); color: var(--tip-text); font-size: 15px; line-height: 1.45; }
+.tip { border-radius: 20px; background: var(--tip-bg); color: var(--tip-text); font-size: 15px; line-height: 1.45; }
 .tip {
   position: fixed; z-index: 20; max-width: 420px; padding: 16px 20px;
   box-shadow: 0 8px 28px rgb(0 0 0 / .2); cursor: text;
 }
-.details { margin: 0 0 14px 52px; padding: 14px 18px; }
+/* На телефоне раскрытая новость целиком (время, заголовок, подводка) — тёмная плашка до внутренних краёв контейнера.
+   Всё зависит от --p (0 — закрыта, 1 — раскрыта): его по кадрам ведёт animateDetails, так фон, цвета, отступы и высота
+   идут в такт друг с другом и с прокруткой. Отступы — полями содержимого, а flow-root не выпускает их за фон;
+   при --p: 0 раскладка та же, что у закрытой */
+.item { --edge: 12px; }
+.card .item, .feed .item, .themes .item { --edge: 20px; }
+.camps .item { --edge: 14px; }
+.item.open {
+  display: flow-root; margin: 0 calc(-1 * var(--edge)) calc(var(--p) * 12px); padding: 0 var(--edge);
+  background: color-mix(in srgb, var(--tip-bg) calc(var(--p) * 100%), transparent); color: var(--tip-text);
+}
+.item.open .row { margin-top: calc(var(--p) * 14px); }
+.item.open .head { color: color-mix(in srgb, color-mix(in srgb, var(--tip-text) 80%, var(--tip-bg)) calc(var(--p) * 100%), var(--hc, var(--text))); }
+.item.open .time { color: color-mix(in srgb, color-mix(in srgb, var(--tip-text) 55%, var(--tip-bg)) calc(var(--p) * 100%), var(--faint)); }
+.details { height: 0; overflow: hidden; margin: calc(var(--p) * 2px) 0 0 52px; font-size: 16px; line-height: 1.45; }
+.details-text { opacity: var(--p); }
 .tip p, .details p { margin: 0; }
 .tip p + p, .details p + p { margin-top: 10px; }
 .tip .orig, .details .orig { font-size: 13px; opacity: .65; }
@@ -250,16 +265,13 @@ a.card-name:hover { color: var(--hover); }
   display: block; margin-top: 10px; border: 0; background: none; padding: 0; cursor: pointer;
   color: inherit; opacity: .65; font: inherit; font-size: 13px; text-decoration: underline;
 }
-.details-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; margin-top: 12px; }
-.details-actions .flag-link { margin: 0; }
-/* «Плохой перевод?» и ✕ переносятся вместе: ✕ не остаётся один в ряду и всегда справа */
-.details-more { flex: 1 0 auto; display: flex; align-items: center; gap: 12px; }
+.details-actions { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin: 12px 0 18px; }
 .details-close {
-  /* заходит в поля блока, чтобы на экране шириной 375 влезть в один ряд с кнопками */
-  margin: -2px -6px -2px auto; width: 36px; height: 36px; border: 0; border-radius: 50%; cursor: pointer;
+  flex: none; margin: 0; width: 36px; height: 36px; border: 0; border-radius: 50%; cursor: pointer;
   background: color-mix(in srgb, var(--tip-text) 14%, transparent); color: inherit; font-size: 17px; line-height: 1;
 }
 .read-link {
+  min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
   padding: 8px 12px; border-radius: 999px; background: var(--tip-text); color: var(--tip-bg);
   font-size: 14px; font-weight: 700; text-decoration: none;
 }
@@ -376,7 +388,9 @@ footer a { color: var(--text); }
   #info .unit { display: none; }  /* без «дин» строка влезает в одну, и шапка под ней не прыгает при смене языка */
   .row { margin-bottom: 12px; }
   .time { width: 40px; font-size: 11px; }
-  .details { margin-left: 0; }
+  .card .item, .feed .item, .themes .item { --edge: 16px; }
+  /* подводка и кнопки — в колонке заголовка (время 40 + зазор 10) */
+  .details { margin: 0 0 0 50px; }
   .more { padding: 6px 0; }
   .to-top {
     position: fixed; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 6;
@@ -799,8 +813,102 @@ function openReport(item) {
   if (HOVER) send.focus();
 }
 
-// где на экране была строка, когда раскрыли подводку: туда её вернёт сворачивание
-let openTop = null;
+// ---------- раскрытие подводки на телефоне ----------
+// Всё движение — один цикл requestAnimationFrame: на каждом кадре он ставит --p и высоту раскрывающейся и
+// сворачивающейся новости и тут же прокручивает страницу так, чтобы раскрываемая стояла там, где ей положено
+// в этот момент. Поэтому части не расходятся: что схлопнулось выше, прокрутка в том же кадре и возмещает.
+// Нативная плавная прокрутка так не умеет — у неё своя скорость, и строка уезжала из-под пальца.
+// Одновременно не больше одной раскрытой (openLi) и одной сворачивающейся (closingLi).
+const DETAILS_MS = 480, BUTTONS_DELAY = 150;
+const cubicBezier = (x1, y1, x2, y2) => x => {
+  if (x <= 0) return 0;
+  if (x >= 1) return 1;
+  const at = (a, b, t) => 3 * a * t * (1 - t) ** 2 + 3 * b * t * t * (1 - t) + t ** 3;
+  let lo = 0, hi = 1, t = x;
+  for (let i = 0; i < 24; i++) { t = (lo + hi) / 2; if (at(x1, x2, t) < x) lo = t; else hi = t; }
+  return at(y1, y2, t);
+};
+const EASE = cubicBezier(.4, 0, .2, 1);
+const clamp01 = x => Math.min(1, Math.max(0, x));
+const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+let openLi = null, closingLi = null, scrollAnim = null, detailsFrame = 0;
+
+// li._p — раскрытость 0…1, li._b — видимость кнопок, li._h — полная высота подводки, li._anim — куда идёт
+function paintDetails(li) {
+  const box = li.querySelector(".details");
+  li.style.setProperty("--p", li._p);
+  if (!box) return;
+  box.style.height = li._p >= 1 && !li._anim ? "auto" : li._p * li._h + "px";
+  box.lastChild.style.opacity = li._b;
+}
+// раскрытую рисуем сразу раскрытой — после перерисовки страницы (смена языка и т.п.)
+function showOpen(li, box) {
+  li.classList.add("open");
+  li._p = li._b = 1;
+  li._anim = null;
+  paintDetails(li);
+  openLi = li;
+}
+function finishClose(li) {
+  li._anim = null;
+  li.querySelector(".details")?.remove();
+  li.classList.remove("open");
+  li.style.removeProperty("--p");
+  li._p = li._b = 0;
+  if (closingLi === li) closingLi = null;
+  if (openLi === li) openLi = null;
+}
+function startDetails(li, to, t0) {
+  li._anim = { from: li._p || 0, b0: li._b || 0, to, t0 };
+}
+function tickDetails(now) {
+  detailsFrame = 0;
+  const dur = reducedMotion() ? 0 : DETAILS_MS;
+  const k = t0 => dur ? clamp01((now - t0) / dur) : 1;
+  for (const li of [closingLi, openLi]) {
+    const a = li?._anim;
+    if (!a) continue;
+    const el = now - a.t0;
+    li._p = a.from + (a.to - a.from) * EASE(k(a.t0));
+    // кнопки: при раскрытии проявляются с задержкой и успевают к концу, при сворачивании — в обратном порядке
+    li._b = !dur ? a.to : a.to
+      ? a.b0 + (1 - a.b0) * EASE(clamp01((el - BUTTONS_DELAY) / (dur - BUTTONS_DELAY)))
+      : a.b0 * (1 - EASE(clamp01(el / (dur - BUTTONS_DELAY))));
+    if (k(a.t0) >= 1) li._anim = null;
+    if (!li._anim && !a.to) finishClose(li);
+    else paintDetails(li);
+  }
+  const s = scrollAnim;
+  if (s) {
+    if (!s.li.isConnected) scrollAnim = null;
+    else {
+      // прокручиваем в точку, а не на разницу: Safari на iOS прокручивает в своём процессе и следующий кадр может
+      // вернуть прошлый scrollY — разница от него копилась бы, и страница ходила туда-сюда. Место новости
+      // в документе (top + scrollY) от этого не зависит, поэтому цель каждый кадр одна и та же
+      const p = k(s.t0), top = s.li.getBoundingClientRect().top, want = s.from + (s.to - s.from) * EASE(p);
+      if (top !== want) scrollTo(0, scrollY + top - want);
+      if (p >= 1) scrollAnim = null;
+    }
+  }
+  if (closingLi?._anim || openLi?._anim || scrollAnim) detailsFrame = requestAnimationFrame(tickDetails);
+}
+function runDetails(t0) {
+  cancelAnimationFrame(detailsFrame);
+  tickDetails(t0);  // первый шаг сразу (ровно от касания): без кадра, где новость уже раскрыта, а фона ещё нет
+}
+// доводим сворачивание до конца мгновенно; keep — строка, которая при этом не должна сдвинуться на экране
+function closeNow(li, keep) {
+  const before = keep.getBoundingClientRect().top;
+  finishClose(li);
+  const top = keep.getBoundingClientRect().top;
+  if (top !== before) scrollTo(0, scrollY + top - before);
+}
+function resetDetails() {  // перед перерисовкой: старые строки уходят вместе с их движением
+  cancelAnimationFrame(detailsFrame);
+  openLi = closingLi = scrollAnim = null;
+}
+// палец или колёсико перехватывают прокрутку — наша сразу отступает
+for (const type of ["touchstart", "wheel"]) addEventListener(type, () => { scrollAnim = null; }, { passive: true });
 
 // showVia — подписать издание у новости (в общей карточке региона)
 function renderItem(item, src, { showSource = false, showVia = false } = {}) {
@@ -812,39 +920,69 @@ function renderItem(item, src, { showSource = false, showVia = false } = {}) {
 
   const opened = () => { markRead(item.url); li.classList.add("read"); hideTip(); track(`click/${src.section}/${src.name}`); };
   const reportable = REPORT_URL && v.translated;
-  const details = () => h("div", { class: "details" }, summary,
+  // жалоба на перевод — под текстом, у оригинала; справа кнопки «Читать на …» и ✕ (на телефоне втроём в ряд не влезали)
+  const details = () => h("div", { class: "details" }, h("div", { class: "details-text" }, summary,
+      reportable ? h("button", { class: "flag-link", type: "button", onclick: () => openReport(item) }, t("report")) : null),
     h("div", { class: "details-actions" },
       h("a", { class: "read-link", href: item.url, target: "_blank", rel: "noopener", onclick: opened }, `${t("readOn")} ${via || src.name} ↗`),
-      h("div", { class: "details-more" },
-        reportable ? h("button", { class: "flag-link", type: "button", onclick: () => openReport(item) }, t("report")) : null,
-        h("button", { class: "details-close", type: "button", title: t("collapse"), "aria-label": t("collapse"), onclick: toggle }, "✕"))));
+      h("button", { class: "details-close", type: "button", title: t("collapse"), "aria-label": t("collapse"), onclick: toggle }, "✕")));
   function toggle(e) {
-    const top = li.getBoundingClientRect().top;
-    document.querySelector(".details")?.remove();
-    if (state.open === item.url) {
+    const t0 = performance.now();
+    if (state.open === item.url && openLi === li) {
       state.open = null;
-      // свернули — страница встаёт, как была до касания
-      scrollBy(0, li.getBoundingClientRect().top - (openTop ?? top));
+      if (closingLi && closingLi !== li) closeNow(closingLi, li);
+      openLi = null;
+      closingLi = li;
+      startDetails(li, 0, t0);
+      // заголовок остаётся на месте, а всё, что ниже, подтягивается вверх. Отступ над строкой (--p * 14px) уходит,
+      // поэтому новость опускаем ровно на него — тем же ходом, что и сворачивание
+      const top = li.getBoundingClientRect().top;
+      scrollAnim = { li, from: top, to: top + li._p * 14, t0 };
+      runDetails(t0);
       return;
     }
-    // свернулась подводка выше — возвращаем строку под палец
-    scrollBy(0, li.getBoundingClientRect().top - top);
+    // ещё сворачивается другая — доводим её мгновенно, не сдвигая эту. Раскрытая другая начинает сворачиваться
+    if (closingLi && closingLi !== li) closeNow(closingLi, li);
+    if (closingLi === li) closingLi = null;  // эта сама ещё сворачивалась — разворачиваем с того же места
+    if (openLi && openLi !== li) {
+      closingLi = openLi;
+      startDetails(openLi, 0, t0);
+    }
+    openLi = li;
     state.open = item.url;
-    openTop = top;
     markRead(item.url);
     li.classList.add("read");
-    const box = details();
-    li.append(box);
-    // палец закрывает всё ниже касания: подтягиваем подводку, чтобы её низ встал на место касания,
-    // но заголовок не уходит за верх экрана. С клавиатуры касания нет — тогда просто показываем блок целиком
-    const y = e.detail ? e.clientY : innerHeight;
-    const shift = Math.min(box.getBoundingClientRect().bottom - y, li.getBoundingClientRect().top - stickyHeight - 8);
-    if (shift > 0) scrollBy({ top: shift, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    let box = li.querySelector(".details");
+    if (!box) {
+      box = details();
+      li.append(box);
+      li._p = li._b = 0;
+    }
+    li.classList.add("open");
+    // меряем раскрытую целиком, пока кадр не нарисован: где будет ✕ и какой высоты станет новость
+    li.style.setProperty("--p", 1);
+    box.style.height = "auto";
+    const full = li.getBoundingClientRect(), x = box.querySelector(".details-close").getBoundingClientRect();
+    li._h = box.getBoundingClientRect().height;
+    const closeY = x.top + x.height / 2 - full.top;
+    paintDetails(li);
+    const from = li.getBoundingClientRect().top;
+    // касание: ✕ встаёт ровно под палец — им же и свернуть. С клавиатуры касания нет — показываем блок целиком
+    // но не ниже кнопки «Наверх»: внизу экрана она закрыла бы ✕ (кнопка появляется при прокрутке, место держим всегда)
+    const fab = getComputedStyle(toTop), fabTop = innerHeight - parseFloat(fab.bottom) - parseFloat(fab.height);
+    const tapY = fabTop > 0 ? Math.min(e.clientY, fabTop - 12 - x.height / 2) : e.clientY;
+    let to = e.detail ? tapY - closeY
+      : from - Math.max(0, Math.min(from + full.height - innerHeight, from - stickyHeight - 8));
+    to = Math.max(to, stickyHeight);  // но верх новости не уходит за верх экрана (под липкую шапку)
+    startDetails(li, 1, t0);
+    scrollAnim = { li, from, to, t0 };
+    runDetails(t0);
   }
   const onclick = e => {
     if (selecting(head)) { e.preventDefault(); return; }
-    // без мыши наводить нечем: касание раскрывает и сворачивает подводку, статья открывается кнопкой в ней
-    if (!HOVER && summary.length) {
+    // без мыши наводить нечем: касание раскрывает и сворачивает подводку, статья открывается кнопкой в ней.
+    // Плашка раскрывается и без подводки (тогда в ней только кнопки): тап везде делает одно и то же
+    if (!HOVER) {
       e.preventDefault();
       toggle(e);
       return;
@@ -869,7 +1007,11 @@ function renderItem(item, src, { showSource = false, showVia = false } = {}) {
     head,
     reportable ? h("button", { class: "report-flag", type: "button", title: t("report"), "aria-label": t("report"), onclick: () => openReport(item) }, "⚑") : null,
   ));
-  if (!HOVER && state.open === item.url && summary.length) li.append(details());
+  if (!HOVER && state.open === item.url) {
+    const box = details();
+    li.append(box);
+    showOpen(li, box);
+  }
   return li;
 }
 
@@ -1255,6 +1397,7 @@ function render() {
   renderUpdated();
   renderInfo();
   document.querySelector("footer").classList.toggle("narrow", state.view === "feed");
+  resetDetails();
   document.getElementById("main").replaceChildren(...(state.view === "feed" ? renderFeed()
     : state.view === "themes" ? renderThemes() : renderSources()));
   renderChips();
