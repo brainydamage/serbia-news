@@ -10,6 +10,9 @@
 лежат только в KV worker'а и на сайт не попадают (авторское право). В data.json у новости — только номер пачки ("tx"):
 по нему worker находит вопрос, а сайт понимает, что для новости можно попросить фразу.
 
+Старые новости не догоняем: при первой сборке с отметкой _baseline всё, что уже было в ленте, помечено "old", тексты
+берутся только у новостей, появившихся позже (25.11: в ленте 1427 новостей, догонять — ещё ~10 сборок по 150).
+
 Проба 25.11 на 30 статьях: медиана 157 знаков, максимум 190, ~$0.0006 и ~1,5 с на фразу.
 Остальное — в worker (worker/src/index.js, essence): вызов модели, проверка и одна правка, кэш фраз, дневной лимит расходов."""
 import json
@@ -34,6 +37,7 @@ TRIES = 2              # не скачалась или не прошла про
 WORKERS = 8
 FETCH_TIMEOUT = 12
 DEADLINE = 120         # секунд на всё: сборка не должна ждать медленные сайты
+BASELINE = "_baseline"  # отметка в state: новости, что были в ленте до неё, не догоняем — только новые
 SKIP_HOSTS = ("news.google.com", "trends.google.com")  # ссылки-переадресации: страницы статьи за ними нет
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36"
 
@@ -110,8 +114,14 @@ def attach(results: list[dict]) -> None:
     """Новостям, для которых есть текст, ставит item["tx"]; новые тексты скачивает и отправляет в worker."""
     state = load_state()
     now = datetime.now(timezone.utc)
+    seen = now.isoformat(timespec="seconds")
     items = [i for r in results for i in r["items"] if i.get("ru") and urlparse(i["url"]).netloc not in SKIP_HOSTS]
-    todo = [i for i in items if not state.get(i["url"], {}).get("tx") and state.get(i["url"], {}).get("fail", 0) < TRIES]
+    if BASELINE not in state:
+        # первая сборка с этим ключом: всё, что уже в ленте, — старое, тексты берём только у новостей, появившихся после
+        for i in items:
+            state.setdefault(i["url"], {"seen": seen, "old": 1})
+        state[BASELINE] = {"seen": seen}
+    todo = [i for i in items if not (s := state.get(i["url"], {})).get("tx") and not s.get("old") and s.get("fail", 0) < TRIES]
     todo.sort(key=lambda i: i.get("date") or "", reverse=True)
     todo = todo[:MAX_PER_BUILD]
 
@@ -139,7 +149,6 @@ def attach(results: list[dict]) -> None:
             print(f"Суть: не успели за {DEADLINE} с, остальное — в следующей сборке", file=sys.stderr)
         pool.shutdown(wait=False, cancel_futures=True)
 
-    seen = now.isoformat(timespec="seconds")
     if batch:
         tx = now.strftime("%y%m%d%H%M%S")
         if T.reports_api({"id": tx, "system": SYSTEM, "items": batch}, "texts"):
@@ -158,7 +167,7 @@ def attach(results: list[dict]) -> None:
             i["tx"] = tx
             state[i["url"]]["seen"] = seen
     cutoff = (now - timedelta(days=KEEP_DAYS)).isoformat()
-    state = {u: s for u, s in state.items() if u in current or s["seen"] >= cutoff}
+    state = {u: s for u, s in state.items() if u in current or u == BASELINE or s["seen"] >= cutoff}
     STATE_FILE.parent.mkdir(exist_ok=True)
     STATE_FILE.write_text(json.dumps(state, ensure_ascii=False), "utf-8")
 
