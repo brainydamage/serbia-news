@@ -1355,6 +1355,19 @@ function track(path) {
 }
 // на каком языке и алфавите открывают сайт (с учётом сохранённого выбора) — один раз за визит
 addEventListener("load", () => track(`visit/${ru() ? "ru" : state.script}`));
+// не считать свой браузер: то же, что /#toggle-goatcounter, но и там, где адресной строки нет (приложение с экрана
+// «Домой» — у него на iOS свой localStorage). Пять быстрых нажатий на «Анонимная статистика…» в подвале
+{
+  let taps = 0, tapTimer;
+  document.querySelector('footer [data-t="stats"]').addEventListener("click", () => {
+    clearTimeout(tapTimer); tapTimer = setTimeout(() => taps = 0, 1500);
+    if (++taps < 5) return;
+    taps = 0;
+    const off = localStorage.getItem("skipgc") === "t";
+    if (off) localStorage.removeItem("skipgc"); else localStorage.setItem("skipgc", "t");
+    alert(off ? "GoatCounter: этот браузер снова считается" : "GoatCounter: этот браузер больше не считается");
+  });
+}
 // сколько читателей открывают сайт как приложение с экрана «Домой»
 if (matchMedia("(display-mode: standalone)").matches || navigator.standalone) addEventListener("load", () => track("visit/app"));
 
