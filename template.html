@@ -267,12 +267,15 @@ a.card-name:hover { color: var(--hover); }
 }
 .row:hover .report-flag, .report-flag:focus-visible { opacity: 1; }
 .report-flag:hover { color: var(--text); }
+/* на тёмной раскрытой плашке — светлые оттенки, иначе флажок пропадал (25.11) */
+.item.open .report-flag { color: color-mix(in srgb, var(--tip-text) 55%, var(--tip-bg)); }
+.item.open .report-flag:hover { color: var(--tip-text); }
 @media (hover: none) { .report-flag { display: none; } }
-/* под текстом плашки: жалобы («Плохой перевод?», «Плохая суть?») в одну строку */
+/* под текстом плашки: жалобы («Плохой перевод заголовка?», «Плохое описание от ИИ?») в одну строку */
 .flags { display: flex; flex-wrap: wrap; column-gap: 18px; }
 .flags:empty { display: none; }
 /* вкладки «Описание от ИИ · Подводка издания · Обе» над текстом плашки — тихие, как подписи, но с местом под палец */
-.leads-tabs { display: flex; flex-wrap: wrap; gap: 2px; margin: 0 0 8px; font-size: 13px; }
+.leads-tabs { display: flex; gap: 2px; margin: 0 0 8px; font-size: 13px; }
 .leads-tabs button {
   border: 0; background: none; color: inherit; font: inherit; opacity: .55; padding: 6px 10px; border-radius: 999px; cursor: pointer;
   white-space: nowrap;
@@ -542,11 +545,12 @@ const UI = {
   scriptHint: "Srpski tekst: kao u originalu, latinicom ili ćirilicom",
   leadsMode: "Koji uvod prikazivati",
   leadsBoth: "Oba",
-  tabAi: "Opis AI",
+  tabAi: "AI",
+  tabOutlet: "Medij",
   labelAi: "Opis (AI)",
   labelOutlet: "Uvod medija",
-  badEssence: "Loš opis?",
-  badEssenceTitle: "Loš opis",
+  badEssence: "Loš AI opis?",
+  badEssenceTitle: "Loš AI opis",
   badEssenceRewritten: "Hvala! Jači model je napisao novi opis — videćete ga kad zatvorite ovaj prozor.",
   badEssenceThanks: "Hvala! Ovaj opis više ne prikazujemo — umesto njega biće uvod medija.",
   send: "Pošalji",
@@ -653,8 +657,8 @@ const UI_RU = {
   noTranslations: "Перевода пока нет — заголовки показаны в оригинале.",
   partial: "Часть свежих новостей ещё не переведена и показана в оригинале.",
   // жалоба на перевод — только в русском режиме, поэтому в UI её нет
-  report: "Плохой перевод?",
-  reportTitle: "Плохой перевод",
+  report: "Плохой перевод заголовка?",
+  reportTitle: "Плохой перевод заголовка",
   send: "Отправить",
   sending: "Отправляю…",
   cancel: "Отмена",
@@ -664,11 +668,12 @@ const UI_RU = {
   reportError: "Не получилось отправить. Попробуйте позже.",
   leadsMode: "Какую подводку показывать",
   leadsBoth: "Обе",
-  tabAi: "Описание ИИ",
+  tabAi: "ИИ",
+  tabOutlet: "Издание",
   labelAi: "Описание от ИИ",
   labelOutlet: "Подводка издания",
-  badEssence: "Плохое описание?",
-  badEssenceTitle: "Плохое описание",
+  badEssence: "Плохое описание от ИИ?",
+  badEssenceTitle: "Плохое описание от ИИ",
   badEssenceRewritten: "Спасибо! Модель посильнее написала новое описание — оно появится, когда закроете это окно.",
   badEssenceThanks: "Спасибо! Это описание больше не показываем — вместо него будет подводка издания.",
 };
@@ -926,7 +931,7 @@ function openReport(item) {
 // Раньше переключатель стоял в каждой плашке крупными кнопками, потом один над лентой — там было непонятно, к чему он (25.11)
 function leadsTabs() {
   return h("div", { class: "leads-tabs", role: "group", "aria-label": t("leadsMode") },
-    ...[["ai", "tabAi"], ["outlet", "labelOutlet"], ["both", "leadsBoth"]].map(([v, key]) =>
+    ...[["ai", "tabAi"], ["outlet", "tabOutlet"], ["both", "leadsBoth"]].map(([v, key]) =>
       h("button", { type: "button", "aria-pressed": String(state.leads === v), onclick: () => {
         if (v === state.leads) return;
         track(`leads/${v}`);
