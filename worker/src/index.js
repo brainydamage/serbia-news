@@ -24,7 +24,7 @@
 //   статьи с правилами и глоссарием, пачка одной сборки в ключе KV "tx:id" (одна запись на сборку: у KV на бесплатном
 //   тарифе ~1000 записей в день). Тексты статей лежат только здесь и на сайт не попадают.
 // POST /essence {url} — от читателя, когда он раскрыл новость: суть одной фразой (Haiku). Новость берём из data.json
-//   (у неё должен быть номер пачки "tx"), фразу кэшируем ("e:" + адрес). Расходы — в ключе "essence-stats" по дням;
+//   (у неё должен быть номер пачки "tx"), фразу кэшируем (ESSENCE_CACHE + адрес). Расходы — в ключе "essence-stats" по дням;
 //   за дневным лимитом (ESSENCE_USD_PER_DAY) новые фразы не пишем, кэш отдаём.
 // GET /costs — страница с этой статистикой, GET /stats — сами данные для неё (с ключом STATS_KEY).
 //   Ключ страница берёт из адреса после # — эта часть не уходит ни на сервер, ни в Referer.
@@ -58,6 +58,11 @@ const ESSENCE_PER_IP_PER_HOUR = 60;
 const ESSENCE_LIMIT = 200;  // знаков; длиннее — просим сократить, потом режем по «;»
 const ESSENCE_KEEP_SECONDS = 7 * 24 * 3600;
 const TEXTS_KEEP_SECONDS = 6 * 24 * 3600;  // сборка помнит тексты 5 дней (essences.KEEP_DAYS)
+// напоминание после текста статьи: без него Haiku на длинной статье Mašina 4 раза из 6 отвечал обрывком
+// «Высшая прокуратура» (25.11); с ним — 8 из 8 фраз и 30 из 30 на пробе
+const ESSENCE_ASK = "\n\nНапиши суть этой статьи одной фразой: 12–25 слов, полное предложение — кто что сделал, заявил или что произошло.";
+const ESSENCE_MIN_WORDS = 8;  // короче — не фраза, а обрывок: спрашиваем ещё раз
+const ESSENCE_CACHE = "e2:";  // меняется вместе с правилами — старые фразы пишутся заново
 const ESSENCE_SCHEMA = { type: "object", additionalProperties: false, required: ["essence"], properties: { essence: { type: "string" } } };
 const ESSENCE_FIX = "Ты редактор. Перепиши фразу так, чтобы она стала одним предложением по-русски не длиннее 170 знаков " +
   "(это жёсткий предел: если фраза длиннее, обязательно выбрось одну из частей или подробностей), кириллицей (кроме " +
@@ -187,11 +192,12 @@ async function essence(request, env, ctx) {
   }
   const url = typeof body.url === "string" ? body.url.slice(0, 2000) : "";
   if (!url) return json({ error: "no url" }, 400);
-  const key = "e:" + (await sha1(url));
+  const key = ESSENCE_CACHE + (await sha1(url));
   const cached = await env.REPORTS.get(key, "json");
   if (cached) return json({ text: cached.text });
 
-  const found = await findItem(url, env.DATA_URL || DATA_URL);
+  // текст статьи сборка отдаёт вместе с data.json, где у новости появился "tx": закэшированный data.json мог быть старше
+  const found = await findItem(url, env.DATA_URL || DATA_URL, i => i.tx);
   if (!found?.item.tx) return json({ error: "unknown item" }, 404);
   const day = belgrade(Date.now()).slice(0, 10);
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
@@ -224,7 +230,8 @@ async function essence(request, env, ctx) {
   };
   let text;
   try {
-    text = await ask(batch.system, question);
+    text = await ask(batch.system, question + ESSENCE_ASK);
+    if (text && text !== "НЕТ" && words(text) < ESSENCE_MIN_WORDS) text = await ask(batch.system, question + ESSENCE_ASK);
     const problems = text && text !== "НЕТ" ? essenceProblems(text, question) : [];
     if (problems.length) {
       const fixed = await ask(ESSENCE_FIX, `Заголовок: ${found.item.ru.title}\nЗамечания: ${problems.join(", ")}\n` +
@@ -240,7 +247,7 @@ async function essence(request, env, ctx) {
   }
   text = cutClauses(text);
   // «НЕТ» (текст не про то) и негодное тоже кэшируем — чтобы не платить за тот же отказ снова
-  const answer = text && text !== "НЕТ" && text.length <= ESSENCE_LIMIT + 40 && !essenceProblems(text, question).some(p => !p.startsWith("длина")) ? text : null;
+  const answer = text && text !== "НЕТ" && words(text) >= ESSENCE_MIN_WORDS && text.length <= ESSENCE_LIMIT + 40 && !essenceProblems(text, question).some(p => !p.startsWith("длина")) ? text : null;
   ctx.waitUntil(env.REPORTS.put(key, JSON.stringify({ text: answer }), { expirationTtl: ESSENCE_KEEP_SECONDS }));
   return json({ text: answer });
 }
@@ -279,6 +286,8 @@ function cyrFix(text) {
     return word;
   });
 }
+
+const words = text => (text.match(/[\p{L}\p{N}]+/gu) || []).length;
 
 function essenceProblems(text, question) {
   const problems = [];
@@ -670,16 +679,17 @@ function belgrade(ms) {
   return new Date(ms).toLocaleString("sv-SE", { timeZone: "Europe/Belgrade" });
 }
 
-async function findItem(url, dataUrl) {
+async function findItem(url, dataUrl, ready = () => true) {
   // data.json обновляется раз в 15 минут — кэшируем на 5, чтобы не тянуть его на каждую жалобу;
-  // если новости в нём нет, она может быть свежее кэша — тогда перечитываем мимо кэша
+  // если новости в нём нет (или она ещё не та — ready, например без "tx"), она может быть свежее кэша —
+  // тогда перечитываем мимо кэша
   for (const fresh of [false, true]) {
     const response = await fetch(fresh ? `${dataUrl}?t=${Date.now()}` : dataUrl,
       fresh ? {} : { cf: { cacheTtl: 300, cacheEverything: true } });
     if (!response.ok) continue;
     const data = await response.json();
     for (const src of data.sources) {
-      const item = src.items.find(i => i.url === url && i.ru);
+      const item = src.items.find(i => i.url === url && i.ru && (fresh || ready(i)));
       if (item) return { item, src };
     }
   }

@@ -227,13 +227,7 @@ a.card-name:hover { color: var(--hover); }
 .traffic { color: var(--faint); font-size: 13px; margin-left: 4px; white-space: nowrap; }
 .card .items { margin-bottom: 8px; }
 
-/* подводка — тёмная подсказка при наведении, как на infomate; на телефоне — такой же блок под заголовком */
-.tip { border-radius: 20px; background: var(--tip-bg); color: var(--tip-text); font-size: 15px; line-height: 1.45; }
-.tip {
-  position: fixed; z-index: 20; max-width: 420px; padding: 16px 20px;
-  box-shadow: 0 8px 28px rgb(0 0 0 / .2); cursor: text;
-}
-/* На телефоне раскрытая новость целиком (время, заголовок, подводка) — тёмная плашка до внутренних краёв контейнера.
+/* Раскрытая по нажатию новость целиком (время, заголовок, подводка) — тёмная плашка до внутренних краёв контейнера.
    Всё зависит от --p (0 — закрыта, 1 — раскрыта): его по кадрам ведёт animateDetails, так фон, цвета, отступы и высота
    идут в такт друг с другом и с прокруткой. Отступы — полями содержимого, а flow-root не выпускает их за фон;
    при --p: 0 раскладка та же, что у закрытой */
@@ -249,9 +243,9 @@ a.card-name:hover { color: var(--hover); }
 .item.open .time { color: color-mix(in srgb, color-mix(in srgb, var(--tip-text) 55%, var(--tip-bg)) calc(var(--p) * 100%), var(--faint)); }
 .details { height: 0; overflow: hidden; margin: calc(var(--p) * 2px) 0 0 52px; font-size: 16px; line-height: 1.45; }
 .details-text { opacity: var(--p); }
-.tip p, .details p { margin: 0; }
-.tip p + p, .details p + p { margin-top: 10px; }
-.tip .orig, .details .orig { font-size: 13px; opacity: .65; }
+.details p { margin: 0; }
+.details p + p { margin-top: 10px; }
+.details .orig { font-size: 13px; opacity: .65; }
 /* суть одной фразой (Haiku по тексту статьи, worker /essence): пока пишется — бледные полоски на её месте,
    примерно той же высоты, чтобы пришедшая фраза почти не сдвигала остальное */
 .essence { font-weight: 500; animation: essence-in .3s ease-out; }
@@ -275,14 +269,17 @@ a.card-name:hover { color: var(--hover); }
   display: block; margin-top: 10px; border: 0; background: none; padding: 0; cursor: pointer;
   color: inherit; opacity: .65; font: inherit; font-size: 13px; text-decoration: underline;
 }
-.details-actions { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin: 12px 0 18px; }
+/* «Читать на …» и ✕ — обе справа; ✕ — вытянутая, как сама кнопка «Читать», и через зазор: вплотную палец, сворачивая, попадал в «Читать» (отзыв 25.11).
+   Нажимается ✕ и чуть мимо — ::before на 8px шире кнопки со всех сторон */
+.details-actions { display: flex; justify-content: flex-end; align-items: center; gap: 24px; margin: 12px 0 18px; }
 .details-close {
-  flex: none; margin: 0; width: 36px; height: 36px; border: 0; border-radius: 50%; cursor: pointer;
+  position: relative; flex: none; margin: 0; width: 140px; align-self: stretch; border: 0; border-radius: 999px; cursor: pointer;
   background: color-mix(in srgb, var(--tip-text) 14%, transparent); color: inherit; font-size: 17px; line-height: 1;
 }
+.details-close::before { content: ""; position: absolute; inset: -8px; }
 .read-link {
   min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
-  padding: 8px 12px; border-radius: 999px; background: var(--tip-text); color: var(--tip-bg);
+  padding: 10px 14px; border-radius: 999px; background: var(--tip-text); color: var(--tip-bg);
   font-size: 14px; font-weight: 700; text-decoration: none;
 }
 dialog.report {
@@ -737,44 +734,48 @@ function textOf(item, src) {
   return { title: item.title, summary: item.summary, lang: item.lang || src.lang, translated: false };
 }
 
-// подводка: в подсказке при наведении, а на телефоне — под заголовком после первого касания
+// подводка: в плашке под заголовком, когда новость раскрыли нажатием
 function summaryOf(item, src) {
   const v = textOf(item, src);
   return [
-    v.summary ? h("p", {}, script(v.summary, v.lang)) : null,
+    v.summary ? h("p", { class: "lead" }, script(v.summary, v.lang)) : null,
     v.translated ? h("p", { class: "orig", lang: item.lang || src.lang }, t("original") + " " + item.title) : null,
   ].filter(Boolean);
 }
 
 // ---------- суть одной фразой ----------
-// Фразу пишет Haiku по тексту статьи (worker /essence), только когда новость раскрыли (на телефоне) или задержались
-// на подсказке (на компьютере): читателей мало, писать заранее для всех — платить за то, что никто не откроет.
+// Фразу пишет Haiku по тексту статьи (worker /essence), только когда новость раскрыли нажатием: читателей мало,
+// писать заранее для всех — платить за то, что никто не откроет.
 // Текст статьи сборка заранее кладёт в worker (essences.py), у такой новости в data.json есть "tx". Только по-русски
 const ESSENCE_URL = location.hostname === "localhost" ? "http://localhost:8787/essence" : "https://vestomat-reports.vestomat.workers.dev/essence";
-const ESSENCE_HOVER_MS = 500;  // подсказка мелькает, пока мышь едет через список, — за такие не платим
 const essences = new Map();  // адрес → Promise<фраза или null>: одна просьба на новость за визит
 function essenceOf(item) {
   if (!essences.has(item.url)) {
     track("essence");
-    essences.set(item.url, fetch(ESSENCE_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: item.url }) })
+    essences.set(item.url, fetch(ESSENCE_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: item.url }), signal: AbortSignal.timeout(25000) })
       .then(r => r.ok ? r.json() : {}).then(d => d.text || null).catch(() => null));
   }
   return essences.get(item.url);
 }
-// место под фразу: полоски, пока не пришла; не пришла (нет текста, лимит, ошибка) — место исчезает
+// место под фразу: полоски, пока не пришла; не пришла (нет текста, лимит, ошибка) — место исчезает.
+// Пришла — подводка из ленты (slot.lead) уходит: фраза её заменяет, а две похожие подряд только путают
 function essenceSlot(item) {
   if (!ESSENCE_URL || !item.tx || !item.ru || !ru()) return null;
   const slot = h("p", { class: "essence loading", "aria-busy": "true" }, ...[1, 2, 3, 4].map(() => h("span", { class: "bar" })));
   slot.item = item;
   return slot;
 }
-// relayout(apply) — вызывающий меняет раскладку вокруг apply (высота плашки, место подсказки); без неё — просто подставить
+// relayout(apply) — вызывающий меняет раскладку вокруг apply (высота плашки); без неё — просто подставить
 function fillEssence(slot, relayout) {
   if (!slot || slot.asked) return;
   slot.asked = true;
   essenceOf(slot.item).then(text => {
     const apply = () => {
       if (text) {
+        if (slot.lead) {
+          slot.lead.gone = true;
+          slot.lead.remove();
+        }
         slot.replaceChildren(text);
         slot.classList.remove("loading");
         slot.removeAttribute("aria-busy");
@@ -789,44 +790,6 @@ function fillEssence(slot, relayout) {
 }
 const visible = nodes => nodes.filter(n => !n.gone);
 
-const tipEl = h("div", { class: "tip", hidden: true });
-document.body.append(tipEl);
-let tipTimer;
-let essenceTimer;
-function placeTip(anchor) {
-  const r = anchor.getBoundingClientRect();
-  const left = Math.max(8, Math.min(r.left, innerWidth - tipEl.offsetWidth - 8));
-  let top = r.bottom + 8;
-  if (top + tipEl.offsetHeight > innerHeight - 8) top = Math.max(8, r.top - tipEl.offsetHeight - 8);
-  tipEl.style.left = left + "px";
-  tipEl.style.top = top + "px";
-}
-function showTip(anchor, nodes) {
-  clearTimeout(tipTimer);
-  clearTimeout(essenceTimer);
-  // небольшая задержка, чтобы подсказки не мелькали, пока мышь едет через список
-  tipTimer = setTimeout(() => {
-    tipEl.replaceChildren(...visible(nodes));
-    tipEl.hidden = false;
-    placeTip(anchor);
-    const slot = nodes.find(n => n.classList?.contains("essence"));
-    const relayout = apply => { apply(); if (!tipEl.hidden) placeTip(anchor); };
-    // уже просили (у этой новости в этот визит) — подставляем сразу, иначе ждём, что мышь задержится
-    if (slot && essences.has(slot.item.url)) fillEssence(slot, relayout);
-    else if (slot) essenceTimer = setTimeout(() => { if (!tipEl.hidden && tipEl.contains(slot)) fillEssence(slot, relayout); }, ESSENCE_HOVER_MS - 150);
-  }, 150);
-}
-function hideTip() { clearTimeout(tipTimer); clearTimeout(essenceTimer); tipEl.hidden = true; }
-// с заголовка на подсказку можно перейти мышью — тогда она остаётся, и из неё можно выделить и скопировать текст
-function leaveHead() {
-  clearTimeout(tipTimer);
-  clearTimeout(essenceTimer);
-  tipTimer = setTimeout(() => { if (!tipEl.matches(":hover")) tipEl.hidden = true; }, 200);
-}
-tipEl.addEventListener("mouseleave", () => { if (!String(getSelection()).trim() || !tipEl.contains(getSelection().anchorNode)) hideTip(); });
-// выделение в подсказке держит её открытой, пока не кликнули мимо
-document.addEventListener("mousedown", e => { if (!tipEl.hidden && !tipEl.contains(e.target)) hideTip(); });
-addEventListener("scroll", hideTip, { passive: true });
 // выделили часть заголовка мышью — это не клик по ссылке
 const selecting = el => { const sel = getSelection(); return !sel.isCollapsed && el.contains(sel.anchorNode); };
 
@@ -839,7 +802,6 @@ document.body.append(reportDlg);
 reportDlg.addEventListener("click", e => { if (e.target === reportDlg) reportDlg.close(); });  // клик мимо окна
 
 function openReport(item) {
-  hideTip();
   const trap = h("input", { class: "trap", name: "website", tabindex: "-1", autocomplete: "off", "aria-hidden": "true" });
   const status = h("p", { class: "status", hidden: true });
   const send = h("button", { class: "primary", type: "submit" }, t("send"));
@@ -992,9 +954,10 @@ function renderItem(item, src, { showSource = false, showVia = false } = {}) {
   const via = item.via || (showVia ? src.name : null);
   const slot = essenceSlot(item);
   const summary = [slot, ...summaryOf(item, src)].filter(Boolean);
+  if (slot) slot.lead = summary.find(n => n.classList?.contains("lead"));
   const li = h("li", { class: "item" + (state.read.has(item.url) ? " read" : ""), lang: v.lang });
 
-  const opened = () => { markRead(item.url); li.classList.add("read"); hideTip(); track(`click/${src.section}/${src.name}`); };
+  const opened = () => { markRead(item.url); li.classList.add("read"); track(`click/${src.section}/${src.name}`); };
   const reportable = REPORT_URL && v.translated;
   // жалоба на перевод — под текстом, у оригинала; справа кнопки «Читать на …» и ✕ (на телефоне втроём в ряд не влезали)
   const details = () => h("div", { class: "details" }, h("div", { class: "details-text" }, visible(summary),
@@ -1047,7 +1010,8 @@ function renderItem(item, src, { showSource = false, showVia = false } = {}) {
     // но не ниже кнопки «Наверх»: внизу экрана она закрыла бы ✕ (кнопка появляется при прокрутке, место держим всегда)
     const fab = getComputedStyle(toTop), fabTop = innerHeight - parseFloat(fab.bottom) - parseFloat(fab.height);
     const tapY = fabTop > 0 ? Math.min(e.clientY, fabTop - 12 - x.height / 2) : e.clientY;
-    let to = e.detail ? tapY - closeY
+    // мышью ✕ под курсор не тянем: страница прыгала бы при каждом клике — строка остаётся на месте
+    let to = e.detail && !HOVER ? tapY - closeY
       : from - Math.max(0, Math.min(from + full.height - innerHeight, from - stickyHeight - 8));
     to = Math.max(to, stickyHeight);  // но верх новости не уходит за верх экрана (под липкую шапку)
     startDetails(li, 1, t0);
@@ -1057,14 +1021,13 @@ function renderItem(item, src, { showSource = false, showVia = false } = {}) {
   }
   const onclick = e => {
     if (selecting(head)) { e.preventDefault(); return; }
-    // без мыши наводить нечем: касание раскрывает и сворачивает подводку, статья открывается кнопкой в ней.
-    // Плашка раскрывается и без подводки (тогда в ней только кнопки): тап везде делает одно и то же
-    if (!HOVER) {
-      e.preventDefault();
-      toggle(e);
-      return;
-    }
-    opened();
+    // Cmd/Ctrl/Shift-клик — как у обычной ссылки: статья в новой вкладке, плашка не раскрывается
+    if (e.metaKey || e.ctrlKey || e.shiftKey) { opened(); return; }
+    // нажатие раскрывает и сворачивает плашку (суть, подводка, кнопки), статья открывается кнопкой в ней — и на телефоне,
+    // и на компьютере (подсказка при наведении мелькала, пока мышь ехала через список). Плашка раскрывается и без
+    // подводки (тогда в ней только кнопки): нажатие везде делает одно и то же
+    e.preventDefault();
+    toggle(e);
   };
 
   const head = h("a", { class: "head" + (fresh ? " fresh" : ""), href: item.url, draggable: "false", target: "_blank", rel: "noopener", onclick,
@@ -1074,17 +1037,13 @@ function renderItem(item, src, { showSource = false, showVia = false } = {}) {
     via ? h("span", { class: "via" }, "— " + via) : null,
     item.traffic ? h("span", { class: "traffic" }, `· ${item.traffic} ${t("searches")}`) : null,
   );
-  if (HOVER && summary.length) {
-    head.addEventListener("mouseenter", () => showTip(head, summary));
-    head.addEventListener("mouseleave", leaveHead);
-  }
 
   li.append(h("div", { class: "row" },
     h("span", { class: "time", "data-time": item.date || "", title: item.date ? new Date(item.date).toLocaleString(locale()) : "" }, shortTime(item.date)),
     head,
     reportable ? h("button", { class: "report-flag", type: "button", title: t("report"), "aria-label": t("report"), onclick: () => openReport(item) }, "⚑") : null,
   ));
-  if (!HOVER && state.open === item.url) {
+  if (state.open === item.url) {
     const box = details();
     li.append(box);
     showOpen(li, box);
@@ -1449,7 +1408,6 @@ function renderInfo() {
 }
 
 function render() {
-  hideTip();
   for (const [id, key] of [["lang", "lang"], ["view", "view"], ["script", "script"]]) {
     for (const b of document.querySelectorAll(`#${id} button`)) b.setAttribute("aria-pressed", String(b.dataset.v === state[key]));
   }
