@@ -1,9 +1,10 @@
 """Vestomat Daily — сводка за сутки в Telegram-канал @vestomat_daily (https://t.me/vestomat_daily).
 
 Раз в день, первой сборкой после AT часов по Белграду (и не позже UNTIL), stories_live.run зовёт post(): главные темы
-за сутки (с AT вчера) — по числу изданий, которые о них писали. Под каждой темой — что произошло за день и одна строка о
-том, как её подали стороны (критичные к SNS, крупные порталы, государственные, близкие к SNS); это пишет Opus одним
-запросом. Ссылки — на сами новости: по одной от каждой писавшей стороны, самая типичная для темы.
+за сутки (с AT вчера). Кандидаты — CANDIDATES тем, о которых писали больше всего изданий (не меньше MIN_OUTLETS и не
+меньше MIN_SIDES основных сторон из четырёх); из них Opus одним запросом выбирает до TOP самых важных и ставит по
+важности, а не по шуму. Под каждой темой — что произошло за день и одна строка о том, как её подали стороны (критичные
+к SNS, крупные порталы, государственные, близкие к SNS). Ссылки — на сами новости: по одной от каждой писавшей стороны, самая типичная для темы.
 
 Отправляет worker/ (POST /daily, тот же бот, что шлёт жалобы): в канал DAILY_CHAT_ID, а пока он не задан — черновиком
 в чат жалоб. Одну сводку за день worker отправляет один раз, даже если сборка пришлёт её снова (кэш сюжетов пропал).
@@ -17,7 +18,6 @@ import html
 import json
 import sys
 import traceback
-from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
@@ -26,8 +26,10 @@ import stories
 import translate
 
 AT, UNTIL = 20, 23  # часы по Белграду: с AT:00 до UNTIL:59; сборки позже нет — день без сводки
-TOP = 8  # тем в сводке, не больше
-MIN_OUTLETS = 3  # тема, о которой за сутки писали меньше изданий, — не в сводку
+TOP = 5  # тем в сводке, не больше; в тихий день кандидатов может быть меньше
+CANDIDATES = 12  # из стольких самых обсуждаемых тем модель выбирает TOP: с запасом для важных, но тихих тем
+MIN_OUTLETS = 10  # тема, о которой за сутки писали меньше изданий, — не в сводку
+MIN_SIDES = 3  # и о которой писали меньше основных сторон (SIDES): тема одной стороны — её повестка, а не новость дня
 SHOWN = 6  # сколько новостей каждой стороны видит модель: самые типичные для темы, по одной на издание
 KEEP_DAYS = 7
 LIMIT = 3900  # Telegram берёт до 4096 знаков текста (без разметки); лишние темы с конца — прочь
@@ -41,8 +43,9 @@ MONTHS = ["января", "февраля", "марта", "апреля", "ма�
 DAYS = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
 
 PROMPT = """Ты пишешь вечернюю сводку новостей Сербии за день для Telegram-канала на русском языке. Читатели — русскоязычные люди, живущие в Сербии или следящие за ней.
-Вход — JSON: themes — главные темы дня, id вида T…: name — название темы; sides — заголовки и пересказы новостей темы за сутки по сторонам: independent — издания, критичные к SNS (правящей партии), mainstream — крупные порталы, state — государственные СМИ, progov — издания, близкие к SNS. Стороны, которой нет, о теме за день не писали.
-Для каждой темы верни:
+Вход — JSON: themes — самые обсуждаемые темы дня, id вида T…: name — название темы; outlets — сколько изданий писали о ней за сутки; sides — заголовки и пересказы новостей темы за сутки по сторонам: independent — издания, критичные к SNS (правящей партии), mainstream — крупные порталы, state — государственные СМИ, progov — издания, близкие к SNS. Стороны, которой нет, о теме за день не писали.
+Выбери до 5 самых важных тем и верни их в порядке важности, самую важную первой. Важность — не число публикаций, а значение для страны и для жизни людей в Сербии: власть и политика, суды и громкие дела, законы и решения, экономика и цены, безопасность, протесты, крупные происшествия и их последствия. Число изданий — подсказка, а не правило. Криминальная хроника, частная трагедия или скандал без общественного значения — только если важнее за день ничего нет. Если две темы — про одну и ту же ситуацию, бери одну.
+Для каждой выбранной темы верни:
 - what — что произошло за день, одно-два коротких предложения, до 220 знаков. Факты, которые подтверждают разные стороны, без оценок. Если тема длится не первый день — что нового сегодня. Имена — как принято по-русски («Вучич», «Скупщина»), сербские названия изданий и партий — латиницей.
 - framing — одна строка до 200 знаков: чем различается подача сторон — на чём делают акцент, кого цитируют, как называют событие. Называй стороны так: «критичные к SNS», «крупные порталы», «государственные», «близкие к SNS». Пиши только то, что видно по заголовкам. Если все подают одинаково — так и скажи коротко («подают одинаково»); если одна из основных сторон молчит, а другие пишут много — это тоже подача, скажи об этом.
 Без кавычек вокруг ответа, без хэштегов и эмодзи."""
@@ -62,7 +65,7 @@ SCHEMA = {
     "required": ["themes"],
     "additionalProperties": False,
 }
-# пишет Opus: сводка — лицо канала, и она одна в день (вход ~15 тыс. токенов, ≈10 центов). Цена — как в stories_gold.py
+# пишет Opus: сводка — лицо канала, и она одна в день (вход ~20 тыс. токенов, ≈12 центов). Цена — как в stories_gold.py
 MODEL = "claude-opus-5-5"
 PRICE = (4.0, 20.0)  # вход / выход за 1M токенов, $
 EFFORT = "medium"
@@ -82,18 +85,19 @@ def window(now: str, tz) -> tuple[str, str] | None:
 
 
 def pick(state: dict, since: str, now: str) -> list[tuple[str, list[str]]]:
-    """Темы сводки: (сюжет, его новости за сутки) — о Сербии (не foreign), не регулярные сводки, не меньше
-    MIN_OUTLETS изданий за сутки; по числу изданий, потом новостей. Не больше TOP."""
+    """Кандидаты в сводку: (сюжет, его новости за сутки) — о Сербии (не foreign), не регулярные сводки, не меньше
+    MIN_OUTLETS изданий и MIN_SIDES основных сторон за сутки; по числу изданий, потом новостей. Не больше CANDIDATES."""
     out = []
     for sid, story in state["stories"].items():
         if state.get("serbia", {}).get(sid) == "foreign" or state.get("routine", {}).get(sid):
             continue
         urls = [u for u in story["urls"] if since <= state["items"][u]["seen"] <= now]
         outlets = {state["items"][u]["source"] for u in urls}
-        if len(outlets) >= MIN_OUTLETS and any(state["items"][u]["section"] in SIDES for u in urls):
+        sides = {state["items"][u]["section"] for u in urls} & set(SIDES)
+        if len(outlets) >= MIN_OUTLETS and len(sides) >= MIN_SIDES:
             out.append((len(outlets), len(urls), sid, urls))
     out.sort(key=lambda x: x[:2], reverse=True)
-    return [(sid, urls) for _, _, sid, urls in out[:TOP]]
+    return [(sid, urls) for _, _, sid, urls in out[:CANDIDATES]]
 
 
 def central(state: dict, vectors: dict, urls: list[str]) -> list[str]:
@@ -130,21 +134,31 @@ def request_of(state: dict, vectors: dict, themes: list[tuple[str, list[str]]]) 
         return f'{it["source"]}: {it["title"]}' + (f' — {it["what"]}' if it.get("what") else "")
 
     return json.dumps({"themes": [
-        {"id": f"T{k}", "name": name_of(state, sid, urls),
+        {"id": f"T{k}", "name": name_of(state, sid, urls), "outlets": len({state["items"][u]["source"] for u in urls}),
          "sides": {side: [line(u) for u in news[:SHOWN]] for side, news in by_side(state, vectors, urls).items()}}
         for k, (sid, urls) in enumerate(themes)]}, ensure_ascii=False)
 
 
-def compose(state: dict, vectors: dict, themes: list[tuple[str, list[str]]], answer: dict, day: str) -> str:
-    """Текст поста (HTML Telegram). Тема без ответа модели — только название и ссылки."""
+def chosen(themes: list[tuple[str, list[str]]], answer: dict) -> list[tuple[tuple[str, list[str]], dict]]:
+    """Темы, которые выбрала модель, в её порядке (не больше TOP, без повторов и чужих id), с её текстами. Модель не
+    выбрала ни одной — первые TOP кандидатов, без текстов."""
+    out, seen = [], set()
+    for t in answer.get("themes", []):
+        n = t.get("id", "")[1:]
+        if n.isdigit() and int(n) < len(themes) and n not in seen:
+            seen.add(n)
+            out.append((themes[int(n)], t))
+    return out[:TOP] or [(theme, {}) for theme in themes[:TOP]]
+
+
+def compose(state: dict, vectors: dict, picked: list[tuple[tuple[str, list[str]], dict]], day: str) -> str:
+    """Текст поста (HTML Telegram). Тема без текста модели — только название и ссылки."""
     e = html.escape
-    said = {t["id"]: t for t in answer.get("themes", [])}
     d = datetime.fromisoformat(day)
     head = f"<b>Сербия за день · {DAYS[d.weekday()]}, {d.day} {MONTHS[d.month - 1]}</b>"
     foot = f'Все темы дня — <a href="{SITE}">vestomat.rs</a>'
     blocks = []
-    for k, (sid, urls) in enumerate(themes):
-        t = said.get(f"T{k}", {})
+    for k, ((sid, urls), t) in enumerate(picked):
         sides = by_side(state, vectors, urls)
         links = " · ".join(f'{MARKS[s]} <a href="{e(sides[s][0], quote=True)}">{e(state["items"][sides[s][0]]["source"])}</a>'
                            for s in SIDES if s in sides)
@@ -198,9 +212,10 @@ def _post(state: dict, vectors: dict, now: str, tz, spend) -> None:
         answer, usage = stories.ask_model(client, PROMPT, request_of(state, vectors, themes), SCHEMA, EFFORT,
                                           MODEL, PRICE)
         spend("сводка", usage)
-        today["text"] = compose(state, vectors, themes, answer, day)
-        today["themes"] = [sid for sid, _ in themes]
-        print(f"Сводка дня: {len(themes)} тем, ≈ ${usage['usd']:.3f}", file=sys.stderr)
+        picked = chosen(themes, answer)
+        today["text"] = compose(state, vectors, picked, day)
+        today["themes"] = [sid for (sid, _), _ in picked]
+        print(f"Сводка дня: {len(picked)} тем из {len(themes)} кандидатов, ≈ ${usage['usd']:.3f}", file=sys.stderr)
     reply = translate.reports_api({"day": day, "text": today["text"]}, "daily")
     if reply and reply.get("ok"):
         today["sent"] = now
@@ -226,5 +241,5 @@ if __name__ == "__main__":
     print(request_of(state, vectors, themes))
     fake = {"themes": [{"id": f"T{k}", "what": "(что произошло — напишет модель)", "framing": "(как подали — напишет модель)"}
                        for k in range(len(themes))]}
-    text = compose(state, vectors, themes, fake, local.date().isoformat())
+    text = compose(state, vectors, chosen(themes, fake), local.date().isoformat())
     print(f"\n{text}\n\n{visible_len(text)} знаков", file=sys.stderr)
