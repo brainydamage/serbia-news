@@ -48,6 +48,11 @@ MARKS = {"independent": "🔵", "mainstream": "⚪", "state": "🟣", "progov": 
 SIDE_NAMES = {"independent": "критичные к SNS", "mainstream": "крупные порталы", "state": "государственные",
               "progov": "близкие к SNS"}
 SITE = "https://vestomat.rs/ru/#teme"
+# «Ещё сегодня»: ссылка — на новость самого спокойного по тону издания из писавших (агентство, газеты, общественное ТВ),
+# нет таких — от первой писавшей стороны NEUTRAL. Не Pink и не Telegraf с «новым ударом по империи»
+CALM = ["Beta", "Politika", "RTS", "Dnevnik", "Euronews Srbija", "N1", "Blic", "Tanjug"]
+NEUTRAL = ["mainstream", "state", "independent", "progov"]
+NBSP = "\u00a0"  # кружок не отрывается от названия стороны при переносе строки
 MORE = 3  # «Ещё сегодня»: столько самых обсуждаемых кандидатов, не вошедших в топ
 FOLD = True  # таблица подачи свёрнута под «Как подали» (<details>): пост короче; False — таблица видна сразу
 MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября",
@@ -225,10 +230,10 @@ def compose_rich(state: dict, vectors: dict, picked: list, more: list[tuple[str,
         for s in SIDES:
             if s in sides:
                 u = sides[s][0]
-                cell = f'{MARKS[s]} <a href="{href(u)}">{esc(state["items"][u]["source"])}</a>'
+                cell = f'{MARKS[s]}{NBSP}<a href="{href(u)}">{esc(state["items"][u]["source"]).replace(" ", NBSP)}</a>'
                 rows.append(f"<tr><td>{cell}</td><td>{esc(said.get(s, '—'))}</td></tr>")
             else:
-                rows.append(f"<tr><td>{MARKS[s]} {SIDE_NAMES[s]}</td><td><i>не писали</i></td></tr>")
+                rows.append(f"<tr><td>{MARKS[s]}{NBSP}{SIDE_NAMES[s]}</td><td><i>не писали</i></td></tr>")
         table = f"<table bordered striped compact>{''.join(rows)}</table>"
         n = len({state["items"][u]["source"] for u in urls})
         outlets = f"{n} {plural(n, 'издание', 'издания', 'изданий')}"
@@ -237,14 +242,20 @@ def compose_rich(state: dict, vectors: dict, picked: list, more: list[tuple[str,
             out.append(f"<details><summary>Как подали · {marks} · {outlets}</summary>{table}</details>")
         else:
             out.append(f"{table}<p><i>{outlets}</i></p>")
-    if more:  # ссылка — на самую типичную новость темы
+    if more:  # ссылка — на самую типичную новость самого спокойного издания (CALM, NEUTRAL)
         def item(sid: str, urls: list[str]) -> str:
-            u = central(state, vectors, urls)[0]
+            order = central(state, vectors, urls)
+            by_outlet = {}
+            for x in order:
+                by_outlet.setdefault(state["items"][x]["source"], x)
+            sides = by_side(state, vectors, urls)
+            u = (next((by_outlet[o] for o in CALM if o in by_outlet), None)
+                 or next((sides[s][0] for s in NEUTRAL if s in sides), None) or order[0])
             n = len({state["items"][x]["source"] for x in urls})
             return (f'<li><a href="{href(u)}">{esc(name_of(state, sid, urls))}</a> · '
                     f"<i>{n} {plural(n, 'издание', 'издания', 'изданий')}</i></li>")
         out.append("<hr/><h4>Ещё сегодня</h4><ul>" + "".join(item(sid, urls) for sid, urls in more) + "</ul>")
-    out.append("<hr/><p>" + " · ".join(f"{MARKS[s]} {SIDE_NAMES[s]}" for s in SIDES)
+    out.append("<hr/><p>" + " · ".join(f"{MARKS[s]}{NBSP}{SIDE_NAMES[s].replace(' ', NBSP)}" for s in SIDES)
                + f' · <a href="{SITE}">vestomat.rs</a></p>')
     return "".join(out)
 
