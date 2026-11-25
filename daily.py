@@ -16,14 +16,18 @@
 Готовый текст лежит в состоянии сюжетов (state["daily"]): не дошёл до Telegram — следующая сборка шлёт его же, не
 спрашивая модель заново.
 
+Сводку за любой день сейчас — запуск сборки руками с днём: gh workflow run build -f daily_day=2026-11-25
+(или «Run workflow» на GitHub, поле daily_day). Worker не пошлёт второй раз то, что уже отправлял за этот день.
+
     .venv/bin/python daily.py [stories.json] [archive.json]   — локально: какие темы попали бы в сводку сейчас и что
                                                                  увидела бы модель, без запроса к ней и без отправки
 """
 import html
 import json
+import os
 import sys
 import traceback
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 import numpy as np
 
@@ -95,13 +99,20 @@ def _when(it: dict) -> str:
     return it.get("published", it["seen"])
 
 
-def window(now: str, tz) -> tuple[str, str] | None:
-    """(день сводки, начало суток в UTC), если сейчас время сводки (AT–UNTIL по Белграду); иначе None."""
+def window(now: str, tz) -> tuple[str, str, str] | None:
+    """(день сводки, начало и конец суток в UTC), если сейчас время сводки (AT–UNTIL по Белграду); иначе None.
+    Ручной запуск сборки с днём (DAILY_DAY=ГГГГ-ММ-ДД, поле daily_day в «Run workflow») — сводка за тот день в любое
+    время: с AT накануне до AT того дня (или до сейчас, если сегодня AT ещё не было)."""
+    if forced := os.environ.get("DAILY_DAY", "").strip():
+        end = datetime.combine(date.fromisoformat(forced), time(AT), tz)
+        end = min(end, datetime.fromisoformat(now))
+        start = datetime.combine(date.fromisoformat(forced) - timedelta(days=1), time(AT), tz)
+        return forced, start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()
     local = datetime.fromisoformat(now).astimezone(tz)
     if not AT <= local.hour <= UNTIL:
         return None
     start = local.replace(hour=AT, minute=0, second=0, microsecond=0) - timedelta(days=1)
-    return local.date().isoformat(), start.astimezone(timezone.utc).isoformat()
+    return local.date().isoformat(), start.astimezone(timezone.utc).isoformat(), now
 
 
 def pick(state: dict, since: str, now: str) -> list[tuple[str, list[str]]]:
@@ -267,7 +278,7 @@ def post(state: dict, vectors: dict, now: str, tz, spend) -> None:
 def _post(state: dict, vectors: dict, now: str, tz, spend) -> None:
     if not (when := window(now, tz)):
         return
-    day, since = when
+    day, since, until = when
     done = state.setdefault("daily", {})
     for old in [d for d in done if d < (datetime.fromisoformat(day) - timedelta(days=KEEP_DAYS)).date().isoformat()]:
         del done[old]
@@ -275,7 +286,7 @@ def _post(state: dict, vectors: dict, now: str, tz, spend) -> None:
     if today.get("sent"):
         return
     if "text" not in today:
-        themes = pick(state, since, now)
+        themes = pick(state, since, until)
         if not themes:
             print("Сводка дня: тем за сутки нет", file=sys.stderr)
             return

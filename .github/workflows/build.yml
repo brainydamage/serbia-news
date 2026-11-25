@@ -4,6 +4,12 @@ name: build
 # (schedule) у этого репозитория почти не срабатывало, а когда срабатывало — давало лишнюю сборку
 on:
   workflow_dispatch:
+    inputs:
+      # сводка Vestomat Daily за этот день — сейчас, а не вечером (daily.py): ГГГГ-ММ-ДД, пусто — как обычно
+      daily_day:
+        description: "Vestomat Daily за день (ГГГГ-ММ-ДД)"
+        required: false
+        default: ""
   push:
     branches: [main]
 
@@ -88,6 +94,7 @@ jobs:
           REPORTS_URL: ${{ vars.REPORTS_URL }}
           REPORTS_TOKEN: ${{ secrets.REPORTS_TOKEN }}
           FASTEMBED_CACHE_PATH: cache/fastembed
+          DAILY_DAY: ${{ inputs.daily_day }}
 
       - name: Save data
         uses: actions/cache/save@v4
