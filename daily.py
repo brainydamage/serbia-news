@@ -276,7 +276,10 @@ def compose_rich(state: dict, vectors: dict, picked: list, more: list[tuple[str,
             n = len({state["items"][x]["source"] for x in urls})
             return (f'<li><a href="{href(u)}">{esc(name_of(state, sid, urls))}</a> '
                     f"<i>({n} {plural(n, 'издание', 'издания', 'изданий')})</i></li>")
-        out.append("<hr/><h4>Ещё сегодня</h4><ul>" + "".join(item(sid, urls) for sid, urls in more) + "</ul>")
+        # свёрнуто, как таблицы подачи: хвост поста — не главное, но кому интересно — раскроет
+        n = len(more)
+        out.append(f"<hr/><details><summary>Ещё {n} {plural(n, 'тема', 'темы', 'тем')} дня</summary><ul>"
+                   + "".join(item(sid, urls) for sid, urls in more) + "</ul></details>")
     # легенда — без точек-разделителей: кружки и так отделяют стороны; сайт — своей строкой, не прилипает к легенде
     out.append("<hr/><p>" + EMSP.join(f"{MARKS[s]}{NBSP}{SIDE_NAMES[s].replace(' ', NBSP)}" for s in SIDES) + "</p>")
     out.append(f'<p><a href="{SITE}">vestomat.rs</a></p>')
