@@ -3,7 +3,7 @@
 Раз в день, первой сборкой после AT часов по Белграду (и не позже UNTIL), stories_live.run зовёт post(): главные темы
 за сутки (с AT вчера). Кандидаты — CANDIDATES тем, о которых писали больше всего изданий (не меньше MIN_OUTLETS и не
 меньше MIN_SIDES основных сторон из четырёх); из них Opus одним запросом выбирает до TOP самых важных и ставит по
-важности, а не по шуму. Он же пишет «Коротко» — день одной фразой, под каждой темой — что произошло за день, и для
+важности, а не по шуму. Он же пишет под каждой темой, что произошло за день, и для
 каждой стороны (критичные к SNS, крупные порталы, государственные, близкие к SNS) выбирает самый показательный
 заголовок. Подача — таблицей: сторона и издание — и этот заголовок со ссылкой на статью; молчавшая сторона — «не писали».
 Толкований подачи от модели в посте нет: читатель сравнивает заголовки сам.
@@ -58,7 +58,7 @@ NEUTRAL = ["mainstream", "state", "independent", "progov"]
 NBSP = "\u00a0"  # кружок не отрывается от издания, название стороны не рвётся при переносе строки
 MORE = 3  # «Ещё сегодня»: столько самых обсуждаемых кандидатов, не вошедших в топ
 VERSION = 2  # вид ответа модели: 2 — в таблице заголовки, которые выбрала модель (с 26.11; 1 — её пометки о подаче)
-FOLD = True  # таблица подачи свёрнута под «Как подали» (<details>): пост короче; False — таблица видна сразу
+FOLD = True  # таблица подачи свёрнута под строкой счёта по сторонам (<details>): пост короче; False — таблица видна сразу
 MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября",
           "декабря"]
 DAYS = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
@@ -69,12 +69,10 @@ PROMPT = """Ты пишешь вечернюю сводку новостей С�
 Для каждой выбранной темы верни:
 - what — что произошло за день, одно-два коротких предложения, до 220 знаков. Факты, которые подтверждают разные стороны, без оценок. Если тема длится не первый день — что нового сегодня. Имена — как принято по-русски («Вучич», «Скупщина»), сербские названия изданий и партий — латиницей.
 - sides — для каждой стороны, которая писала о теме: side — сторона (independent, mainstream, state, progov), pick — номер заголовка из её списка (число в квадратных скобках), который лучше всего показывает, как эта сторона подала тему: что выносит вперёд, кого цитирует, как называет событие. Если у стороны все заголовки одинаково сухие — самый информативный. Не бери заголовки-видео без смысла, «онлайн»-ленты и заголовки, по которым непонятно, о чём речь.
-Ещё верни summary — день одной фразой до 160 знаков: две-три главные темы через запятую, без вводных слов («Задержан главред Informer, у Скупщины появились комитеты, новые аресты по делу «Алта банки»»).
 Без кавычек вокруг ответа, без хэштегов и эмодзи."""
 SCHEMA = {
     "type": "object",
     "properties": {
-        "summary": {"type": "string"},
         "themes": {
             "type": "array",
             "items": {
@@ -97,7 +95,7 @@ SCHEMA = {
             },
         },
     },
-    "required": ["summary", "themes"],
+    "required": ["themes"],
     "additionalProperties": False,
 }
 # пишет Opus: сводка — лицо канала, и она одна в день (вход ~20 тыс. токенов, ≈13 центов). Цена — как в stories_gold.py
@@ -235,14 +233,21 @@ def headlines(state: dict, sides: dict[str, list[str]], t: dict) -> dict[str, st
     return {s: picks[s] if picks.get(s) in state["items"] else news[0] for s, news in sides.items()}
 
 
-def compose_rich(state: dict, vectors: dict, picked: list, more: list[tuple[str, list[str]]], summary: str,
-                 day: str) -> str:
-    """Rich HTML поста (sendRichMessage): заголовок, «Коротко», темы с таблицей подачи, «Ещё N темы дня», ссылка на сайт."""
+def tally(state: dict, sides: dict[str, list[str]], urls: list[str]) -> str:
+    """Подпись таблицы — сама новость: сколько изданий каждой стороны писали, «🔴 0» — сторона промолчала.
+    Издания вне четырёх сторон (регионы, иностранные) — «+ N других»."""
+    gap = f"{NBSP}{NBSP} "  # шире обычного пробела: несколько обычных Telegram схлопывает в один
+    out = gap.join(f"{MARKS[s]}{NBSP}{len(sides.get(s, []))}" for s in SIDES)
+    rest = len({state["items"][u]["source"] for u in urls}) - sum(len(v) for v in sides.values())
+    return out + (f"{gap}+{rest}{NBSP}{plural(rest, 'другое', 'других', 'других')}" if rest > 0 else "")
+
+
+def compose_rich(state: dict, vectors: dict, picked: list, more: list[tuple[str, list[str]]], day: str) -> str:
+    """Rich HTML поста (sendRichMessage): заголовок, темы с таблицей подачи, «Ещё N темы дня», ссылка на сайт."""
     # ссылка на сайт — наверху, под датой: внизу она терялась
     # заголовок — дата: «Сербия за день» уже в названии канала, а в ленте постов различаются только днём
     out = [f"<h1>{date_of(day).capitalize()}</h1>", f'<p><a href="{SITE}">Все темы дня на vestomat.rs</a></p>']
-    if summary.strip():
-        out.append(f"<blockquote><b>Коротко:</b> {esc(summary.strip())}</blockquote>")
+    # «Коротко» (день одной фразой) убран 26.11: повторял заголовки тем, что идут сразу под ним
     for k, ((sid, urls), t) in enumerate(picked):
         sides = by_side(state, vectors, urls)
         shown = headlines(state, sides, t)
@@ -260,12 +265,10 @@ def compose_rich(state: dict, vectors: dict, picked: list, more: list[tuple[str,
             else:
                 rows.append(f"<tr><td>{MARKS[s]}{NBSP}<i>{side_name(s)}</i></td><td><i>не писали</i></td></tr>")
         table = f"<table bordered striped compact>{''.join(rows)}</table>"
-        n = len({state["items"][u]["source"] for u in urls})
-        outlets = f"{n} {plural(n, 'издание', 'издания', 'изданий')}"
         if FOLD:
-            out.append(f"<details><summary>Как подали {outlets}</summary>{table}</details>")  # без кружков: пестрит
+            out.append(f"<details><summary>{tally(state, sides, urls)}</summary>{table}</details>")
         else:
-            out.append(f"{table}<p><i>{outlets}</i></p>")
+            out.append(f"{table}<p>{tally(state, sides, urls)}</p>")
     if more:  # ссылка — CALM: самая типичная новость спокойных изданий, издания не повторяются; потом NEUTRAL
         used = set()
 
@@ -363,7 +366,7 @@ def _post(state: dict, vectors: dict, now: str, tz, spend) -> None:
     themes = [th for th in themes if th[1]]
     more = [th for th in themes if th[0] not in {sid for (sid, _), _ in picked}][:MORE]
     today["text"] = compose(state, vectors, picked, day)
-    today["rich"] = compose_rich(state, vectors, picked, more, today["answer"].get("summary", ""), day)
+    today["rich"] = compose_rich(state, vectors, picked, more, day)
     today["themes"] = [sid for (sid, _), _ in picked]
     # ручной запуск — черновиком в чат жалоб, если не отмечено «в канал» (DAILY_TO=channel): тогда worker правит
     # уже опубликованный пост, а не шлёт второй
@@ -394,11 +397,10 @@ if __name__ == "__main__":
     themes = pick(state, start.astimezone(timezone.utc).isoformat(), now)
     vectors = {}  # без векторов: «типичные» — в порядке темы
     print(request_of(state, vectors, themes))
-    fake = {"summary": "(день одной фразой — напишет модель)",
-            "themes": [{"id": f"T{k}", "what": "(что произошло — напишет модель)",
+    fake = {"themes": [{"id": f"T{k}", "what": "(что произошло — напишет модель)",
                         "sides": [{"side": s, "pick": 0} for s in SIDES[:3]]} for k in range(len(themes))]}
     picked = chosen(themes, fake)
     more = [th for th in themes if th[0] not in {sid for (sid, _), _ in picked}][:MORE]
     text = compose(state, vectors, picked, local.date().isoformat())
-    rich = compose_rich(state, vectors, picked, more, fake["summary"], local.date().isoformat())
+    rich = compose_rich(state, vectors, picked, more, local.date().isoformat())
     print(f"\n{text}\n\n{visible_len(text)} знаков\n\n{rich}\n\n{visible_len(rich)} знаков rich", file=sys.stderr)
