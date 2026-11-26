@@ -23,6 +23,7 @@ import hashlib
 import html
 import json
 import os
+import re
 import sys
 import time
 import traceback
@@ -1244,8 +1245,8 @@ EPISODE_SCHEMA = {
 SR_COLORS = {"independent": "#1d4ed8", "investigations": "#8ec7c3", "progov": "#dc2626", "state": "#c084fc",
              "mainstream": "#71827a", "economy": "#9e8f55", "foreign-sr": "#e6b690", "foreign": "#ef7f16",
              "reddit": "#8a423a", "trends": "#3087b3", "regional": "#38d64e"}  # как --c-* в template.html
-SR_STYLE = """:root{--bg:#fff;--text:#333;--strong:#000;--muted:#8a8a8a;--faint:#a8a8a8;--soft:#ececec;--hover:#9b9b9b;--tip-bg:#282c35;--tip-text:#ddd;COLORS}
-@media (prefers-color-scheme:dark){:root{--bg:#282c35;--text:#ddd;--strong:#fff;--muted:#9a9ca3;--faint:#7c7f87;--soft:#383d49;--tip-bg:#3a404d;--tip-text:#eee}}
+SR_STYLE = """:root{--bg:#fff;--text:#333;--strong:#000;--muted:#8a8a8a;--faint:#a8a8a8;--soft:#ececec;--read:#afafaf;--hover:#9b9b9b;--tip-bg:#282c35;--tip-text:#ddd;COLORS}
+@media (prefers-color-scheme:dark){:root{--bg:#282c35;--text:#ddd;--strong:#fff;--muted:#9a9ca3;--faint:#7c7f87;--soft:#383d49;--read:#737373;--tip-bg:#3a404d;--tip-text:#eee}}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 /* как на главной: в приложении на iPhone размыта строка состояния и полоса ~28pt под ней — опускаем страницу ниже */
@@ -1350,7 +1351,82 @@ h1{margin:14px 0 4px;font-size:32px;font-weight:900;color:var(--strong);line-hei
 .to-top{position:fixed;right:16px;bottom:calc(16px + env(safe-area-inset-bottom));z-index:6;width:44px;height:44px;border:0;border-radius:50%;cursor:pointer;background:var(--tip-bg);color:var(--tip-text);font:inherit;font-size:20px;font-weight:700;box-shadow:0 4px 16px rgb(0 0 0 / .25)}}
 @media (max-width:640px){.chip{padding:7px 14px 7px 11px;font-size:15px}.chips{gap:8px}}
 @media (max-width:600px){.wrap{padding:14px 16px 32px}h1{font-size:26px}.story h2{font-size:19px;gap:8px}.indent{margin-left:0}.head{font-size:15px}}
+/* плашка (стили — из template.html, см. plate_parts): тёмный фон на 20px за края колонки, текст — под заголовком
+   (время 44 + зазор 10); подводка в плашке — не серая мелкая .lead страницы */
+.wrap .item{--edge:20px}.details{margin-left:54px}.details .lead{color:inherit;font-size:inherit}
+@media (max-width:600px){.wrap .item{--edge:16px}}
 """.replace("COLORS", "".join(f"--c-{c}:{v};" for c, v in SR_COLORS.items()))
+TEMPLATE_FILE = ROOT / "template.html"
+ARTICLES_FILE = ROOT / "cache" / "articles.json"  # essences.py: у каких новостей worker знает текст статьи ("tx")
+
+
+def plate_parts() -> tuple[str, str]:
+    """Плашка новости — тот же код и те же стили, что на главной: куски template.html между метками /*plate*/ и
+    /*plate-css*/. Так страница темы не расходится с главной, когда плашку меняют."""
+    text = TEMPLATE_FILE.read_text("utf-8")
+    js = re.findall(r"/\*plate\*/(.*?)/\*/plate\*/", text, re.S)
+    css = re.findall(r"/\*plate-css\*/(.*?)/\*/plate-css\*/", text, re.S)
+    if len(js) != 3 or len(css) != 1:
+        raise ValueError(f"template.html: меток плашки {len(js)} js и {len(css)} css, ждали 3 и 1")
+    return css[0], "".join(js)
+
+
+# Плашка на страницах тем: строки уже в HTML, скрипт навешивает на них ту же плашку, что на главной (wirePlate).
+# Данные новостей (оригинал, подводка, перевод, tx) — в PLATE, только для новостей этой страницы. Вокруг кода из шаблона —
+# то, что на главной берётся из остального скрипта: состояние, статистика, высота липкой шапки
+PLATE_SCRIPT = """<script>
+(() => {
+const PLATE = /*PLATE*/;
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+};
+// алфавит плашки — как в оригинале: латиницу или кириллицу ставит applyScript шапки, как и всему тексту страницы
+const state = { lang: PLATE.lang, script: "orig", leads: store.get("leads", "ai"), dev: store.get("dev", false),
+  read: new Set(store.get("read", [])), open: null };
+function markRead(url) {
+  state.read.add(url);
+  store.set("read", [...state.read].slice(-3000));
+}
+const HOVER = matchMedia("(hover: hover)").matches, FRESH_MS = 3 * 3600e3;
+let now = Date.now();
+function track(path, title) {
+  window.goatcounter?.count?.({ path, title, event: true });
+}
+const newsPath = (kind, item) => `${kind}/${item.url.replace(/^https?:\\/\\/(www\\.)?/, "").replace(/[?#].*$/, "")}`;
+const trackNews = (kind, item) => track(newsPath(kind, item), item.ru?.title || item.title);
+const toTop = document.getElementById("to-top"), header = document.querySelector("header.site");
+let stickyHeight = 0;
+const measureSticky = () => {
+  const s = getComputedStyle(header);
+  stickyHeight = s.position === "sticky" ? parseFloat(s.top) + header.getBoundingClientRect().height : 0;
+};
+addEventListener("resize", measureSticky);
+measureSticky();
+/*CODE*/
+for (const li of document.querySelectorAll(".items li.item")) {
+  const head = li.querySelector("a.head"), url = head.getAttribute("href"), d = PLATE.items[url];
+  if (!d) continue;
+  const item = { url, title: d.title, summary: d.summary, lang: d.lang, ru: d.ru, tx: d.tx };
+  const src = { name: d.src, section: li.dataset.s, lang: d.lang };
+  if (state.read.has(url)) li.classList.add("read");
+  const flag = reportFlag(item, src);
+  if (flag) head.after(flag);
+  wirePlate(li, head, item, src, null);
+}
+// по-сербски латиницей или кириллицей: новый текст плашки переписываем тем же алфавитом, что и страницу
+if (PLATE.lang === "sr") {
+  let queued = false;
+  new MutationObserver(() => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; window.applyScript?.(); });
+  }).observe(document.body, { childList: true, subtree: true });  // и окно жалобы — оно в body
+}
+})();
+</script>
+<script data-goatcounter="https://vestomat.goatcounter.com/count" async src="https://gc.zgo.at/count.v5.js"
+        integrity="sha384-atnOLvQb9t+jTSipvd75X2yginT4PjVbqDdlJAmxMm+wYElFmeR6EmLP5bYeoRVQ" crossorigin="anonymous"></script>"""
 SR_HEAD = """<!doctype html><html lang="{lang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="robots" content="noindex,nofollow">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#282c35" media="(prefers-color-scheme: dark)">
@@ -1391,13 +1467,13 @@ function layoutEps() {
   const [one, few, many] = box.dataset.forms.split('|');
   const news = n => n + ' ' + (n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? few : many);
   box.querySelectorAll('section.ep').forEach(ep => {
-    const rows = [...ep.querySelectorAll('.row')];
+    const rows = [...ep.querySelectorAll('li[data-s]')];
     const ok = rows.filter(r => (!window.secOn || window.secOn.has(r.dataset.s)) && (!window.qHit || window.qHit(r)));
     const open = ep.dataset.open === '1' || !!window.qHit;
     rows.forEach(r => r.hidden = true);
     ok.forEach((r, i) => r.hidden = !open && i >= EP_FIRST);
     ep.querySelectorAll('.items').forEach(ul => {
-      const any = !!ul.querySelector('.row:not([hidden])'), h = ul.previousElementSibling;
+      const any = !!ul.querySelector('li[data-s]:not([hidden])'), h = ul.previousElementSibling;
       ul.hidden = !any;
       if (h && h.matches('h3.group')) h.hidden = !any || !open;
     });
@@ -1427,10 +1503,10 @@ if (chips.length) {
     on = next.size ? next : new Set(ids);
     const all = on.size === ids.length;
     chips.forEach(c => c.setAttribute('aria-pressed', c.dataset.s ? !all && on.has(c.dataset.s) : all));
-    document.querySelectorAll('.items .row[data-s]').forEach(r => r.hidden = !on.has(r.dataset.s));
+    document.querySelectorAll('.items li[data-s]').forEach(r => r.hidden = !on.has(r.dataset.s));
     // день без новостей выбранных разделов — без заголовка
     document.querySelectorAll('[data-view=time] .items').forEach(ul => {
-      const h = ul.previousElementSibling, empty = !ul.querySelector('.row:not([hidden])');
+      const h = ul.previousElementSibling, empty = !ul.querySelector('li[data-s]:not([hidden])');
       ul.hidden = empty;
       if (h && h.matches('h3.group')) h.hidden = empty;
     });
@@ -1497,6 +1573,7 @@ function applyScript() {
   document.querySelectorAll('#script button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === mode)));
   if (CFG.lang === 'sr') document.documentElement.lang = mode === 'cyr' ? 'sr-Cyrl' : 'sr-Latn';
 }
+window.applyScript = applyScript;  // плашки (PLATE_SCRIPT) появляются позже — их текст переписывается тем же алфавитом
 document.getElementById('script')?.addEventListener('click', e => {
   const v = e.target.closest('button')?.dataset.v;
   if (v) { mode = v; store.set('script', v); applyScript(); }
@@ -1783,17 +1860,43 @@ def _write_reader(state: dict, vectors: dict, archive: dict) -> None:
         return f'<span class="dot" style="background:var(--c-{e(section)})"></span>'
 
     stories_data = []
+    plate_css, plate_js = plate_parts()
+    try:
+        texts = json.loads(ARTICLES_FILE.read_text("utf-8"))
+    except (OSError, ValueError):
+        texts = {}
     for lang, L in READER.items():
         camp_names = {s["id"]: s["title"] if lang == "sr" else s.get("title_ru", s["title"]) for s in config["sections"]}
 
         def news_title(u: str) -> str:
             return orig(u) if lang == "sr" else state["items"][u]["title"]
 
+        # разметка строки — как у главной (li.item > .row): нажатие раскрывает под ней ту же плашку (PLATE_SCRIPT)
         def row(u: str) -> str:
             it = state["items"][u]
-            return (f'<li class="row" data-s="{e(it["section"])}"><time class="time" datetime="{e(when(u))}">{local(when(u), "%H:%M")}</time>'
-                    f'<a class="head" href="{e(u)}" target="_blank" rel="noopener" draggable="false"><span class="src">{dot(it["section"])}'
-                    f'{e(it["source"])}</span>{e(news_title(u))}</a></li>')
+            return (f'<li class="item" data-s="{e(it["section"])}"><div class="row"><time class="time" datetime="{e(when(u))}">'
+                    f'{local(when(u), "%H:%M")}</time><a class="head" href="{e(u)}" target="_blank" rel="noopener" draggable="false">'
+                    f'<span class="src">{dot(it["section"])}{e(it["source"])}</span>{e(news_title(u))}</a></div></li>')
+
+        def plate(page: str) -> str:
+            """Скрипт плашки с данными новостей этой страницы: оригинал заголовка и подводки — из архива, перевод (на
+            русской), tx — можно ли просить описание от ИИ. Новости старше архива — без подводки: в плашке только кнопки"""
+            items = {}
+            for u in dict.fromkeys(html.unescape(m) for m in re.findall(r'<a class="head" href="([^"]+)"', page)):
+                it, a = state["items"].get(u, {}), archive.get(u, {})
+                ru = a.get("ru") or None
+                d = {"title": a.get("title") or orig(u), "lang": a.get("lang") or "sr", "src": it.get("source") or a.get("source", "")}
+                if a.get("summary"):
+                    d["summary"] = a["summary"]
+                if tx := texts.get(u, {}).get("tx"):
+                    d["tx"] = tx
+                if lang == "ru" and ru:
+                    d["ru"] = ru
+                elif tx and ru:  # по-сербски перевод не показывается, но описание просят только у переведённых
+                    d["ru"] = {"title": ru.get("title", "")}
+                items[u] = d
+            data = json.dumps({"lang": lang, "items": items}, ensure_ascii=False).replace("</", "<\\/")
+            return PLATE_SCRIPT.replace("/*CODE*/", plate_js).replace("/*PLATE*/", data)
 
         def day_name(iso: str) -> str:  # без «danas / juče»: страница статична, а читают её и назавтра
             d = datetime.fromisoformat(iso).astimezone(LOCAL_TZ).date()
@@ -1822,7 +1925,7 @@ def _write_reader(state: dict, vectors: dict, archive: dict) -> None:
                     f'<input class="search" id="q" type="search" autocomplete="off" placeholder="{L["search"]}">'
                     f'<button class="search-clear" id="q-clear" type="button" hidden>×</button></span></div></div></div></header>'
                     f'<button class="to-top" id="to-top" type="button" hidden title="{L["to_top"]}" aria-label="{L["to_top"]}">↑</button>')
-            return SR_HEAD.format(title=e(title), style=SR_STYLE, lang=L["html_lang"], site=site)
+            return SR_HEAD.format(title=e(title), style=plate_css + SR_STYLE, lang=L["html_lang"], site=site)
 
         script = (SR_SCRIPT.replace("MIN", L["min"]).replace("HOURS", L["h"])
                   + HEADER_SCRIPT.replace("/*CFG*/", json.dumps({"lang": lang, **L["info"]}, ensure_ascii=False)))
@@ -1953,10 +2056,11 @@ def _write_reader(state: dict, vectors: dict, archive: dict) -> None:
 {"".join(cards) or f"<p>{L['none']}</p>"}
 </div>{script}</body></html>"""
         L["dir"].mkdir(parents=True, exist_ok=True)
-        (L["dir"] / "index.html").write_text(page, "utf-8")
+        with_plate = lambda text: text.replace("</body>", plate(text) + "</body>")  # noqa: E731
+        (L["dir"] / "index.html").write_text(with_plate(page), "utf-8")
         for sid, text in pages.items():
             (L["dir"] / sid).mkdir(exist_ok=True)
-            (L["dir"] / sid / "index.html").write_text(text, "utf-8")
+            (L["dir"] / sid / "index.html").write_text(with_plate(text), "utf-8")
     THEMES_FILE.write_text(json.dumps({"built": now, "stories": stories_data}, ensure_ascii=False), "utf-8")
 
 

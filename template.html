@@ -216,6 +216,7 @@ a.card-name:hover { color: var(--hover); }
 .card-meta a { color: inherit; text-decoration: none; }
 .card-meta a:hover { color: var(--hover); }
 
+/*plate-css*/
 .items { list-style: none; margin: 0; padding: 0; }
 .row { display: flex; gap: 10px; margin-bottom: 8px; }
 .time { flex: none; width: 42px; white-space: nowrap; color: var(--faint); font-size: 12px; padding-top: 2px; font-variant-numeric: tabular-nums; }
@@ -322,6 +323,7 @@ dialog.report::backdrop { background: rgb(0 0 0 / .35); }
 .report button { border: 0; border-radius: 999px; padding: 9px 16px; background: var(--soft); color: var(--text); font: inherit; font-weight: 700; cursor: pointer; }
 .report button.primary { background: var(--tip-bg); color: var(--tip-text); }
 .report button:disabled { opacity: .5; cursor: default; }
+/*/plate-css*/
 .notice { max-width: 1260px; width: calc(100% - 40px); margin: 16px auto 0; padding: 12px 18px; border-radius: 20px; background: var(--soft); color: var(--muted); font-size: 14px; }
 .more { border: 0; background: none; color: var(--muted); font-weight: 700; cursor: pointer; font-size: 14px; padding: 0 0 0 52px; }
 .more:hover { color: var(--text); }
@@ -528,6 +530,7 @@ function markRead(url) {
   store.set("read", [...state.read].slice(-3000));
 }
 
+/*plate*/
 // ---------- interface text (latinica; ćirilica se dobija transliteracijom) ----------
 const UI = {
   title: "Srbija: vesti",
@@ -734,8 +737,10 @@ function script(text, lang) {
 function norm(s) {
   return toLatin(s).toLowerCase().replace(/đ/g, "dj").normalize("NFD").replace(/[̀-ͯ]/g, "");
 }
+/*/plate*/
 
 // ---------- helpers ----------
+/*plate*/
 function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -747,6 +752,7 @@ function h(tag, attrs = {}, ...children) {
   for (const c of children.flat()) if (c !== null && c !== undefined && c !== false) el.append(c);
   return el;
 }
+/*/plate*/
 let now = Date.now();  // пересчитывается раз в минуту, см. «свежая сборка»
 const fmt = opts => new Intl.DateTimeFormat(locale(), { timeZone: "Europe/Belgrade", ...opts });
 const timeFmt = { format: d => fmt({ hour: "2-digit", minute: "2-digit" }).format(d) };
@@ -781,6 +787,7 @@ const favicon = site => `https://www.google.com/s2/favicons?sz=64&domain=${new U
 const latest = src => src.items.reduce((max, i) => i.date && i.date > (max || "") ? i.date : max, null);
 const sectionById = Object.fromEntries(DATA.sections.map(s => [s.id, s]));
 
+/*plate*/
 // ---------- item ----------
 // что показывать: перевод (если включён русский и он есть) или оригинал
 function textOf(item, src) {
@@ -1097,11 +1104,36 @@ function resetDetails() {  // перед перерисовкой: старые 
 // палец или колёсико перехватывают прокрутку — наша сразу отступает
 for (const type of ["touchstart", "wheel"]) addEventListener(type, () => { scrollAnim = null; }, { passive: true });
 
+// жалоба на перевод — только у переведённых новостей
+const reportable = (item, src) => REPORT_URL && textOf(item, src).translated;
+const reportFlag = (item, src) => reportable(item, src)
+  ? h("button", { class: "report-flag", type: "button", title: t("report"), "aria-label": t("report"), onclick: () => openReport(item) }, "⚑")
+  : null;
+
 // showVia — подписать издание у новости (в общей карточке региона)
 function renderItem(item, src, { showSource = false, showVia = false } = {}) {
   const fresh = item.date && now - new Date(item.date) < FRESH_MS;
   const v = textOf(item, src);
   const via = item.via || (showVia ? src.name : null);
+  const li = h("li", { class: "item" + (state.read.has(item.url) ? " read" : ""), lang: v.lang });
+  const head = h("a", { class: "head" + (fresh ? " fresh" : ""), href: item.url, draggable: "false", target: "_blank", rel: "noopener" },
+    showSource ? h("span", { class: "src" }, h("span", { class: "dot", style: `background:var(--c-${src.section})` }), src.name) : null,
+    script(v.title, v.lang),
+    via ? h("span", { class: "via" }, "— " + via) : null,
+    item.traffic ? h("span", { class: "traffic" }, `· ${item.traffic} ${t("searches")}`) : null,
+  );
+  li.append(h("div", { class: "row" },
+    h("span", { class: "time", "data-time": item.date || "", title: item.date ? new Date(item.date).toLocaleString(locale()) : "" }, shortTime(item.date)),
+    head,
+    reportFlag(item, src),
+  ));
+  wirePlate(li, head, item, src, via);
+  return li;
+}
+
+// плашка: нажатие на заголовок раскрывает под строкой описание, подводку и кнопки. li — строка новости (li.item > .row > a.head).
+// Общая для главной и страниц тем (/sr/plot/, /ru/plot/): stories_live.py берёт код между метками plate из этого файла
+function wirePlate(li, head, item, src, via) {
   // описание и подводка собираются при каждом раскрытии: переключатель подводки меняет их без перерисовки страницы
   let slot, tabs;
   const texts = () => {
@@ -1124,14 +1156,12 @@ function renderItem(item, src, { showSource = false, showVia = false } = {}) {
     essenceReady(slot);
     return summary;
   };
-  const li = h("li", { class: "item" + (state.read.has(item.url) ? " read" : ""), lang: v.lang });
 
   const opened = () => { markRead(item.url); li.classList.add("read"); track(`click/${src.section}/${src.name}`); trackNews("read", item); };
-  const reportable = REPORT_URL && v.translated;
   // жалоба на перевод — под текстом, у оригинала; справа кнопки «Читать на …» и ✕ (на телефоне втроём в ряд не влезали)
   const details = () => h("div", { class: "details" }, h("div", { class: "details-text" }, ...(parts => [tabs, parts])(visible(texts())),
       h("div", { class: "flags" },
-        reportable ? h("button", { class: "flag-link", type: "button", onclick: () => openReport(item) }, t("report")) : null,
+        reportable(item, src) ? h("button", { class: "flag-link", type: "button", onclick: () => openReport(item) }, t("report")) : null,
         slot?.flag)),
     h("div", { class: "details-actions" },
       h("a", { class: "read-link", href: item.url, target: "_blank", rel: "noopener", onclick: opened }, `${t("readOn")} ${via || src.name} ↗`),
@@ -1201,20 +1231,8 @@ function renderItem(item, src, { showSource = false, showVia = false } = {}) {
     e.preventDefault();
     toggle(e);
   };
-
-  const head = h("a", { class: "head" + (fresh ? " fresh" : ""), href: item.url, draggable: "false", target: "_blank", rel: "noopener", onclick,
-    onauxclick: e => { if (e.button === 1) opened(); } },  // только колёсико: правая кнопка — это меню, а не открытие
-    showSource ? h("span", { class: "src" }, h("span", { class: "dot", style: `background:var(--c-${src.section})` }), src.name) : null,
-    script(v.title, v.lang),
-    via ? h("span", { class: "via" }, "— " + via) : null,
-    item.traffic ? h("span", { class: "traffic" }, `· ${item.traffic} ${t("searches")}`) : null,
-  );
-
-  li.append(h("div", { class: "row" },
-    h("span", { class: "time", "data-time": item.date || "", title: item.date ? new Date(item.date).toLocaleString(locale()) : "" }, shortTime(item.date)),
-    head,
-    reportable ? h("button", { class: "report-flag", type: "button", title: t("report"), "aria-label": t("report"), onclick: () => openReport(item) }, "⚑") : null,
-  ));
+  head.addEventListener("click", onclick);
+  head.addEventListener("auxclick", e => { if (e.button === 1) opened(); });  // только колёсико: правая кнопка — это меню, а не открытие
   li.rebuild = () => {
     const old = li.querySelector(".details");
     if (!old || li._anim) return;
@@ -1229,8 +1247,8 @@ function renderItem(item, src, { showSource = false, showVia = false } = {}) {
     showOpen(li, box);
     fillEssence(slot, apply => reflowDetails(li, apply));
   }
-  return li;
 }
+/*/plate*/
 
 function matches(item) {
   if (!state.q) return true;
