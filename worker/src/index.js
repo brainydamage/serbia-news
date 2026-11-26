@@ -11,7 +11,7 @@
 //   resting: [feed], newest: {feed: дата}} — от сборки, каждую сборку: сторож лент. О ленте, которая не открывается
 //   или молчит дольше суток, пишем в Telegram один раз, а когда тревога снята — отвечаем на то сообщение: «снова пишет»,
 //   если вышла новость, или «отбой», если у издания выходной (resting). Кого уже прислали, лежит в ключе KV "feeds".
-// POST /daily {day, rich, text, again} — от сборки (daily.py): сводка за сутки в канал DAILY_CHAT_ID (@vestomat_daily; бот —
+// POST /daily {day, rich, text, again, draft} — от сборки (daily.py): сводка за сутки в канал DAILY_CHAT_ID (@vestomat_daily; бот —
 //   админ канала с правом публикации). rich — rich message (sendRichMessage), text — простой HTML на случай, если rich не
 //   прошёл. Пока DAILY_CHAT_ID не задан — черновиком в чат жалоб. Одну сводку на день и чат отправляем один раз:
 //   сборка может прислать её снова, если её кэш пропал.
@@ -471,35 +471,42 @@ async function stats(request, env) {
 }
 
 async function daily(request, env) {
-  const { day, text, rich, again } = await request.json();
+  const { day, text, rich, again, draft: wantDraft } = await request.json();
   if (!/^\d{4}-\d\d-\d\d$/.test(String(day)) || typeof text !== "string" || !text) return json({ error: "bad request" }, 400);
-  const channel = env.DAILY_CHAT_ID || "";
+  // draft — ручной запуск сборки (daily_day) без отметки «в канал»: черновик в чат жалоб, посмотреть оформление
+  const channel = wantDraft ? "" : env.DAILY_CHAT_ID || "";
   const to = channel || env.TELEGRAM_CHAT_ID;
+  const where = channel || "draft";
   const key = `daily:${to}:${day}`;
-  // again — ручной запуск сборки с днём (daily_day): отправить ещё раз, например чтобы посмотреть новое оформление
-  if (!again && await env.REPORTS.get(key)) return json({ ok: true, already: true, to: channel || "draft" });
+  const posted = await env.REPORTS.get(key);
+  // again — ручной запуск: черновик шлём заново, а в канале правим уже опубликованный пост, а не шлём второй
+  if (posted && !again) return json({ ok: true, already: true, to: where });
   if (!env.TELEGRAM_TOKEN || !to) return json({ error: "no telegram" }, 503);
+  const edit = Boolean(channel && posted && Number(posted) > 1);
   const api = `${env.TELEGRAM_API || "https://api.telegram.org"}/bot${env.TELEGRAM_TOKEN}`;
-  const send = (method, payload) => fetch(`${api}/${method}`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chat_id: to, ...payload }),
+  const call = (method, payload) => fetch(`${api}/${method}`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: to, ...(edit ? { message_id: Number(posted) } : {}), ...payload }),
   });
+  const note = channel ? "" : "<p><i>Черновик Vestomat Daily</i></p><hr/>";
   // текст не обрезаем: лимит Telegram — на видимые знаки, а обрезка по разметке рвёт теги (26.11 так не ушла первая
   // сводка — ссылки длинные). Длину держит сборка (daily.LIMIT)
   // rich message (Bot API 10.1+: заголовки, таблицы, до 32768 знаков); не прошёл — простой HTML, чтобы сводка всё равно вышла
   let kind = "rich", richError = "", response = null;
   if (typeof rich === "string" && rich) {
-    const draft = channel ? "" : "<p><i>Черновик для @vestomat_daily: в канал пойдёт, когда у worker будет DAILY_CHAT_ID</i></p><hr/>";
-    response = await send("sendRichMessage", { rich_message: { html: draft + rich } });
+    response = await call(edit ? "editMessageText" : "sendRichMessage", { rich_message: { html: note + rich } });
     if (!response.ok) richError = `${response.status}: ${(await response.text()).slice(0, 200)}`;
   }
   if (!response?.ok) {
     kind = "plain";
-    const draft = channel ? "" : "Черновик для @vestomat_daily (в канал пойдёт, когда у worker будет DAILY_CHAT_ID):\n\n";
-    response = await send("sendMessage", { text: draft + text, parse_mode: "HTML", link_preview_options: { is_disabled: true } });
+    const plainNote = channel ? "" : "Черновик Vestomat Daily\n\n";
+    response = await call(edit ? "editMessageText" : "sendMessage",
+      { text: plainNote + text, parse_mode: "HTML", link_preview_options: { is_disabled: true } });
     if (!response.ok) return json({ error: `telegram ${response.status}: ${(await response.text()).slice(0, 300)}`, rich_error: richError }, 502);
   }
-  await env.REPORTS.put(key, String((await response.json()).result?.message_id || 1), { expirationTtl: KEEP_SECONDS });
-  return json({ ok: true, to: channel || "draft", kind, ...(richError ? { rich_error: richError } : {}) });
+  const id = (await response.json()).result?.message_id;
+  if (!edit) await env.REPORTS.put(key, String(id || 1), { expirationTtl: KEEP_SECONDS });
+  return json({ ok: true, to: where, kind, ...(edit ? { edited: true } : {}), ...(richError ? { rich_error: richError } : {}) });
 }
 
 async function untranslated(request, env) {

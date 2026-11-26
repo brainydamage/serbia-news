@@ -10,6 +10,13 @@ on:
         description: "Vestomat Daily за день (ГГГГ-ММ-ДД)"
         required: false
         default: ""
+      # куда: draft — черновик в чат жалоб; channel — в канал (уже опубликованный пост за этот день — исправить)
+      daily_to:
+        description: "Куда: draft или channel"
+        required: false
+        default: "draft"
+        type: choice
+        options: [draft, channel]
   push:
     branches: [main]
 
@@ -95,6 +102,7 @@ jobs:
           REPORTS_TOKEN: ${{ secrets.REPORTS_TOKEN }}
           FASTEMBED_CACHE_PATH: cache/fastembed
           DAILY_DAY: ${{ inputs.daily_day }}
+          DAILY_TO: ${{ inputs.daily_to }}
 
       - name: Save data
         uses: actions/cache/save@v4

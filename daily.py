@@ -7,7 +7,7 @@
 каждой стороны (критичные к SNS, крупные порталы, государственные, близкие к SNS) выбирает самый показательный
 заголовок. Подача — таблицей: сторона и издание — и этот заголовок со ссылкой на статью; молчавшая сторона — «не писали».
 Толкований подачи от модели в посте нет: читатель сравнивает заголовки сам.
-Внизу — «Ещё сегодня» (заметные темы, не вошедшие в топ) и легенда цветов.
+Внизу — свёрнутые «Ещё N темы дня» (заметные темы, не вошедшие в топ) и ссылка на сайт.
 
 Пост — rich message Telegram (Bot API 10.1+, sendRichMessage: заголовки, таблицы, цитаты, до 32768 знаков). Вместе с
 ним сборка отдаёт простой вариант (HTML sendMessage, до 4096 знаков): его worker шлёт, если rich не прошёл.
@@ -18,8 +18,8 @@
 спрашивая модель заново.
 
 Сводку за любой день сейчас — запуск сборки руками с днём: gh workflow run build -f daily_day=2026-11-25
-(или «Run workflow» на GitHub, поле daily_day). Ручной запуск отправляет и то, что уже отправляли: так видно новое
-оформление. Ответ модели за день хранится, пост из него собирается заново — повтор не стоит нового запроса.
+(или «Run workflow» на GitHub, поле daily_day). Ручной запуск шлёт черновик в чат жалоб — посмотреть новое
+оформление; с daily_to=channel — в канал, а если пост за этот день там уже есть, правит его, а не шлёт второй. Ответ модели за день хранится, пост из него собирается заново — повтор не стоит нового запроса.
 
     .venv/bin/python daily.py [stories.json] [archive.json]   — локально: какие темы попали бы в сводку сейчас и что
                                                                  увидела бы модель, без запроса к ней и без отправки
@@ -55,8 +55,7 @@ SITE = "https://vestomat.rs/ru/#teme"
 # с «новым ударом по империи»
 CALM = {"Beta", "Politika", "RTS", "Dnevnik", "Euronews Srbija", "N1", "Blic", "Tanjug"}
 NEUTRAL = ["mainstream", "state", "independent", "progov"]
-NBSP = "\u00a0"
-EMSP = " \u2003"  # между сторонами в легенде: пробел пошире вместо точки  # кружок не отрывается от названия стороны при переносе строки
+NBSP = "\u00a0"  # кружок не отрывается от издания, название стороны не рвётся при переносе строки
 MORE = 3  # «Ещё сегодня»: столько самых обсуждаемых кандидатов, не вошедших в топ
 VERSION = 2  # вид ответа модели: 2 — в таблице заголовки, которые выбрала модель (с 26.11; 1 — её пометки о подаче)
 FOLD = True  # таблица подачи свёрнута под «Как подали» (<details>): пост короче; False — таблица видна сразу
@@ -221,6 +220,10 @@ def plural(n: int, one: str, few: str, many: str) -> str:
     return one if k % 10 == 1 and k != 11 else few if 2 <= k % 10 <= 4 and not 12 <= k <= 14 else many
 
 
+def side_name(side: str) -> str:
+    return SIDE_NAMES[side].replace(" ", NBSP)
+
+
 def date_of(day: str) -> str:
     d = datetime.fromisoformat(day)
     return f"{DAYS[d.weekday()]}, {d.day} {MONTHS[d.month - 1]}"
@@ -234,8 +237,8 @@ def headlines(state: dict, sides: dict[str, list[str]], t: dict) -> dict[str, st
 
 def compose_rich(state: dict, vectors: dict, picked: list, more: list[tuple[str, list[str]]], summary: str,
                  day: str) -> str:
-    """Rich HTML поста (sendRichMessage): заголовок, «Коротко», темы с таблицей подачи, «Ещё сегодня», легенда."""
-    # ссылка на сайт — наверху, в подзаголовке: внизу, под легендой, она терялась
+    """Rich HTML поста (sendRichMessage): заголовок, «Коротко», темы с таблицей подачи, «Ещё N темы дня», ссылка на сайт."""
+    # ссылка на сайт — наверху, под датой: внизу она терялась
     # заголовок — дата: «Сербия за день» уже в названии канала, а в ленте постов различаются только днём
     out = [f"<h1>{date_of(day).capitalize()}</h1>", f'<p><a href="{SITE}">Все темы дня на vestomat.rs</a></p>']
     if summary.strip():
@@ -251,10 +254,11 @@ def compose_rich(state: dict, vectors: dict, picked: list, more: list[tuple[str,
             if s in sides:
                 u = shown[s]  # заголовок — как сторона назвала событие, со ссылкой на статью; толкований модели тут нет
                 it = state["items"][u]
-                rows.append(f'<tr><td>{MARKS[s]}{NBSP}{esc(it["source"]).replace(" ", NBSP)}</td>'
+                # сторона — подписью под изданием: легенда внизу поста нужна была только раскрывшим таблицу
+                rows.append(f'<tr><td>{MARKS[s]}{NBSP}<b>{esc(it["source"]).replace(" ", NBSP)}</b><br><i>{side_name(s)}</i></td>'
                             f'<td><a href="{href(u)}">{esc(it["title"])}</a></td></tr>')
             else:
-                rows.append(f"<tr><td>{MARKS[s]}{NBSP}{SIDE_NAMES[s]}</td><td><i>не писали</i></td></tr>")
+                rows.append(f"<tr><td>{MARKS[s]}{NBSP}<i>{side_name(s)}</i></td><td><i>не писали</i></td></tr>")
         table = f"<table bordered striped compact>{''.join(rows)}</table>"
         n = len({state["items"][u]["source"] for u in urls})
         outlets = f"{n} {plural(n, 'издание', 'издания', 'изданий')}"
@@ -280,9 +284,7 @@ def compose_rich(state: dict, vectors: dict, picked: list, more: list[tuple[str,
         n = len(more)
         out.append(f"<hr/><details><summary>Ещё {n} {plural(n, 'тема', 'темы', 'тем')} дня</summary><ul>"
                    + "".join(item(sid, urls) for sid, urls in more) + "</ul></details>")
-    # легенда — без точек-разделителей: кружки и так отделяют стороны; сайт — своей строкой, не прилипает к легенде
-    out.append("<hr/><p>" + EMSP.join(f"{MARKS[s]}{NBSP}{SIDE_NAMES[s].replace(' ', NBSP)}" for s in SIDES) + "</p>")
-    out.append(f'<p><a href="{SITE}">vestomat.rs</a></p>')
+    out.append(f'<hr/><p><a href="{SITE}">vestomat.rs</a></p>')
     return "".join(out)
 
 
@@ -363,11 +365,15 @@ def _post(state: dict, vectors: dict, now: str, tz, spend) -> None:
     today["text"] = compose(state, vectors, picked, day)
     today["rich"] = compose_rich(state, vectors, picked, more, today["answer"].get("summary", ""), day)
     today["themes"] = [sid for (sid, _), _ in picked]
-    reply = translate.reports_api({"day": day, "text": today["text"], "rich": today["rich"], "again": forced}, "daily")
+    # ручной запуск — черновиком в чат жалоб, если не отмечено «в канал» (DAILY_TO=channel): тогда worker правит
+    # уже опубликованный пост, а не шлёт второй
+    draft = forced and os.environ.get("DAILY_TO", "draft") != "channel"
+    reply = translate.reports_api({"day": day, "text": today["text"], "rich": today["rich"], "again": forced,
+                                   "draft": draft}, "daily")
     if reply and reply.get("ok"):
         today["sent"] = now
         today["to"] = reply.get("to")
-        print(f"Сводка дня: {'уже была' if reply.get('already') else 'отправлена'} — {reply.get('to')}"
+        print(f"Сводка дня: {'уже была' if reply.get('already') else 'пост исправлен' if reply.get('edited') else 'отправлена'} — {reply.get('to')}"
               f"{', ' + reply['kind'] if reply.get('kind') else ''}"
               f"{' (rich не прошёл: ' + reply['rich_error'] + ')' if reply.get('rich_error') else ''}"[:400], file=sys.stderr)
     else:
