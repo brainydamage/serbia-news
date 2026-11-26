@@ -997,6 +997,11 @@ def write_pages(data: dict) -> None:
     links = "".join(f'<xhtml:link rel="alternate" hreflang="{l}" href="{SITE_URL}/{p["path"]}"/>' for l, p in PAGES.items())
     urls = "".join(f"<url><loc>{SITE_URL}/{p['path']}</loc><lastmod>{lastmod}</lastmod><changefreq>hourly</changefreq>{links}</url>"
                    for p in PAGES.values())
+    # хабы тем (их пишет stories_live.py); отдельные темы — под noindex, они уходят
+    hubs = {"sr": "sr/plot/", "ru": "ru/plot/"}
+    hub_links = "".join(f'<xhtml:link rel="alternate" hreflang="{l}" href="{SITE_URL}/{p}"/>' for l, p in hubs.items())
+    urls += "".join(f"<url><loc>{SITE_URL}/{p}</loc><lastmod>{lastmod}</lastmod><changefreq>hourly</changefreq>{hub_links}</url>"
+                    for p in hubs.values())
     (OUT_DIR / "sitemap.xml").write_text(
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">'

@@ -1428,7 +1428,7 @@ if (PLATE.lang === "sr") {
 <script data-goatcounter="https://vestomat.goatcounter.com/count" async src="https://gc.zgo.at/count.v5.js"
         integrity="sha384-atnOLvQb9t+jTSipvd75X2yginT4PjVbqDdlJAmxMm+wYElFmeR6EmLP5bYeoRVQ" crossorigin="anonymous"></script>"""
 SR_HEAD = """<!doctype html><html lang="{lang}"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="robots" content="noindex,nofollow">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">{robots}
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#282c35" media="(prefers-color-scheme: dark)">
 <title>{title}</title>
 <link rel="icon" href="/favicon.ico" sizes="32x32"><link rel="icon" href="/icon.svg" type="image/svg+xml">
@@ -1925,7 +1925,9 @@ def _write_reader(state: dict, vectors: dict, archive: dict) -> None:
                     f'<input class="search" id="q" type="search" autocomplete="off" placeholder="{L["search"]}">'
                     f'<button class="search-clear" id="q-clear" type="button" hidden>×</button></span></div></div></div></header>'
                     f'<button class="to-top" id="to-top" type="button" hidden title="{L["to_top"]}" aria-label="{L["to_top"]}">↑</button>')
-            return SR_HEAD.format(title=e(title), style=plate_css + SR_STYLE, lang=L["html_lang"], site=site)
+            # в поиске — только хабы /sr/plot/ и /ru/plot/: адрес вечный, а страница темы пропадает (404), когда тема уходит
+            robots = "" if not here else '<meta name="robots" content="noindex,nofollow">'
+            return SR_HEAD.format(title=e(title), style=plate_css + SR_STYLE, lang=L["html_lang"], site=site, robots=robots)
 
         script = (SR_SCRIPT.replace("MIN", L["min"]).replace("HOURS", L["h"])
                   + HEADER_SCRIPT.replace("/*CFG*/", json.dumps({"lang": lang, **L["info"]}, ensure_ascii=False)))
