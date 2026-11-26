@@ -35,9 +35,14 @@ for on Google.
 - `daily.py` — Vestomat Daily: every evening after 20:00 (Belgrade) the five most important themes of the day (Claude Opus picks them from the most covered ones) go to the Telegram channel as a rich message (headings, a table of how each side covered each theme)
   [@vestomat_daily](https://t.me/vestomat_daily) — what happened, how each side covered it (Claude Opus) and links
   to the articles, one per side.
+- `live.py` — Vestomat Live: every build looks for themes that suddenly took off (8+ outlets from 3+ sides within an
+  hour), and Claude Opus decides whether each one changes everyday life in Serbia enough to tell readers now. Urgent
+  ones go out as a one-line flash with links to 2–3 outlets ([@vestomat_live](https://t.me/vestomat_live); for now as
+  drafts to the reports chat), at most 3 a day, only the exceptional at night. Buttons under each post and a daily list
+  of what was judged not urgent let the editor correct it; the corrections go back to the model as precedents.
 - `template.html` — the page itself: the data is embedded into it and rendered with JS.
 - `worker/` — a Cloudflare Worker: reader reports (bad translation, bad description) to Telegram, AI descriptions
-  on demand with a cache and a daily cost cap, build cost stats, feed watchdog, posting the daily digest.
+  on demand with a cache and a daily cost cap, build cost stats, feed watchdog, posting the daily digest and Live flashes, collecting the editor's Live feedback.
 - `.github/workflows/build.yml` — build and publish to GitHub Pages.
 
 ## Running locally

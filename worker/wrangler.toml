@@ -2,6 +2,7 @@
 # TELEGRAM_TOKEN, TELEGRAM_CHAT_ID — куда присылать жалобы; REPORTS_TOKEN — пароль для сборки
 # (тот же, что в секрете репозитория REPORTS_TOKEN на GitHub).
 # DAILY_CHAT_ID — канал сводки за день (@vestomat_daily); без него сводка приходит черновиком в чат жалоб.
+# LIVE_CHAT_ID — канал срочного (@vestomat_live); без него срочное приходит черновиком в чат жалоб, с ним — в канал и копией с кнопками в чат жалоб.
 # STATS_KEY — ключ страницы расходов /costs (в её адресе после #).
 # GITHUB_TOKEN — fine-grained токен GitHub (только serbia-news, Contents: Read and write): им бот коммитит glossary.json.
 # ANTHROPIC_API_KEY — ключ API Anthropic: суть одной фразой (POST /essence, Haiku). Зависимость @anthropic-ai/sdk —

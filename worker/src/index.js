@@ -15,6 +15,11 @@
 //   админ канала с правом публикации). rich — rich message (sendRichMessage), text — простой HTML на случай, если rich не
 //   прошёл. Пока DAILY_CHAT_ID не задан — черновиком в чат жалоб. Одну сводку на день и чат отправляем один раз:
 //   сборка может прислать её снова, если её кэш пропал.
+// POST /live {id, text, theme, fact} — от сборки (live.py): срочное молнией в канал LIVE_CHAT_ID (@vestomat_live), а пока
+//   он не задан — черновиком в чат жалоб. Под черновиком (или под копией поста в чате жалоб) кнопки «✓ срочно» / «✗ могло
+//   подождать» (live:ok:id, live:no:id); ответ на пост или на «почему?» одной фразой — причина. POST /live {rejected, day} —
+//   раз в день список тем, которые модель сочла несрочными, с кнопкой «надо было» (live:miss:id) у каждой.
+//   GET /live — для сборки: отмеченные решения с причинами, прецеденты для модели. Всё — в одном ключе KV "live".
 // POST /telegram — webhook бота: строки «Air Serbia = Air Serbia» или «удалить Air Serbia» из нашего чата
 //   worker коммитит в glossary.json на GitHub (секрет GITHUB_TOKEN), а коммит запускает сборку.
 //   Команды сюжетам (теневой режим, vestomat.rs/plot/) — «/move 1234 s471», «/split s191», «/unmerge s102», «/merge s1 s2» —
@@ -86,6 +91,8 @@ const COMMANDS_PATH = "stories-commands.json";
 const COMMANDS_KEEP = 200;  // последних команд в файле: сборка помнит, до какой дошла
 // поменять, если изменятся настройки webhook, — worker подключит его заново
 const WEBHOOK_VERSION = "2";  // 2 — и нажатия кнопок (callback_query)
+const LIVE_KEPT = 120;  // записей в ключе "live": постов и несрочных тем, отмеченных и нет
+const LIVE_VERDICTS = { ok: "✓ отмечено: срочно", no: "✗ отмечено: могло подождать", miss: "отмечено: надо было" };
 const GLOSSARY_HELP = [
   "Чтобы добавить название в глоссарий, напиши строку «как в оригинале = как по-русски», можно несколько строк:",
   "Air Serbia = Air Serbia", "Republika Srpska = Республика Сербская", "",
@@ -127,7 +134,7 @@ export default {
       for (const [day, spent] of Object.entries(essences?.days || {})) (out.days[day] ||= { builds: 0 }).essence = spent;
       return json(out);
     }
-    if (["/reports", "/stats", "/untranslated", "/feeds", "/stories", "/texts", "/daily"].includes(pathname) && !authorized(request, env.REPORTS_TOKEN)) return json({ error: "unauthorized" }, 401);
+    if (["/reports", "/stats", "/untranslated", "/feeds", "/stories", "/texts", "/daily", "/live"].includes(pathname) && !authorized(request, env.REPORTS_TOKEN)) return json({ error: "unauthorized" }, 401);
     if (pathname === "/reports" && request.method === "GET") return list(env);
     if (pathname === "/reports" && request.method === "POST") return resolve(request, env);
     if (pathname === "/stats" && request.method === "POST") {
@@ -140,6 +147,11 @@ export default {
     if (pathname === "/stories" && request.method === "POST") return storyResults(request, env);
     if (pathname === "/texts" && request.method === "POST") return saveTexts(request, env);
     if (pathname === "/daily" && request.method === "POST") return daily(request, env);
+    if (pathname === "/live" && request.method === "GET") {
+      const live = (await env.REPORTS.get("live", "json")) || { items: [] };
+      return json({ feedback: live.items.filter(i => i.verdict) });
+    }
+    if (pathname === "/live" && request.method === "POST") return livePost(request, env);
     return json({ error: "not found" }, 404);
   },
 };
@@ -509,6 +521,85 @@ async function daily(request, env) {
   return json({ ok: true, to: where, kind, ...(edit ? { edited: true } : {}), ...(richError ? { rich_error: richError } : {}) });
 }
 
+// срочное от сборки (live.py) — или список несрочного за день
+async function livePost(request, env) {
+  const body = await request.json();
+  const live = (await env.REPORTS.get("live", "json")) || { items: [] };
+  const save = () => {
+    live.items = live.items.slice(-LIVE_KEPT);
+    return env.REPORTS.put("live", JSON.stringify(live));
+  };
+  if (Array.isArray(body.rejected)) {
+    const rows = body.rejected.filter(r => r?.id && r?.name).slice(0, 15);
+    if (!rows.length) return json({ ok: true, to: "draft" });
+    const text = [`🗂 Live: несрочное с прошлого списка (${rows.length})`, "",
+      ...rows.map((r, k) => `${k + 1}. ${r.time || ""} ${r.name}${r.reason ? ` — ${r.reason}` : ""}`.trim()), "",
+      "Если что-то из этого надо было прислать сразу — нажми кнопку с его номером."].join("\n");
+    const keyboard = rows.map((r, k) => [{ text: `Надо было: ${k + 1}. ${r.name}`.slice(0, 60), callback_data: `live:miss:${r.id}`.slice(0, 64) }]);
+    const sent = await telegram(env, "sendMessage", { text: text.slice(0, 4000), reply_markup: { inline_keyboard: keyboard } });
+    if (!sent) return json({ error: "telegram" }, 502);
+    for (const r of rows) live.items.push({ id: r.id, kind: "rejected", msg: sent.message_id, text: r.name, why: r.reason || "", t: belgrade(Date.now()) });
+    await save();
+    return json({ ok: true, to: "draft" });
+  }
+  const { id, text, theme, fact } = body;
+  if (!id || typeof text !== "string" || !text) return json({ error: "bad request" }, 400);
+  if (live.items.some(i => i.id === id && i.kind === "post")) return json({ ok: true, already: true });
+  const channel = env.LIVE_CHAT_ID || "";
+  const buttons = { inline_keyboard: [[{ text: "✓ срочно", callback_data: `live:ok:${id}` }, { text: "✗ могло подождать", callback_data: `live:no:${id}` }]] };
+  const base = { parse_mode: "HTML", link_preview_options: { is_disabled: true } };
+  if (channel) {
+    const posted = await telegram(env, "sendMessage", { chat_id: channel, text, ...base });
+    if (!posted) return json({ error: "telegram channel" }, 502);
+  }
+  const head = channel ? `Отправлено в ${channel}` : "Черновик Vestomat Live";
+  const copy = await telegram(env, "sendMessage", { text: `<i>${head}</i>\n\n${text}`, reply_markup: buttons, ...base });
+  if (!copy && !channel) return json({ error: "telegram" }, 502);
+  live.items.push({ id, kind: "post", msg: copy?.message_id, text: String(fact || ""), theme: String(theme || ""), t: belgrade(Date.now()) });
+  await save();
+  return json({ ok: true, to: channel || "draft" });
+}
+
+// кнопка под постом Live или под списком несрочного: отметка — прецедент для модели. Нажатую кнопку меняем на «отмечено»
+// (под списком — убираем), и спрашиваем почему: ответ на этот вопрос — причина
+async function liveButton(env, query) {
+  const answer = text => telegram(env, "answerCallbackQuery", { callback_query_id: query.id, text });
+  const message = query.message;
+  if (!message || String(message.chat?.id) !== String(env.TELEGRAM_CHAT_ID)) return answer("Эта кнопка не отсюда");
+  const m = String(query.data).match(/^live:(ok|no|miss):(.+)$/);
+  if (!m) return answer("Уже отмечено");
+  const live = (await env.REPORTS.get("live", "json")) || { items: [] };
+  const item = live.items.findLast(i => i.id === m[2] && i.kind === (m[1] === "miss" ? "rejected" : "post"));
+  if (!item) return answer("Не нашла этот пост — он старше недели?");
+  item.verdict = m[1];
+  const keyboard = message.reply_markup?.inline_keyboard || [];
+  const rows = m[1] === "miss" ? keyboard.filter(row => !row.some(b => b.callback_data === query.data))
+    : [[{ text: LIVE_VERDICTS[m[1]], callback_data: "live:done" }]];
+  await telegram(env, "editMessageReplyMarkup", { message_id: message.message_id, reply_markup: { inline_keyboard: rows } });
+  const ask = await telegram(env, "sendMessage", {
+    text: `Записала${m[1] === "miss" ? `: «${item.text}» — надо было` : ""}. Почему? Ответь на это сообщение одной фразой — модель учтёт. Можно не отвечать.`,
+    reply_parameters: { message_id: message.message_id },
+  });
+  if (ask) item.prompt = ask.message_id;
+  await env.REPORTS.put("live", JSON.stringify(live));
+  await answer("Записала");
+}
+
+// ответ на пост Live или на вопрос «почему?» — причина отметки. Не про Live — false: дальше глоссарий и команды
+async function liveReason(env, message) {
+  const to = message.reply_to_message.message_id;
+  const live = (await env.REPORTS.get("live", "json")) || { items: [] };
+  const item = live.items.findLast(i => i.prompt === to || (i.kind === "post" && i.msg === to));
+  if (!item) return false;
+  item.reason = message.text.trim().slice(0, 300);
+  await env.REPORTS.put("live", JSON.stringify(live));
+  await react(env, message.message_id, "👌");
+  if (!item.verdict) {
+    await telegram(env, "sendMessage", { text: "Причину записала. Нажми ещё кнопку под постом — срочно или могло подождать, без неё модель отметку не увидит.", reply_parameters: { message_id: message.message_id } });
+  }
+  return true;
+}
+
 async function untranslated(request, env) {
   const { items } = await request.json();
   const fresh = [];
@@ -617,12 +708,14 @@ async function telegramUpdate(request, env) {
   if (!secret || request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== secret) return json({ error: "unauthorized" }, 401);
   const update = await request.json();
   if (update.callback_query) {
-    await storyButton(env, update.callback_query);
+    if (String(update.callback_query.data || "").startsWith("live:")) await liveButton(env, update.callback_query);
+    else await storyButton(env, update.callback_query);
     return json({ ok: true });
   }
   const message = update.message;
   if (!message?.text || String(message.chat?.id) !== String(env.TELEGRAM_CHAT_ID)) return json({ ok: true });
   const reply = text => telegram(env, "sendMessage", { text, reply_parameters: { message_id: message.message_id } });
+  if (message.reply_to_message && await liveReason(env, message)) return json({ ok: true });
 
   const lines = message.text.split("\n").map(l => l.trim()).filter(Boolean);
   const commands = lines.map(storyCommand);
