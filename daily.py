@@ -45,7 +45,6 @@ SHOWN = 6  # сколько новостей каждой стороны вид�
 KEEP_DAYS = 7
 LIMIT = 3900  # Telegram берёт до 4096 знаков текста (без разметки); лишние темы с конца — прочь
 SIDES = ["independent", "mainstream", "state", "progov"]  # порядок как на страницах тем (stories_live.SR_SPECTRUM)
-MARKS = {"independent": "🔵", "mainstream": "⚪", "state": "🟣", "progov": "🔴"}  # цвета сторон на сайте
 SIDE_NAMES = {"independent": "критичные к SNS", "mainstream": "крупные порталы", "state": "государственные",
               "progov": "близкие к SNS"}
 SITE = "https://vestomat.rs/ru/#teme"
@@ -58,7 +57,7 @@ NEUTRAL = ["mainstream", "state", "independent", "progov"]
 NBSP = "\u00a0"  # кружок не отрывается от издания, название стороны не рвётся при переносе строки
 MORE = 3  # «Ещё сегодня»: столько самых обсуждаемых кандидатов, не вошедших в топ
 VERSION = 2  # вид ответа модели: 2 — в таблице заголовки, которые выбрала модель (с 26.11; 1 — её пометки о подаче)
-FOLD = True  # таблица подачи свёрнута под строкой счёта по сторонам (<details>): пост короче; False — таблица видна сразу
+FOLD = True  # таблица подачи свёрнута под «Источники» (<details>): пост короче; False — таблица видна сразу
 MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября",
           "декабря"]
 DAYS = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
@@ -233,15 +232,6 @@ def headlines(state: dict, sides: dict[str, list[str]], t: dict) -> dict[str, st
     return {s: picks[s] if picks.get(s) in state["items"] else news[0] for s, news in sides.items()}
 
 
-def tally(state: dict, sides: dict[str, list[str]], urls: list[str]) -> str:
-    """Подпись таблицы — сама новость: сколько изданий каждой стороны писали, «🔴 0» — сторона промолчала.
-    Издания вне четырёх сторон (регионы, иностранные) — «+ N других»."""
-    gap = f"{NBSP}{NBSP} "  # шире обычного пробела: несколько обычных Telegram схлопывает в один
-    out = gap.join(f"{MARKS[s]}{NBSP}{len(sides.get(s, []))}" for s in SIDES)
-    rest = len({state["items"][u]["source"] for u in urls}) - sum(len(v) for v in sides.values())
-    return out + (f"{gap}+{rest}{NBSP}{plural(rest, 'другое', 'других', 'других')}" if rest > 0 else "")
-
-
 def compose_rich(state: dict, vectors: dict, picked: list, more: list[tuple[str, list[str]]], day: str) -> str:
     """Rich HTML поста (sendRichMessage): заголовок, темы с таблицей подачи, «Ещё N темы дня», ссылка на сайт."""
     # ссылка на сайт — наверху, под датой: внизу она терялась
@@ -260,15 +250,15 @@ def compose_rich(state: dict, vectors: dict, picked: list, more: list[tuple[str,
                 u = shown[s]  # заголовок — как сторона назвала событие, со ссылкой на статью; толкований модели тут нет
                 it = state["items"][u]
                 # сторона — подписью под изданием: легенда внизу поста нужна была только раскрывшим таблицу
-                rows.append(f'<tr><td>{MARKS[s]}{NBSP}<b>{esc(it["source"]).replace(" ", NBSP)}</b><br><i>{side_name(s)}</i></td>'
+                rows.append(f'<tr><td><b>{esc(it["source"]).replace(" ", NBSP)}</b><br><i>{side_name(s)}</i></td>'
                             f'<td><a href="{href(u)}">{esc(it["title"])}</a></td></tr>')
             else:
-                rows.append(f"<tr><td>{MARKS[s]}{NBSP}<i>{side_name(s)}</i></td><td><i>не писали</i></td></tr>")
+                rows.append(f"<tr><td><i>{side_name(s)}</i></td><td><i>не писали</i></td></tr>")
         table = f"<table bordered striped compact>{''.join(rows)}</table>"
         if FOLD:
-            out.append(f"<details><summary>{tally(state, sides, urls)}</summary>{table}</details>")
+            out.append(f"<details><summary>Источники</summary>{table}</details>")
         else:
-            out.append(f"{table}<p>{tally(state, sides, urls)}</p>")
+            out.append(table)
     if more:  # ссылка — CALM: самая типичная новость спокойных изданий, издания не повторяются; потом NEUTRAL
         used = set()
 
@@ -306,7 +296,7 @@ def compose(state: dict, vectors: dict, picked: list, day: str) -> str:
         for s in SIDES:
             if s in sides:
                 u = shown[s]
-                lines.append(f'{MARKS[s]} {esc(state["items"][u]["source"])}: <a href="{href(u)}">{esc(state["items"][u]["title"])}</a>')
+                lines.append(f'{esc(state["items"][u]["source"])}: <a href="{href(u)}">{esc(state["items"][u]["title"])}</a>')
         blocks.append("\n".join(lines))
     while len(blocks) > 1 and visible_len("\n\n".join([head, *blocks, foot])) > LIMIT:
         blocks.pop()
