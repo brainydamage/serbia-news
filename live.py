@@ -60,6 +60,7 @@ PROMPT = """Ты дежурный редактор Telegram-канала сро�
 
 Срочно (urgent) — новое событие, которое меняет повседневную жизнь человека в Сербии или касается его безопасности:
 - решения власти, которые касаются жизни людей: цены, тарифы, налоги, зарплаты, пенсии, законы и правила, которые вступают в силу, отставка правительства или премьера, назначение выборов;
+- ключевые события выборов: кто идёт кандидатом в президенты или во главе списка от власти, оппозиции или студентов — когда его официально назвали (это событие, а не заявление), снятие кандидата, бойкот, перенос или отмена выборов, их итоги. Анонс («в 12 назовут кандидата») — ещё не срочно, срочно — когда назвали;
 - ЧП с жертвами или угрозой многим людям: стрельба, взрывы, крупные пожары, обрушения, массовые отравления; отключения воды, света, газа, связи; опасная погода, наводнения, землетрясения;
 - задержания и обвинения против людей наверху: министры, мэры, руководители госкомпаний, крупный бизнес, главы СМИ;
 - массовые протесты, блокады дорог, мостов, границ, забастовки транспорта — то, что меняет, как людям передвигаться и жить;
@@ -125,14 +126,18 @@ def is_night(now: str, tz) -> bool:
 
 def signals(state: dict, now: str, asked: dict) -> list[tuple[str, list[str]]]:
     """Темы со вспышкой: (сюжет, его новости за WINDOW) — о Сербии, не регулярные сводки, не меньше MIN_OUTLETS изданий
-    и MIN_SIDES сторон за WINDOW, не спрошенные за AGAIN. Сначала — где больше изданий."""
+    и MIN_SIDES сторон за WINDOW. Тему, спрошенную за AGAIN, — только если новая вспышка набралась из новостей после
+    вопроса: анонс «в 12 студенты назовут кандидата» не должен закрыть на три часа саму новость. Сначала — где больше
+    изданий."""
     t = datetime.fromisoformat(now)
     since, fresh, again = (t - WINDOW).isoformat(), (t - FRESH).isoformat(), (t - AGAIN).isoformat()
     out = []
     for sid, story in state["stories"].items():
-        if state.get("serbia", {}).get(sid) == "foreign" or state.get("routine", {}).get(sid) or asked.get(sid, "") > again:
+        if state.get("serbia", {}).get(sid) == "foreign" or state.get("routine", {}).get(sid):
             continue
-        urls = [u for u in story["urls"] if state["items"][u]["seen"] <= now and when(state["items"][u]) >= since
+        last = asked.get(sid, "")
+        after = last if last > again else ""  # спрошена недавно — в счёт только то, чего модель ещё не видела
+        urls = [u for u in story["urls"] if after < state["items"][u]["seen"] <= now and when(state["items"][u]) >= since
                 and (state["items"][u].get("published") or now) >= fresh]
         outlets = {state["items"][u]["source"] for u in urls}
         sides = {state["items"][u]["section"] for u in urls} & set(SIDES)
